@@ -114,6 +114,7 @@ Every stage is a CLI subcommand, idempotent, writing into
 | Extract | `tva extract <session>` | same | `insights.json` (cited) | yes |
 | Frames | `tva frames <session> [--at t…] [--contact-sheet]` | CLI (keyframes stay on `TVA_ROOT`; not a bot media route) | `frames/<t>.jpg` + optional contact sheet | yes, optional |
 | OCR | `tva ocr <session>` | CLI (not a bot run stage) | `ocr.parquet` (`t, roi, text, confidence, parsed`) | yes, optional |
+| Clips | `tva clips <session> [--redact]` | CLI (`GET /clips/{name}` only if `TVA_SERVE_MEDIA=1`) | `clips/<t>.mp4`, mic only; masks on `--redact` | yes, optional |
 | Status | `tva status` | `GET /sessions`, `GET /sessions/latest` | stage states | yes |
 | Read | — | `GET /sessions/{id}`, `/transcript`, `/insights` | JSON | yes |
 | Doctor | `tva doctor` | `GET /health` | ffmpeg / GPU / keys / NAS mount | yes |

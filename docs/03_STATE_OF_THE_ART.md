@@ -109,6 +109,11 @@ confirmed API contract.
 `OcrProvider` default is `fake` (`TVA_OCR_PROVIDER`). PaddleOCR is
 `tradevidanalyser[ocr]` and is never required in CI. No VLM call is wired.
 
+**PR-14 (redact + clips):** `tva frames` applies `*_mask` drawboxes before
+saving JPEGs. `tva clips` writes chapter −30 s … +60 s MP4s (stream copy,
+mic only). `--redact` re-encodes with the same masks. **docs.x.ai
+`video_url` verification is still pending (PR-15).**
+
 ---
 
 ## 3. Commercial trade journals with AI (what exists, where the gap is)

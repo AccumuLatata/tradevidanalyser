@@ -178,6 +178,9 @@ def extract_frames(
         dest = store.frame_path(root, session.id, t)
         _under_root(dest, dest_dir)
         _extract_one(src, seek, dest)
+        from tradevidanalyser.redact import redact_image
+
+        redact_image(dest, dest, layout)
         frames.append(dest)
     sheet: Path | None = None
     if contact_sheet:

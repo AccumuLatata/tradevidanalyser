@@ -12,6 +12,7 @@ from tradevidanalyser import __version__, config, store
 from tradevidanalyser.doctor import run_doctor
 from tradevidanalyser.ingest import ingest
 from tradevidanalyser.pipeline import (
+    clips_session,
     extract_session,
     frames_session,
     ocr_session,
@@ -92,6 +93,14 @@ def main(argv: list[str] | None = None) -> int:
     p_ocr = sub.add_parser("ocr", help="ROI OCR of chapter frames → ocr.parquet")
     p_ocr.add_argument("session")
     p_ocr.add_argument("--provider", default=None, help="fake (default) or paddleocr")
+
+    p_cl = sub.add_parser("clips", help="chapter clips (mic only, stream copy)")
+    p_cl.add_argument("session")
+    p_cl.add_argument(
+        "--redact",
+        action="store_true",
+        help="black-box layout.yaml *_mask ROIs (re-encodes video)",
+    )
 
     p_serve = sub.add_parser("serve", help="HTTP API over TVA_ROOT")
     p_serve.add_argument("--host", default="127.0.0.1")
@@ -175,6 +184,10 @@ def main(argv: list[str] | None = None) -> int:
                 ocr_session(args.session, root=root, provider_name=args.provider),
                 as_json=True,
             )
+            return 0
+        if args.cmd == "clips":
+            result = clips_session(args.session, root=root, redact=args.redact)
+            _emit(result.as_dict(root), as_json=True)
             return 0
         if args.cmd == "serve":
             import uvicorn
