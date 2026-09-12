@@ -91,15 +91,34 @@ def main(argv: list[str] | None = None) -> int:
             _emit(status.model_dump(mode="json"), as_json=True)
             return 0
         if args.cmd == "watch":
-            payload = watch(
-                args.source,
-                root=root,
-                once=args.once,
-                run=args.run,
-                stable_s=args.stable_seconds,
-                poll_s=args.interval,
-            )
+            def _on_events(events: list) -> None:
+                interesting = [
+                    event
+                    for event in events
+                    if event.get("action") != "skipped"
+                    or event.get("reason")
+                    not in {"ingested", "unstable", "busy", "locked"}
+                ]
+                if not interesting:
+                    return
+                _emit({"events": interesting}, as_json=True)
+                sys.stdout.flush()
+
+            try:
+                payload = watch(
+                    args.source,
+                    root=root,
+                    once=args.once,
+                    run=args.run,
+                    stable_s=args.stable_seconds,
+                    poll_s=args.interval,
+                    on_events=None if args.once else _on_events,
+                )
+            except KeyboardInterrupt:
+                return 0
             _emit(payload, as_json=True)
+            if any(event.get("action") == "error" for event in payload.get("events", [])):
+                return 1
             return 0
         if args.cmd == "wer":
             _emit(score_session(args.session, ref=args.ref, root=root), as_json=True)
