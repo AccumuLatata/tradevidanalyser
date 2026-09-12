@@ -1,0 +1,11 @@
+{
+  "schema_version": "1",
+  "session_id": "2026-09-11_143000",
+  "stages": {
+    "ingest": "ok",
+    "transcribe": "ok",
+    "extract": "ok"
+  },
+  "error": null,
+  "cost_usd": null
+}

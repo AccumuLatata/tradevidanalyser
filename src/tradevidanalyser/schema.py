@@ -117,7 +117,7 @@ class Insights(BaseModel):
     summary_en: str = ""
 
 
-StageState = Literal["ok", "missing", "failed", "ingesting"]
+StageState = Literal["ok", "missing", "failed", "ingesting", "running"]
 
 
 class SessionStatus(BaseModel):

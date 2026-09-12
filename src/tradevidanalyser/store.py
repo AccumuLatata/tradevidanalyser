@@ -43,6 +43,14 @@ def desktop_audio_path(root: Path, session_id: str) -> Path:
     return config.session_dir(root, session_id) / "audio" / "desktop.opus"
 
 
+def clips_dir(root: Path, session_id: str) -> Path:
+    return config.session_dir(root, session_id) / "clips"
+
+
+def clip_path(root: Path, session_id: str, name: str) -> Path:
+    return clips_dir(root, session_id) / name
+
+
 def invalidate_downstream(root: Path, session_id: str) -> None:
     """Drop transcript/insights so a changed recording is not left looking complete."""
     transcript_path(root, session_id).unlink(missing_ok=True)
@@ -85,11 +93,15 @@ def compute_status(
     *,
     error: str | None = None,
     cost_usd: float | None = None,
+    running: list[str] | None = None,
 ) -> SessionStatus:
     stages: dict[str, str] = {}
     stages["ingest"] = "ok" if session_json_path(root, session_id).is_file() else "missing"
     stages["transcribe"] = "ok" if transcript_path(root, session_id).is_file() else "missing"
     stages["extract"] = "ok" if insights_path(root, session_id).is_file() else "missing"
+    for name in running or []:
+        if stages.get(name) != "ok":
+            stages[name] = "running"
     path = status_path(root, session_id)
     previous: SessionStatus | None = None
     if path.is_file():

@@ -83,16 +83,34 @@ default `grok-4.6`). The German prompt lives in
 
 ```
 GET /health
-GET /sessions
+GET /sessions?days=7&status=missing,failed
 GET /sessions/latest
 GET /sessions/{id}
+GET /sessions/{id}/status
 GET /sessions/{id}/transcript
 GET /sessions/{id}/insights
-POST /sessions/{id}/run
+GET /sessions/{id}/clips/{name}     # 404 unless TVA_SERVE_MEDIA=1
+POST /sessions/{id}/run?stages=transcribe,extract   # 202, poll /status
 ```
 
-Bind `tva serve` to localhost or a Tailscale interface. Do not port-forward
-it to the public internet.
+`GET /sessions?days=7` keeps session ids whose filename date is within the
+last 7 calendar days. `status` is a comma-separated stage state
+(`ok|missing|failed|running`); a session matches if any stage is in that set.
+
+`POST /sessions/{id}/run` starts `transcribe` / `extract` on a background
+thread and sets `status.stages[x]=running`. Poll `GET /sessions/{id}/status`.
+Committed response shapes live in [`examples/api/`](examples/api/).
+
+Bind `tva serve` to localhost or a Tailscale interface. Off-loopback binds
+(including `0.0.0.0`) require `TVA_API_TOKEN`; clients send
+`Authorization: Bearer <token>`. Without a token those binds are refused
+and requests get 401. Do not port-forward the API to the public internet.
+
+```bash
+export TVA_API_TOKEN=…          # required off-loopback
+tva serve --host 127.0.0.1 --port 8764
+# curl -H "Authorization: Bearer $TVA_API_TOKEN" http://mac:8764/sessions/latest
+```
 
 ## Tests
 

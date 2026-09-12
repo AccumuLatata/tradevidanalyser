@@ -1,0 +1,58 @@
+{
+  "session": {
+    "schema_version": "1",
+    "id": "2026-09-11_143000",
+    "recording": {
+      "path": "recordings/2026-09-11 14-30-00.mp4",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "start_wallclock_vienna": "2026-09-11T14:30:00+02:00",
+      "duration_s": 1.0,
+      "tracks": [
+        "mic"
+      ],
+      "chapters": [],
+      "filename": "2026-09-11 14-30-00.mp4",
+      "parts": []
+    },
+    "language": "de",
+    "alignment": null,
+    "app_version": "0.1.0"
+  },
+  "status": {
+    "schema_version": "1",
+    "session_id": "2026-09-11_143000",
+    "stages": {
+      "ingest": "ok",
+      "transcribe": "ok",
+      "extract": "ok"
+    },
+    "error": null,
+    "cost_usd": null
+  },
+  "transcript": {
+    "schema_version": "1",
+    "provider": "fake",
+    "model": "fake-v1",
+    "prompt_version": "jargon-v1",
+    "language": "de",
+    "segments": []
+  },
+  "insights": {
+    "schema_version": "1",
+    "provider": "fake",
+    "model": "keyword-v1",
+    "prompt_version": "insights-v1",
+    "bias_statements": [],
+    "playbooks_mentioned": [],
+    "stated_levels": [],
+    "stated_stops_targets": [],
+    "checkins": [],
+    "tilt_markers": [],
+    "brief_refs": [],
+    "observations": [],
+    "gaps": [],
+    "session_events": [],
+    "summary_de": "",
+    "summary_en": ""
+  }
+}
