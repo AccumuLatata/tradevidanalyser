@@ -113,7 +113,7 @@ def run_doctor(root: Path) -> DoctorReport:
     if dg_key:
         dg_status, dg_detail = "ok", "DEEPGRAM_API_KEY set"
     elif provider in {"deepgram", "hosted"}:
-        dg_status, dg_detail = "fail", "TVA_ASR_PROVIDER=deepgram but DEEPGRAM_API_KEY is unset"
+        dg_status, dg_detail = "fail", f"TVA_ASR_PROVIDER={provider} but DEEPGRAM_API_KEY is unset"
     else:
         dg_status, dg_detail = "warn", "DEEPGRAM_API_KEY unset (hosted ASR uses fake unless set)"
     checks.append(DoctorCheck(id="deepgram_key", status=dg_status, detail=dg_detail))

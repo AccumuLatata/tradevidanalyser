@@ -83,7 +83,10 @@ def compute_status(
     path = status_path(root, session_id)
     previous: SessionStatus | None = None
     if path.is_file():
-        previous = SessionStatus.model_validate(read_json(path))
+        try:
+            previous = SessionStatus.model_validate(read_json(path))
+        except (ValueError, OSError):
+            previous = None
     if cost_usd is None and previous is not None:
         cost_usd = previous.cost_usd
     status = SessionStatus(session_id=session_id, stages=stages, error=error, cost_usd=cost_usd)  # type: ignore[arg-type]

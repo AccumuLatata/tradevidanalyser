@@ -45,6 +45,7 @@ def test_get_asr_provider_hosted_names(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("TVA_ASR_PROVIDER", raising=False)
     assert get_asr_provider().name == "fake"
     assert get_asr_provider("deepgram").name == "deepgram"
+    assert get_asr_provider("hosted").name == "deepgram"
     assert get_asr_provider("scribe").name == "scribe"
 
 
@@ -101,6 +102,32 @@ def test_deepgram_refuses_video(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
         provider.transcribe(video, language="de")
 
 
+def test_deepgram_refuses_frames(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    frame = tmp_path / "chapter.jpg"
+    frame.write_bytes(b"\xff\xd8not-a-real-jpeg")
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-test-key")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"must not upload frames: {request.url}")
+
+    provider = DeepgramAsrProvider(client=httpx.Client(transport=httpx.MockTransport(handler)))
+    with pytest.raises(AsrError, match="frames"):
+        provider.transcribe(frame, language="de")
+
+
+def test_deepgram_refuses_unknown_suffix(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    mystery = tmp_path / "mic.bin"
+    mystery.write_bytes(b"not-audio")
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-test-key")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"must not upload unknown media: {request.url}")
+
+    provider = DeepgramAsrProvider(client=httpx.Client(transport=httpx.MockTransport(handler)))
+    with pytest.raises(AsrError, match="audio only"):
+        provider.transcribe(mystery, language="de")
+
+
 def test_hosted_http_never_called_when_provider_is_fake(
     monkeypatch: pytest.MonkeyPatch, tva_root: Path, sample_video: Path
 ) -> None:
@@ -144,6 +171,95 @@ def test_deepgram_requires_api_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     audio.write_bytes(b"x")
     with pytest.raises(AsrError, match="DEEPGRAM_API_KEY"):
         DeepgramAsrProvider().transcribe(audio)
+
+
+def test_deepgram_maps_channels_when_utterances_missing() -> None:
+    payload = {
+        "metadata": {"duration": 2.3},
+        "results": {
+            "channels": [
+                {
+                    "alternatives": [
+                        {
+                            "transcript": "Bias long.",
+                            "words": [
+                                {
+                                    "word": "bias",
+                                    "start": 0.0,
+                                    "end": 0.4,
+                                    "punctuated_word": "Bias",
+                                },
+                                {
+                                    "word": "long",
+                                    "start": 0.4,
+                                    "end": 0.8,
+                                    "punctuated_word": "long.",
+                                },
+                            ],
+                        }
+                    ]
+                }
+            ]
+        },
+    }
+    transcript = transcript_from_deepgram(
+        payload, language="de", model="nova-3", prompt_version="jargon-v1+test"
+    )
+    assert [seg.id for seg in transcript.segments] == ["seg_001"]
+    assert transcript.segments[0].text == "Bias long."
+    assert transcript.segments[0].words[0].w == "Bias"
+
+
+def test_deepgram_rebuilds_text_from_words_and_skips_bad_items() -> None:
+    payload = {
+        "results": {
+            "utterances": [
+                {
+                    "start": float("nan"),
+                    "end": None,
+                    "transcript": "",
+                    "words": [
+                        "not-a-word-object",
+                        {
+                            "word": "onh",
+                            "start": 1.5,
+                            "end": 1.9,
+                            "confidence": "nope",
+                            "punctuated_word": "ONH",
+                        },
+                        {"word": "", "start": 2.0, "end": 2.1},
+                    ],
+                }
+            ]
+        }
+    }
+    transcript = transcript_from_deepgram(
+        payload, language="de", model="nova-3", prompt_version="jargon-v1+test"
+    )
+    assert transcript.segments[0].text == "ONH"
+    assert transcript.segments[0].t0 == 1.5
+    assert transcript.segments[0].t1 == 1.9
+    assert transcript.segments[0].words[0].p == 1.0
+
+
+def test_estimate_cost_usd_ignores_invalid_rate(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TVA_ASR_USD_PER_HOUR", "not-a-number")
+    assert estimate_cost_usd(3600.0) == DEEPGRAM_USD_PER_AUDIO_HOUR
+    monkeypatch.setenv("TVA_ASR_USD_PER_HOUR", "nan")
+    assert estimate_cost_usd(3600.0) == DEEPGRAM_USD_PER_AUDIO_HOUR
+    assert estimate_cost_usd(float("nan")) == 0.0
+    assert estimate_cost_usd(3600.0, usd_per_hour=-1.0) == DEEPGRAM_USD_PER_AUDIO_HOUR
+
+
+def test_compute_status_survives_corrupt_previous_status(
+    tva_root: Path, sample_video: Path
+) -> None:
+    record = ingest(sample_video, root=tva_root)
+    path = store.status_path(tva_root, record.id)
+    path.write_text("{not-json", encoding="utf-8")
+    status = store.compute_status(tva_root, record.id, cost_usd=0.12)
+    assert status.cost_usd == 0.12
+    assert store.compute_status(tva_root, record.id).cost_usd == 0.12
 
 
 def test_glossary_keyterms_include_onh() -> None:
