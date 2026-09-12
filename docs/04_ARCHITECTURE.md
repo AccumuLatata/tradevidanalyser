@@ -120,7 +120,7 @@ Every stage is a CLI subcommand, idempotent, writing into
 | Read | — | `GET /sessions/{id}`, `/transcript`, `/insights` | JSON | yes |
 | Doctor | `tva doctor` | `GET /health` | ffmpeg / GPU / keys / NAS mount | yes |
 | Fills | `tva fills <session> --executions <csv> --venue topstepx\|amp` | CLI (not a bot run stage) | `fills.parquet` / `trades.parquet` | yes, optional |
-| Align | `tva align <session>` | — | video ↔ fill clock | **later** |
+| Align | `tva align <session> [--manual-offset s]` | CLI (not a bot run stage) | `session.alignment` (offset/drift/confidence/method/samples) | yes, optional |
 | Rules | `tva rules <session>` | — | scorecard | **later** |
 | Context | `tva context <session>` | — | briefs + ThesisTester attribution | **later** |
 
@@ -138,7 +138,12 @@ session:
   id: 2026-09-11                 # trading session date, ETH 18:00 ET
   recording: {path, sha256, start_wallclock_vienna, duration_s, tracks: [mic], chapters: [{t, name}]}
   language: de                   # primary; segments may flip
-  alignment: null                # later: offset_s, confidence, method
+  alignment:                     # PR-18; null until `tva align`
+    offset_s: 1.8                # wall = video_t + start_wallclock + offset
+    drift_s_per_h: 0.0
+    confidence: 0.96             # 0–1; from residual MAD + sample count
+    method: ocr_clock | filename | chapter_fill | manual
+    samples: [{video_t, ocr_text, parsed_wallclock, residual_s}]
 
 transcript:
   provider: whisperx; model: large-v3; prompt_version: jargon-v1

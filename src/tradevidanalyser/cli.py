@@ -11,15 +11,17 @@ from pathlib import Path
 from tradevidanalyser import __version__, config, store
 from tradevidanalyser.doctor import run_doctor
 from tradevidanalyser.ingest import ingest
+from tradevidanalyser.align import alignment_result_dict
 from tradevidanalyser.pipeline import (
+    align_session,
     clips_session,
     extract_session,
+    fills_session,
     frames_session,
     ocr_session,
     run_latest,
     transcribe_session,
     vlm_session,
-    fills_session,
 )
 from tradevidanalyser.serve import create_app, token_required_for_host
 from tradevidanalyser.watch import watch
@@ -133,6 +135,19 @@ def main(argv: list[str] | None = None) -> int:
         help="ThesisTester journal output (reads reconcile.json; no PDF parse)",
     )
 
+    p_al = sub.add_parser(
+        "align",
+        help="filename prior + OCR clock Theil–Sen fit → session.alignment",
+    )
+    p_al.add_argument("session")
+    p_al.add_argument(
+        "--manual-offset",
+        type=float,
+        default=None,
+        metavar="S",
+        help="override offset_s (method=manual, drift=0)",
+    )
+
     p_serve = sub.add_parser("serve", help="HTTP API over TVA_ROOT")
     p_serve.add_argument("--host", default="127.0.0.1")
     p_serve.add_argument("--port", type=int, default=8764)
@@ -234,6 +249,14 @@ def main(argv: list[str] | None = None) -> int:
                 reconcile_dir=args.reconcile_dir,
             )
             _emit(result.as_dict(), as_json=True)
+            return 0
+        if args.cmd == "align":
+            alignment = align_session(
+                args.session,
+                root=root,
+                manual_offset=args.manual_offset,
+            )
+            _emit(alignment_result_dict(args.session, alignment), as_json=True)
             return 0
         if args.cmd == "serve":
             import uvicorn

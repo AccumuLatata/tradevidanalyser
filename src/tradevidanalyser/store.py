@@ -15,7 +15,7 @@ _FRAME_JPG = re.compile(r"^\d+\.\d{3}\.jpg$")
 CONTACT_SHEET_NAME = "contact_sheet.jpg"
 # Optional CLI stages. Never emit "missing"; do not resurrect a stale
 # "failed" when the artifact is gone (PR-11 bot pack: ?status=missing,failed).
-OPTIONAL_STAGES = frozenset({"frames", "ocr", "clips", "vlm", "fills"})
+OPTIONAL_STAGES = frozenset({"frames", "ocr", "clips", "vlm", "fills", "align"})
 VISUAL_NOTES_NAME = "visual_notes.json"
 
 _STATUS_LOCK = threading.Lock()
@@ -131,7 +131,7 @@ def list_frame_jpgs(root: Path, session_id: str) -> list[Path]:
 
 
 def invalidate_downstream(root: Path, session_id: str) -> None:
-    """Drop transcript/insights/frames/clips/fills so a changed recording is not left looking complete."""
+    """Drop transcript/insights/frames/clips/fills/alignment so a changed recording is not left looking complete."""
     transcript_path(root, session_id).unlink(missing_ok=True)
     insights_path(root, session_id).unlink(missing_ok=True)
     ocr_path(root, session_id).unlink(missing_ok=True)
@@ -144,6 +144,14 @@ def invalidate_downstream(root: Path, session_id: str) -> None:
     clips = clips_dir(root, session_id)
     if clips.is_dir():
         shutil.rmtree(clips)
+    session_file = session_json_path(root, session_id)
+    if session_file.is_file():
+        try:
+            record = load_session(root, session_id)
+        except (ValueError, OSError):
+            record = None
+        if record is not None and record.alignment is not None:
+            save_session(root, record.model_copy(update={"alignment": None}))
 
 
 def load_session(root: Path, session_id: str) -> SessionRecord:
@@ -226,6 +234,13 @@ def _compute_status_locked(
     # Fills writes both parquet files. Either one alone is a half-stage.
     if fills_path(root, session_id).is_file() and trades_path(root, session_id).is_file():
         stages["fills"] = "ok"
+    # Align is optional. Same omit-when-missing rule as frames/ocr/fills.
+    if session_json_path(root, session_id).is_file():
+        try:
+            if load_session(root, session_id).alignment is not None:
+                stages["align"] = "ok"
+        except (ValueError, OSError):
+            pass
     path = status_path(root, session_id)
     previous: SessionStatus | None = None
     if path.is_file():

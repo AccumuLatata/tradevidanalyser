@@ -33,12 +33,30 @@ class RecordingInfo(BaseModel):
     parts: list[RecordingPart] = Field(default_factory=list)
 
 
+AlignmentMethod = Literal["ocr_clock", "filename", "chapter_fill", "manual"]
+
+
+class AlignmentSample(BaseModel):
+    video_t: float
+    ocr_text: str
+    parsed_wallclock: str
+    residual_s: float
+
+
+class Alignment(BaseModel):
+    offset_s: float
+    drift_s_per_h: float
+    confidence: float
+    method: AlignmentMethod
+    samples: list[AlignmentSample] = Field(default_factory=list)
+
+
 class SessionRecord(BaseModel):
     schema_version: str = SCHEMA_VERSION
     id: str
     recording: RecordingInfo
     language: str = "de"
-    alignment: dict | None = None
+    alignment: Alignment | None = None
     app_version: str = ""
 
 

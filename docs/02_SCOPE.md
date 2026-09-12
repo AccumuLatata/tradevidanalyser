@@ -80,8 +80,11 @@ They wait until v1 is boring and reliable.
    `tva_trade_id`. `--reconcile-dir` attaches `recon_status` from
    ThesisTester `reconcile.json` (no PDF parse here). Not a TopstepX API
    client.
-8. **Clock alignment + per-trade evidence windows** — video time ↔ fill
-   time, once fills exist.
+8. **Clock alignment + per-trade evidence windows** — `tva align` (PR-18)
+   writes `session.alignment` from the filename prior + OCR clock
+   Theil–Sen fit (filename fallback `confidence=0.6`; `--manual-offset`
+   recorded as `method=manual`). Per-trade evidence windows are still
+   later (PR-19).
 9. **Rule scorecard** — the catalog in §6, including the $100 vs $200 daily
    loss question. Needs fills. Parked (see D4).
 10. **ThesisTester join** — `journal attribute` / `zones` / `triggers` next
