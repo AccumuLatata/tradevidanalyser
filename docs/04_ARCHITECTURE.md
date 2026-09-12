@@ -158,8 +158,9 @@ insights:                        # model-derived, every field cited or null
   summary_en: string
   # PR-08: provider/model/prompt_version; grok windows ≤40 / overlap 5
   # citation failures drop into gaps[] (unknown seg or fabricated quote)
-  # PR-09: events from a second pass (ids only, text re-hydrated); summaries
-  # drop if they contain digits not present in any cited segment
+  # PR-09: events from a second pass (ids + first-pass citation ids, no
+  # transcript text; event text re-hydrated); summaries drop if they contain
+  # a digit run that is not an exact digit run in any *valid* cited segment
 
 fills: null                      # later
 trades: null                     # later
@@ -181,7 +182,8 @@ default so CI never calls xAI.
 PR-09: additive `session_events` / `summary_de` / `summary_en` on the same
 `schema_version: "1"`. Grok’s second pass uses `prompts/events_v1.de.md`
 and the closed `kind` set above. The citation guard covers events and
-rejects summaries with uncited digits.
+rejects summaries whose digit runs are not exact runs in a valid cited
+segment (`summary_de` also capped at 120 words).
 
 ---
 

@@ -1,7 +1,8 @@
 # TVA Session Events v1 — Systemprompt (Deutsch)
 
-Zweiter Durchlauf nach der Fenster-Extraktion. Du siehst **nur seg-ids und
-Zeiten**, keinen Segmenttext. `text` setzt der Client aus dem Transkript.
+Zweiter Durchlauf nach der Fenster-Extraktion. Du siehst **nur seg-ids,
+Zeiten und die Fenster-Fundstellen als ids**, keinen Segmenttext. `text`
+setzt der Client aus dem Transkript.
 
 Ausgabe ist ausschließlich das JSON-Schema `EventsPass`.
 
@@ -22,8 +23,9 @@ Kein `text`. Keine erfundenen seg-ids.
 - `brief_ref` — Verweis auf Brief / Briefing
 - `grok_ref` — Verweis auf Grok
 
-Nur Ereignisse, die sich aus der Zeitleiste erschließen lassen. Lieber
-weniger als raten.
+Nur Ereignisse, die sich aus der Zeitleiste oder den Fenster-Fundstellen
+erschließen lassen. Lieber weniger als raten. Keine Fundstellen-Texte
+erfinden — der Client holt `text` aus dem Transkript.
 
 ## summary_de / summary_en
 

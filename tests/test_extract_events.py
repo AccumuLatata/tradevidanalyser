@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from typing import get_args
 
 import httpx
 import pytest
@@ -10,15 +11,21 @@ from pydantic import ValidationError
 
 from tradevidanalyser import config
 from tradevidanalyser.providers.extract import (
+    FakeExtractProvider,
     GrokExtractProvider,
     SessionEventDraft,
     apply_citation_guard,
+    citation_problems,
     events_from_chat_payload,
+    events_pass_json_schema,
     hydrate_session_events,
+    insights_from_chat_payload,
+    insights_json_schema,
 )
 from tradevidanalyser.schema import (
     EVENT_KINDS,
     SCHEMA_VERSION,
+    EventKind,
     Insights,
     SessionEvent,
     Transcript,
@@ -70,11 +77,29 @@ def _provider(handler, monkeypatch: pytest.MonkeyPatch, **kwargs) -> GrokExtract
 
 
 def test_session_event_kind_closed_set() -> None:
+    assert EVENT_KINDS == get_args(EventKind)
     for kind in EVENT_KINDS:
         event = SessionEvent(t=0.0, kind=kind, seg="seg_001", text="x")
         assert event.kind == kind
     with pytest.raises(ValidationError):
         SessionEvent(t=0.0, kind="not_a_kind", seg="seg_001", text="x")  # type: ignore[arg-type]
+
+
+def test_window_schema_excludes_event_fields() -> None:
+    schema = insights_json_schema()
+    props = schema.get("properties") or {}
+    for key in ("session_events", "summary_de", "summary_en"):
+        assert key not in props
+    assert "SessionEvent" not in (schema.get("$defs") or {})
+
+
+def test_events_schema_kind_is_closed() -> None:
+    schema = events_pass_json_schema()
+    kind = schema["$defs"]["SessionEventDraft"]["properties"]["kind"]
+    assert set(kind["enum"]) == set(EVENT_KINDS)
+    assert schema.get("additionalProperties") is False
+    assert schema["$defs"]["SessionEventDraft"].get("additionalProperties") is False
+    assert "text" not in schema["$defs"]["SessionEventDraft"]["properties"]
 
 
 def test_insights_additive_no_schema_bump() -> None:
@@ -118,6 +143,71 @@ def test_summary_digit_from_cited_segment_kept() -> None:
     cleaned = apply_citation_guard(transcript, raw)
     assert "18500" in cleaned.summary_de
     assert not any("digit" in gap for gap in cleaned.gaps)
+    assert citation_problems(transcript, cleaned) == []
+
+
+def test_summary_digit_from_dropped_citation_rejected() -> None:
+    transcript = _transcript(("Stop bei 18500.",))
+    raw = Insights(
+        provider="grok",
+        model="m",
+        stated_stops_targets=[
+            {"seg": "seg_001", "text": "fabricated quote", "raw_text": "fabricated quote"}
+        ],
+        summary_de="Im Tape: 18500 genannt.",
+    )
+    cleaned = apply_citation_guard(transcript, raw)
+    assert cleaned.stated_stops_targets == []
+    assert cleaned.summary_de == ""
+    assert any("18500" in gap for gap in cleaned.gaps)
+    assert citation_problems(transcript, cleaned) == []
+
+
+def test_summary_partial_digit_run_not_justified_by_longer_number() -> None:
+    transcript = _transcript(("Stop bei 18500.",))
+    raw = Insights(
+        provider="grok",
+        model="m",
+        stated_stops_targets=[
+            {"seg": "seg_001", "text": "Stop bei 18500", "raw_text": "Stop bei 18500"}
+        ],
+        summary_de="Nur 18 genannt.",
+    )
+    cleaned = apply_citation_guard(transcript, raw)
+    assert cleaned.summary_de == ""
+    assert any("digit 18" in gap for gap in cleaned.gaps)
+    assert citation_problems(transcript, cleaned) == []
+
+
+def test_valid_text_does_not_launder_fabricated_raw_text() -> None:
+    transcript = _transcript(("Bias ist long.",))
+    raw = Insights(
+        provider="grok",
+        model="m",
+        stated_stops_targets=[
+            {"seg": "seg_001", "text": "Bias ist long", "raw_text": "Stop bei 18500"}
+        ],
+        summary_de="18500",
+    )
+    cleaned = apply_citation_guard(transcript, raw)
+    assert cleaned.stated_stops_targets == []
+    assert cleaned.summary_de == ""
+    assert any("raw_text not found" in gap for gap in cleaned.gaps)
+    assert citation_problems(transcript, cleaned) == []
+
+
+def test_empty_span_does_not_unlock_summary_digits() -> None:
+    transcript = _transcript(("Stop bei 18500.",))
+    raw = Insights(
+        provider="grok",
+        model="m",
+        observations=[{"seg": "seg_001", "text": ""}],
+        summary_de="18500",
+    )
+    cleaned = apply_citation_guard(transcript, raw)
+    assert cleaned.summary_de == ""
+    assert any("digit" in gap for gap in cleaned.gaps)
+    assert citation_problems(transcript, cleaned) == []
 
 
 def test_summary_de_over_120_words_dropped() -> None:
@@ -132,6 +222,21 @@ def test_summary_de_over_120_words_dropped() -> None:
     cleaned = apply_citation_guard(transcript, raw)
     assert cleaned.summary_de == ""
     assert any("120 words" in gap for gap in cleaned.gaps)
+
+
+def test_summary_en_over_120_words_kept() -> None:
+    transcript = _transcript(("Bias ist long.",))
+    summary = " ".join(["Word"] * 121)
+    raw = Insights(
+        provider="grok",
+        model="m",
+        bias_statements=[{"seg": "seg_001", "text": "Bias ist long"}],
+        summary_en=summary,
+    )
+    cleaned = apply_citation_guard(transcript, raw)
+    assert cleaned.summary_en == summary
+    assert not any("120 words" in gap for gap in cleaned.gaps)
+    assert citation_problems(transcript, cleaned) == []
 
 
 def test_hydrate_events_uses_transcript_text() -> None:
@@ -179,12 +284,52 @@ def test_events_pass_sends_ids_not_text_and_hydrates(monkeypatch: pytest.MonkeyP
     body = json.loads(events_reqs[0].content)
     user = body["messages"][1]["content"]
     assert "seg_001" in user
+    assert "Fenster-Fundstellen" in user
+    assert "bias_statements:" in user
     assert "Bias ist long" not in user
+    assert "Playbook ONH Touch" not in user
     assert body["response_format"]["json_schema"]["name"] == "session_events"
+    kind_schema = body["response_format"]["json_schema"]["schema"]["$defs"]["SessionEventDraft"][
+        "properties"
+    ]["kind"]
+    assert set(kind_schema["enum"]) == set(EVENT_KINDS)
     assert insights.session_events
     assert insights.session_events[0].kind == "bias_statement"
     assert insights.session_events[0].text == "Bias ist long."
     assert insights.summary_de == "Bias long."
+
+
+def test_window_payload_strips_event_fields() -> None:
+    parsed = insights_from_chat_payload(
+        _chat_response(
+            {
+                "provider": "grok",
+                "model": "m",
+                "session_events": [
+                    {"kind": "not_a_kind", "seg": "seg_001", "t": 0.0, "text": "x"}
+                ],
+                "summary_de": "should be ignored",
+                "summary_en": "should be ignored",
+                "bias_statements": [{"seg": "seg_001", "text": "Bias ist long"}],
+            }
+        )
+    )
+    assert parsed.session_events == []
+    assert parsed.summary_de == ""
+    assert parsed.summary_en == ""
+    assert parsed.bias_statements[0].seg == "seg_001"
+
+
+def test_fake_extract_splits_grok_and_brief_kinds() -> None:
+    transcript = _transcript(("Grok briefing sagt long.", "nur grok hier.", "nur briefing."))
+    insights = FakeExtractProvider().extract(transcript)
+    by_seg = {(event.seg, event.kind) for event in insights.session_events}
+    assert ("seg_001", "grok_ref") in by_seg
+    assert ("seg_001", "brief_ref") in by_seg
+    assert ("seg_002", "grok_ref") in by_seg
+    assert ("seg_002", "brief_ref") not in by_seg
+    assert ("seg_003", "brief_ref") in by_seg
+    assert ("seg_003", "grok_ref") not in by_seg
 
 
 def test_events_from_chat_payload_roundtrip() -> None:

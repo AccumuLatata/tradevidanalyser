@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import BaseModel, Field
 
@@ -88,17 +88,7 @@ EventKind = Literal[
     "grok_ref",
 ]
 
-EVENT_KINDS: tuple[str, ...] = (
-    "hourly_checkin",
-    "bias_statement",
-    "no_trade_zone",
-    "trade_zone",
-    "tilt",
-    "break",
-    "rule_mention",
-    "brief_ref",
-    "grok_ref",
-)
+EVENT_KINDS: tuple[str, ...] = get_args(EventKind)
 
 
 class SessionEvent(BaseModel):

@@ -26,9 +26,9 @@ Do not edit in place to “improve” an old run: add a new file
 
 Second-pass prompt for PR-09 (`session_events`, `summary_de`, `summary_en`).
 
-- One call over the **whole** timeline with segment ids and times only
-  (no transcript text). The client re-hydrates `SessionEvent.text` from
-  the cited segment.
+- One call over the **whole** timeline with segment ids, times, and
+  first-pass citation ids only (no transcript text). The client
+  re-hydrates `SessionEvent.text` from the cited segment.
 - Closed `kind` set: `hourly_checkin`, `bias_statement`, `no_trade_zone`,
   `trade_zone`, `tilt`, `break`, `rule_mention`, `brief_ref`, `grok_ref`.
 - Summaries are labelled model prose. The citation guard drops a summary

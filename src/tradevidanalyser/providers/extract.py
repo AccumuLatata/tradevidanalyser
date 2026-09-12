@@ -12,13 +12,12 @@ from typing import Any, Protocol
 
 import httpx
 
-from tradevidanalyser.glossary import load_glossary
 from pydantic import BaseModel, Field
 
+from tradevidanalyser.glossary import load_glossary
 from tradevidanalyser.schema import (
     EVENT_KINDS,
     CitedSpan,
-    EventKind,
     Insights,
     SessionEvent,
     Transcript,
@@ -118,8 +117,14 @@ class FakeExtractProvider:
                 SessionEvent(t=span.t or 0.0, kind=kind, seg=span.seg, text=span.text)
             )
         for span in briefs:
-            kind: EventKind = "grok_ref" if re.search(r"\bgrok\b", span.text, re.I) else "brief_ref"
-            events.append(SessionEvent(t=span.t or 0.0, kind=kind, seg=span.seg, text=span.text))
+            if re.search(r"\bgrok\b", span.text, re.I):
+                events.append(
+                    SessionEvent(t=span.t or 0.0, kind="grok_ref", seg=span.seg, text=span.text)
+                )
+            if re.search(r"\b(brief|briefing)\b", span.text, re.I):
+                events.append(
+                    SessionEvent(t=span.t or 0.0, kind="brief_ref", seg=span.seg, text=span.text)
+                )
 
         return Insights(
             provider=self.name,
@@ -207,7 +212,18 @@ class EventsPass(BaseModel):
 
 
 def events_pass_json_schema() -> dict[str, Any]:
-    return EventsPass.model_json_schema()
+    """Second-pass schema: closed kind set, no extra properties (no event text)."""
+    schema = EventsPass.model_json_schema()
+    schema["additionalProperties"] = False
+    defs = schema.get("$defs")
+    if isinstance(defs, dict):
+        draft = defs.get("SessionEventDraft")
+        if isinstance(draft, dict):
+            props = draft.get("properties")
+            if isinstance(props, dict) and "kind" in props:
+                props["kind"] = {"type": "string", "enum": list(EVENT_KINDS)}
+            draft["additionalProperties"] = False
+    return schema
 
 
 def window_segments(
@@ -283,16 +299,48 @@ def _quote_in_segment(segment_text: str, quote: str) -> bool:
     return _nfc(quote) in _nfc(segment_text)
 
 
+def _span_problem(span: CitedSpan, known: dict[str, str]) -> str | None:
+    if span.seg not in known:
+        return f"citation {span.seg} is not in the transcript"
+    segment_text = known[span.seg]
+    if span.text and not _quote_in_segment(segment_text, span.text):
+        return f"quote not found in {span.seg}"
+    if span.raw_text and not _quote_in_segment(segment_text, span.raw_text):
+        return f"raw_text not found in {span.seg}"
+    if span.token and not (
+        contains_token(segment_text, span.token) or _quote_in_segment(segment_text, span.token)
+    ):
+        return f"token not found in {span.seg}"
+    return None
+
+
+def _event_problem(event: SessionEvent, known: dict[str, str]) -> str | None:
+    if event.kind not in EVENT_KINDS:
+        return f"unknown kind {event.kind!r}"
+    if event.seg not in known:
+        return f"citation {event.seg} is not in the transcript"
+    if event.text and not _quote_in_segment(known[event.seg], event.text):
+        return f"quote not found in {event.seg}"
+    return None
+
+
 def _cited_segment_blob(transcript: Transcript, insights: Insights) -> str:
+    """Concatenate text of segments that still have a valid citation or event."""
     known = {seg.id: seg.text for seg in transcript.segments}
     segs: list[str] = []
     seen: set[str] = set()
     for field in INSIGHT_SPAN_FIELDS:
         for span in getattr(insights, field):
+            if _span_problem(span, known) is not None:
+                continue
+            if not (span.text or span.raw_text or span.token):
+                continue
             if span.seg not in seen:
                 seen.add(span.seg)
                 segs.append(span.seg)
     for event in insights.session_events:
+        if _event_problem(event, known) is not None:
+            continue
         if event.seg not in seen:
             seen.add(event.seg)
             segs.append(event.seg)
@@ -307,44 +355,23 @@ def citation_problems(
     problems: list[tuple[str, CitedSpan | SessionEvent | str, str]] = []
     for field in INSIGHT_SPAN_FIELDS:
         for span in getattr(insights, field):
-            if span.seg not in known:
-                problems.append((field, span, f"citation {span.seg} is not in the transcript"))
-                continue
-            segment_text = known[span.seg]
-            if span.text and not _quote_in_segment(segment_text, span.text):
-                problems.append((field, span, f"quote not found in {span.seg}"))
-            elif span.raw_text and not _quote_in_segment(segment_text, span.raw_text):
-                problems.append((field, span, f"raw_text not found in {span.seg}"))
-            elif span.token and not (
-                contains_token(segment_text, span.token)
-                or _quote_in_segment(segment_text, span.token)
-            ):
-                problems.append((field, span, f"token not found in {span.seg}"))
+            reason = _span_problem(span, known)
+            if reason:
+                problems.append((field, span, reason))
     for event in insights.session_events:
-        if event.kind not in EVENT_KINDS:
-            problems.append(
-                ("session_events", event, f"unknown kind {event.kind!r}")
-            )
-            continue
-        if event.seg not in known:
-            problems.append(
-                ("session_events", event, f"citation {event.seg} is not in the transcript")
-            )
-            continue
-        if event.text and not _quote_in_segment(known[event.seg], event.text):
-            problems.append(("session_events", event, f"quote not found in {event.seg}"))
-    cited = _nfc(_cited_segment_blob(transcript, insights))
+        reason = _event_problem(event, known)
+        if reason:
+            problems.append(("session_events", event, reason))
+    cited_runs = set(_DIGIT_RUN.findall(_nfc(_cited_segment_blob(transcript, insights))))
     for field in ("summary_de", "summary_en"):
         text = getattr(insights, field) or ""
         if not text:
             continue
-        if len(text.split()) > SUMMARY_WORD_LIMIT:
+        if field == "summary_de" and len(text.split()) > SUMMARY_WORD_LIMIT:
             problems.append((field, text, f"{field} exceeds {SUMMARY_WORD_LIMIT} words"))
         for run in _DIGIT_RUN.findall(text):
-            if run not in cited:
-                problems.append(
-                    (field, text, f"{field} digit {run} not in cited segments")
-                )
+            if run not in cited_runs:
+                problems.append((field, text, f"{field} digit {run} not in cited segments"))
     return problems
 
 
@@ -402,13 +429,25 @@ def _format_window(segments: list[Any]) -> str:
     return "\n".join(lines)
 
 
-def _format_timeline_ids(segments: list[Any]) -> str:
+def _format_timeline_ids(
+    segments: list[Any], insights: Insights | None = None
+) -> str:
     lines = [
         "Zeitleiste. Nur seg-ids und Zeiten — keinen Segmenttext. Text setzt der Client.",
         "",
     ]
     for seg in segments:
         lines.append(f"{seg.id} t={seg.t0:.2f}–{seg.t1:.2f}")
+    if insights is not None:
+        cited_lines = []
+        for field in INSIGHT_SPAN_FIELDS:
+            segs = sorted({span.seg for span in getattr(insights, field)})
+            if segs:
+                cited_lines.append(f"{field}: {', '.join(segs)}")
+        if cited_lines:
+            lines.append("")
+            lines.append("Fenster-Fundstellen (nur seg-ids, kein Text):")
+            lines.extend(cited_lines)
     return "\n".join(lines)
 
 
@@ -500,6 +539,8 @@ def events_from_chat_payload(payload: dict[str, Any]) -> EventsPass:
 
 def insights_from_chat_payload(payload: dict[str, Any]) -> Insights:
     body = _payload_body(payload)
+    for key in _WINDOW_EXCLUDE:
+        body.pop(key, None)
     body.setdefault("provider", "grok")
     body.setdefault("model", "unknown")
     try:
@@ -536,7 +577,9 @@ class GrokExtractProvider:
             raise ExtractError("XAI_API_KEY is unset. Set it or use TVA_EXTRACT_PROVIDER=fake.")
         path = self.prompt_path or default_prompt_path()
         system_prompt = path.read_text(encoding="utf-8")
-        version = prompt_version_for(path)
+        events_path = default_prompt_path(EVENTS_PROMPT_FILENAME)
+        events_prompt = events_path.read_text(encoding="utf-8")
+        version = f"{prompt_version_for(path)}+{prompt_version_for(events_path)}"
         windows = window_segments(
             list(transcript.segments),
             size=self.window_size,
@@ -550,9 +593,6 @@ class GrokExtractProvider:
                 gaps=["empty transcript"],
             )
         schema = insights_json_schema()
-        events_path = default_prompt_path(EVENTS_PROMPT_FILENAME)
-        events_prompt = events_path.read_text(encoding="utf-8")
-        version = f"{version}+{prompt_version_for(events_path)}"
         parts: list[Insights] = []
         owns_client = self._client is None
         client = self._client or httpx.Client(timeout=HTTP_TIMEOUT)
@@ -578,7 +618,7 @@ class GrokExtractProvider:
                 client,
                 key=key,
                 system_prompt=events_prompt,
-                user_prompt=_format_timeline_ids(list(transcript.segments)),
+                user_prompt=_format_timeline_ids(list(transcript.segments), merged),
                 schema=events_pass_json_schema(),
                 schema_name="session_events",
             )
