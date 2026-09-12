@@ -53,13 +53,15 @@ tva run --latest
 tva run "2026-09-11 14-30-00.mp4"
 tva status
 tva doctor
+tva watch --source /path/to/obs --once
 tva wer 2026-09-11_143000 --ref path/to/reference.txt
 tva serve --host 127.0.0.1 --port 8764
 ```
 
 OBS filenames must be `%CCYY-%MM-%DD %hh-%mm-%ss`. Record to the trading PC
-disk, then copy the file into `$TVA_ROOT/recordings/` (or pass the path to
-`tva ingest`, which copies it there).
+disk, then `tva watch --source <obs dir>` copies into `$TVA_ROOT/recordings/`
+(or pass the path to `tva ingest`). Watch never deletes the source and
+never records onto the NAS.
 
 `tva wer` prints JSON `{wer, jargon_recall, n_words}` against a
 hand-corrected reference (the golden excerpt on the NAS). It uses
