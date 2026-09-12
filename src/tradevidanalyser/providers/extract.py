@@ -6,20 +6,8 @@ import os
 import re
 from typing import Protocol
 
+from tradevidanalyser.glossary import load_glossary
 from tradevidanalyser.schema import CitedSpan, Insights, Transcript
-
-_LEVELS = (
-    "ONH",
-    "ONL",
-    "dVWAP",
-    "pwEQ",
-    "pdPOC",
-    "pdVAH",
-    "pdVAL",
-    "APOC",
-    "HVL",
-    "3c",
-)
 
 _BIAS = re.compile(r"\b(bias|richtung|long|short|bullish|bearish)\b", re.IGNORECASE)
 _PLAYBOOK = re.compile(r"\b(playbook|setup|skalp|scalp|swing)\b", re.IGNORECASE)
@@ -53,9 +41,10 @@ class FakeExtractProvider:
     model = "keyword-v1"
 
     def extract(self, transcript: Transcript) -> Insights:
+        tokens = load_glossary().level_tokens
         levels: list[CitedSpan] = []
         for seg in transcript.segments:
-            for token in _LEVELS:
+            for token in tokens:
                 if re.search(rf"\b{re.escape(token)}\b", seg.text):
                     levels.append(CitedSpan(seg=seg.id, text=seg.text, t=seg.t0, token=token))
 

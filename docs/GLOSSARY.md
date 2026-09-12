@@ -1,7 +1,20 @@
 # ASR jargon glossary (German speech, English level tokens)
 
-Used as the WhisperX `initial_prompt` (and the fake extractor's token list).
-Keep this short — long prompts dilute the model.
+## How this is used
+
+`glossary.py` parses the sections below (not this header) into:
+
+- `initial_prompt` — tokens joined by spaces, capped at 220, for WhisperX
+  and hosted keyword boost
+- `level_tokens` — **Levels / locations** (ONH, dVWAP, …)
+- `playbook_terms` — **Playbooks / rules** (3c, Scalp, …)
+
+`FakeExtractProvider` and later ASR adapters read these lists from this
+file. They are not hard-coded in Python. Keep the lists short — long
+prompts dilute the model.
+
+WER / jargon-recall (`tva wer`) scores English tokens inside German
+speech against this same list.
 
 ## Levels / locations
 

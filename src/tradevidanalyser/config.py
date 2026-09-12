@@ -9,6 +9,8 @@ ENV_ROOT = "TVA_ROOT"
 DEFAULT_STORE_NAME = ".tva_store"
 RECORDINGS_DIR = "recordings"
 SESSIONS_DIR = "sessions"
+FIXTURES_DIR = "fixtures"
+GOLDEN_DIR = "fixtures/golden"
 
 
 def resolve_root(cli_root: Path | str | None = None) -> Path:
@@ -31,6 +33,11 @@ def sessions_dir(root: Path) -> Path:
 
 def session_dir(root: Path, session_id: str) -> Path:
     return sessions_dir(root) / session_id
+
+
+def golden_dir(root: Path) -> Path:
+    """NAS-only golden excerpt (never in git). See docs/GOLDEN_EXCERPT.md."""
+    return root / GOLDEN_DIR
 
 
 def ensure_layout(root: Path) -> None:

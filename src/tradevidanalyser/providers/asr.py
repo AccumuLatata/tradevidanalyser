@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 from typing import Protocol
 
+from tradevidanalyser.glossary import load_glossary
 from tradevidanalyser.schema import Transcript, TranscriptSegment, TranscriptWord
 
 
@@ -27,6 +28,9 @@ class FakeAsrProvider:
     model = "fake-v1"
 
     def transcribe(self, audio: Path, *, language: str = "de") -> Transcript:
+        glossary = load_glossary()
+        if not glossary.tokens:
+            raise AsrError("docs/GLOSSARY.md produced an empty token list")
         sidecar = audio.with_suffix(".transcript.json")
         if sidecar.is_file():
             return Transcript.model_validate_json(sidecar.read_text(encoding="utf-8"))
