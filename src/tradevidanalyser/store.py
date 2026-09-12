@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import threading
 from pathlib import Path
 
@@ -74,17 +75,34 @@ def contact_sheet_path(root: Path, session_id: str) -> Path:
     return frames_dir(root, session_id) / CONTACT_SHEET_NAME
 
 
+def is_safe_path_name(name: str) -> bool:
+    """True when ``name`` is a single path segment (no traversal)."""
+    return (
+        bool(name)
+        and name not in {".", ".."}
+        and Path(name).name == name
+        and "/" not in name
+        and "\\" not in name
+    )
+
+
 def list_frame_jpgs(root: Path, session_id: str) -> list[Path]:
     folder = frames_dir(root, session_id)
     if not folder.is_dir():
         return []
-    return sorted(path for path in folder.iterdir() if path.is_file() and _FRAME_JPG.match(path.name))
+    return sorted(
+        (path for path in folder.iterdir() if path.is_file() and _FRAME_JPG.match(path.name)),
+        key=lambda path: float(path.stem),
+    )
 
 
 def invalidate_downstream(root: Path, session_id: str) -> None:
-    """Drop transcript/insights so a changed recording is not left looking complete."""
+    """Drop transcript/insights/frames so a changed recording is not left looking complete."""
     transcript_path(root, session_id).unlink(missing_ok=True)
     insights_path(root, session_id).unlink(missing_ok=True)
+    frames = frames_dir(root, session_id)
+    if frames.is_dir():
+        shutil.rmtree(frames)
 
 
 def load_session(root: Path, session_id: str) -> SessionRecord:
@@ -150,7 +168,11 @@ def _compute_status_locked(
     stages["ingest"] = "ok" if session_json_path(root, session_id).is_file() else "missing"
     stages["transcribe"] = "ok" if transcript_path(root, session_id).is_file() else "missing"
     stages["extract"] = "ok" if insights_path(root, session_id).is_file() else "missing"
-    stages["frames"] = "ok" if list_frame_jpgs(root, session_id) else "missing"
+    # Frames are CLI-only / optional. Emitting "missing" would make every
+    # session match GET /sessions?status=missing and trip the locked PR-11
+    # bot pack (Sunday M count, "any stage missing" pings).
+    if list_frame_jpgs(root, session_id):
+        stages["frames"] = "ok"
     path = status_path(root, session_id)
     previous: SessionStatus | None = None
     if path.is_file():
@@ -162,7 +184,7 @@ def _compute_status_locked(
         cost_usd = previous.cost_usd
     if previous is not None:
         for name, state in previous.stages.items():
-            if state == "failed" and stages.get(name) == "missing":
+            if state == "failed" and stages.get(name) != "ok":
                 stages[name] = "failed"
     if failed and stages.get(failed) != "ok":
         stages[failed] = "failed"

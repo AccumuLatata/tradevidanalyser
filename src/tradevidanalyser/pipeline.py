@@ -63,6 +63,8 @@ def frames_session(
     contact_sheet: bool = False,
     layout_id: str | None = None,
 ) -> FramesResult:
+    if not store.is_safe_path_name(session_id):
+        raise ValueError(f"unsafe session id {session_id!r}")
     record = store.load_session(root, session_id)
     result = extract_frames(
         record,

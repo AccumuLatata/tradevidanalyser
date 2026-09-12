@@ -138,15 +138,20 @@ def media_for_time(session: SessionRecord, root: Path, t: float) -> tuple[Path, 
     """Return ``(media_path, local_seek_s)`` for session time ``t``."""
     parts = session.recording.parts
     if parts:
+        first = parts[0]
         last = parts[-1]
+        if t < first.offset_s:
+            return _media_src(root, first.path), _clamp_seek(0.0, first.duration_s)
         for index, part in enumerate(parts):
             start = part.offset_s
             end = start + part.duration_s
             is_last = index == len(parts) - 1
             if start <= t < end or (is_last and t >= start):
-                return root / part.path, _clamp_seek(t - start, part.duration_s)
-        return root / last.path, _clamp_seek(t - last.offset_s, last.duration_s)
-    return root / session.recording.path, _clamp_seek(t, session.recording.duration_s)
+                return _media_src(root, part.path), _clamp_seek(t - start, part.duration_s)
+            if not is_last and end <= t < parts[index + 1].offset_s:
+                return _media_src(root, part.path), _clamp_seek(part.duration_s, part.duration_s)
+        return _media_src(root, last.path), _clamp_seek(t - last.offset_s, last.duration_s)
+    return _media_src(root, session.recording.path), _clamp_seek(t, session.recording.duration_s)
 
 
 def extract_frames(
@@ -157,15 +162,21 @@ def extract_frames(
     contact_sheet: bool = False,
     layout_id: str | None = None,
 ) -> FramesResult:
+    if not store.is_safe_path_name(session.id):
+        raise ValueError(f"unsafe session id {session.id!r}")
     layout = get_layout(layout_id, root=root)
-    chosen = [quantize_time(t) for t in (times if times is not None else default_frame_times(session))]
-    chosen = sorted(dict.fromkeys(t for t in chosen if t >= 0.0))
-    dest_dir = store.frames_dir(root, session.id)
+    duration = float(session.recording.duration_s)
+    raw = [quantize_time(t) for t in (times if times is not None else default_frame_times(session))]
+    chosen = sorted(dict.fromkeys(t for t in raw if 0.0 <= t <= duration + 1e-9))
+    if times is not None and raw and not chosen:
+        raise ValueError(f"all times are outside session duration [0, {quantize_time(max(duration, 0.0))}]")
+    dest_dir = _under_root(store.frames_dir(root, session.id), root)
     dest_dir.mkdir(parents=True, exist_ok=True)
     frames: list[Path] = []
     for t in chosen:
         src, seek = media_for_time(session, root, t)
         dest = store.frame_path(root, session.id, t)
+        _under_root(dest, dest_dir)
         _extract_one(src, seek, dest)
         frames.append(dest)
     sheet: Path | None = None
@@ -196,17 +207,21 @@ def write_contact_sheet(frames: Sequence[Path], dest: Path) -> Path:
         return dest
     cols = min(5, n)
     rows = math.ceil(n / cols)
+    needed = cols * rows
     cmd: list[str] = [binary, "-hide_banner", "-loglevel", "error", "-y"]
     for path in frames:
         cmd.extend(["-i", str(path)])
+    # xstack grid=WxH expects W*H cells; pad leftovers so we do not rely on fill=.
+    for _ in range(needed - n):
+        cmd.extend(["-f", "lavfi", "-i", "color=c=black:s=320x240:d=1"])
     # `tile` stacks successive frames of one stream; multiple JPEGs need xstack.
     scaled = [
         f"[{i}:v]scale=320:240:force_original_aspect_ratio=decrease,"
         f"pad=320:240:(ow-iw)/2:(oh-ih)/2,setsar=1[v{i}]"
-        for i in range(n)
+        for i in range(needed)
     ]
-    stacked = "".join(f"[v{i}]" for i in range(n))
-    scaled.append(f"{stacked}xstack=inputs={n}:grid={cols}x{rows}:fill=black[out]")
+    stacked = "".join(f"[v{i}]" for i in range(needed))
+    scaled.append(f"{stacked}xstack=inputs={needed}:grid={cols}x{rows}:fill=black[out]")
     cmd.extend(
         [
             "-filter_complex",
@@ -266,11 +281,23 @@ def _clamp_seek(local: float, duration_s: float) -> float:
     return min(max(local, 0.0), ceiling)
 
 
-def _rel(path: Path, root: Path) -> str:
+def _media_src(root: Path, rel: str) -> Path:
+    path = Path(rel)
+    src = path if path.is_absolute() else root / path
+    return _under_root(src, root)
+
+
+def _under_root(path: Path, root: Path) -> Path:
+    resolved = path.expanduser().resolve()
     try:
-        return str(path.resolve().relative_to(root.resolve()))
-    except ValueError:
-        return str(path)
+        resolved.relative_to(root.expanduser().resolve())
+    except ValueError as exc:
+        raise ValueError(f"refusing path outside TVA_ROOT: {path}") from exc
+    return resolved
+
+
+def _rel(path: Path, root: Path) -> str:
+    return str(_under_root(path, root).relative_to(root.expanduser().resolve()))
 
 
 def _parse_layout_yaml(text: str) -> dict[str, Layout]:
@@ -344,4 +371,8 @@ def _parse_roi_body(name: str, body: str) -> Roi:
     for field, value in (("x", roi.x), ("y", roi.y), ("w", roi.w), ("h", roi.h)):
         if not 0.0 <= value <= 1.0:
             raise ValueError(f"layout roi {name}.{field}={value} is outside 0..1")
+    if roi.x + roi.w > 1.0 + 1e-9:
+        raise ValueError(f"layout roi {name} x+w={roi.x + roi.w} exceeds 1")
+    if roi.y + roi.h > 1.0 + 1e-9:
+        raise ValueError(f"layout roi {name} y+h={roi.y + roi.h} exceeds 1")
     return roi
