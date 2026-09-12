@@ -67,14 +67,26 @@ def run_doctor(root: Path) -> DoctorReport:
         )
     )
 
-    xai = bool(os.environ.get("XAI_API_KEY"))
+    xai = bool((os.environ.get("XAI_API_KEY") or "").strip())
     checks.append(
         DoctorCheck(
             id="xai_key",
             status="ok" if xai else "warn",
-            detail="XAI_API_KEY set" if xai else "XAI_API_KEY unset (extraction uses fake unless set)",
+            detail="XAI_API_KEY set" if xai else "XAI_API_KEY unset (needed for TVA_EXTRACT_PROVIDER=grok)",
         )
     )
+
+    extract = (os.environ.get("TVA_EXTRACT_PROVIDER") or "fake").strip().lower() or "fake"
+    if extract in {"grok", "xai"}:
+        if xai:
+            ex_status, ex_detail = "ok", f"TVA_EXTRACT_PROVIDER={extract}"
+        else:
+            ex_status, ex_detail = "fail", "TVA_EXTRACT_PROVIDER=grok but XAI_API_KEY is unset"
+    elif extract in {"fake", "test", "keyword"}:
+        ex_status, ex_detail = "ok", f"TVA_EXTRACT_PROVIDER={extract}"
+    else:
+        ex_status, ex_detail = "warn", f"TVA_EXTRACT_PROVIDER={extract}"
+    checks.append(DoctorCheck(id="extract_provider", status=ex_status, detail=ex_detail))
 
     provider = (os.environ.get("TVA_ASR_PROVIDER") or "fake").strip().lower() or "fake"
     known = {"fake", "whisperx", "whisper", "deepgram", "hosted"}

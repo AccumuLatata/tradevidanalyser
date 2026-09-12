@@ -194,6 +194,13 @@ measurement, ±2 s target, confidence stored in the Session Record.
 cheap, structured outputs), behind the same provider interface as the ASR and
 VLM layers so any can be swapped or run side by side for evaluation.
 
+**Decision check (PR-08):** Confirmed. `GrokExtractProvider` is wired behind
+`TVA_EXTRACT_PROVIDER=grok` with JSON-schema constrained `Insights` (from the
+Pydantic model), German prompt `prompts/insights_v1.de.md`, windows of ≤ 40
+segments (overlap 5), merge by `(seg, field)`, and citation-drop into
+`gaps[]`. Default model is `grok-4.6` (`TVA_EXTRACT_MODEL`). Fake remains the
+CLI/CI default; HTTP is mocked in tests.
+
 ---
 
 ## 8. Storage and analytics

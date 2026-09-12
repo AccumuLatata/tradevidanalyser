@@ -1,0 +1,21 @@
+{
+  "schema_version": "1",
+  "provider": "grok",
+  "model": "grok-4.6",
+  "prompt_version": "ignored",
+  "bias_statements": [
+    {
+      "seg": "seg_001",
+      "text": "ich habe fuenf tausend Punkte gemacht",
+      "t": 0.0
+    }
+  ],
+  "playbooks_mentioned": [],
+  "stated_levels": [],
+  "stated_stops_targets": [],
+  "checkins": [],
+  "tilt_markers": [],
+  "brief_refs": [],
+  "observations": [],
+  "gaps": []
+}

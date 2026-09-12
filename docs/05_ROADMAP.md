@@ -10,8 +10,8 @@ product decision, not a hidden dependency.
 | Milestone | Intent | Depends on | Status |
 |---|---|---|---|
 | **TVA0** | Plan lock, decisions, desk prep, golden excerpt | — | PR-00/01/02 landed; see [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) |
-| **TVA1** | Ingest + German transcript | TVA0 | PR-03…PR-06 landed; PR-07 split stitch + desktop track; fake ASR default |
-| **TVA2** | Insights extract + headless API (`tva serve`) | TVA1 | |
+| **TVA1** | Ingest + German transcript | TVA0 | PR-03…PR-07 landed; fake ASR default |
+| **TVA2** | Insights extract + headless API (`tva serve`) | TVA1 | PR-08 Grok extractor; fake extract default |
 | **TVA3** | Optional frames / clock OCR / chapter clips / opt-in VLM | TVA2 | |
 | **TVA4** | TradesViz executions join (broker-agnostic fills) | TVA2 | later |
 | **TVA5** | Alignment + per-trade windows + rule scorecard | TVA4 | later |

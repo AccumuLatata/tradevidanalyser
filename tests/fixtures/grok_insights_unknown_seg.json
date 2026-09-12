@@ -1,0 +1,21 @@
+{
+  "schema_version": "1",
+  "provider": "grok",
+  "model": "grok-4.6",
+  "prompt_version": "ignored",
+  "bias_statements": [],
+  "playbooks_mentioned": [
+    {
+      "seg": "seg_999",
+      "text": "Playbook ONH Touch",
+      "name": "ONH Touch"
+    }
+  ],
+  "stated_levels": [],
+  "stated_stops_targets": [],
+  "checkins": [],
+  "tilt_markers": [],
+  "brief_refs": [],
+  "observations": [],
+  "gaps": []
+}

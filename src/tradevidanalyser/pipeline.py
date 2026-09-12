@@ -7,7 +7,7 @@ from pathlib import Path
 from tradevidanalyser import store
 from tradevidanalyser.ingest import ingest
 from tradevidanalyser.providers.asr import AsrError, get_asr_provider
-from tradevidanalyser.providers.extract import get_extract_provider
+from tradevidanalyser.providers.extract import citation_problems, get_extract_provider
 from tradevidanalyser.schema import Insights, SessionRecord, Transcript
 
 
@@ -48,23 +48,10 @@ def extract_session(
 
 
 def _assert_citations(transcript: Transcript, insights: Insights) -> None:
-    known = {seg.id: seg.text for seg in transcript.segments}
-    fields = (
-        insights.bias_statements,
-        insights.playbooks_mentioned,
-        insights.stated_levels,
-        insights.stated_stops_targets,
-        insights.checkins,
-        insights.tilt_markers,
-        insights.brief_refs,
-        insights.observations,
-    )
-    for group in fields:
-        for span in group:
-            if span.seg not in known:
-                raise ValueError(f"citation {span.seg} is not in the transcript")
-            if span.text and span.text not in known[span.seg]:
-                raise ValueError(f"quote not found in {span.seg}")
+    problems = citation_problems(transcript, insights)
+    if problems:
+        _field, _span, reason = problems[0]
+        raise ValueError(reason)
 
 
 def run_latest(

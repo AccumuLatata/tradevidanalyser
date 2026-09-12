@@ -1,0 +1,39 @@
+{
+  "schema_version": "1",
+  "provider": "grok",
+  "model": "grok-4.6",
+  "prompt_version": "ignored",
+  "bias_statements": [
+    {
+      "seg": "seg_001",
+      "text": "Bias ist long",
+      "t": 0.0
+    }
+  ],
+  "playbooks_mentioned": [
+    {
+      "seg": "seg_002",
+      "text": "Playbook ONH Touch",
+      "name": "ONH Touch"
+    }
+  ],
+  "stated_levels": [],
+  "stated_stops_targets": [
+    {
+      "seg": "seg_003",
+      "text": "Stop unter dem Level",
+      "raw_text": "Stop unter dem Level"
+    }
+  ],
+  "checkins": [
+    {
+      "seg": "seg_004",
+      "text": "Check-in zur vollen Stunde",
+      "t": 3.0
+    }
+  ],
+  "tilt_markers": [],
+  "brief_refs": [],
+  "observations": [],
+  "gaps": []
+}
