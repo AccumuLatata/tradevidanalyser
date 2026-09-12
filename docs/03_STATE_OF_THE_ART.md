@@ -98,6 +98,12 @@ per-trade clips (Grok 4.3 first, Gemini as the alternative) for qualitative
 evidence, opt-in per provider. Full-session Gemini agentic pass is an
 *optional* weekly deep-review, not the daily path.
 
+**PR-12 (keyframes):** `tva frames` writes chapter ±0/2/5 s JPEGs under
+`TVA_ROOT/sessions/<id>/frames/` from `layout.yaml` ROIs. No VLM provider is
+wired and no frame leaves the store. **docs.x.ai `video_url` verification is
+still pending (PR-15)** — the third-party Grok 4.3 reports in §2.2 are not a
+confirmed API contract.
+
 ---
 
 ## 3. Commercial trade journals with AI (what exists, where the gap is)

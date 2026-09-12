@@ -56,6 +56,7 @@ tva status
 tva doctor
 tva watch --source /path/to/obs --once
 tva wer 2026-09-11_143000 --ref path/to/reference.txt
+tva frames 2026-09-11_143000 --contact-sheet
 tva serve --host 127.0.0.1 --port 8764
 ```
 
@@ -70,6 +71,11 @@ default.
 `tva wer` prints JSON `{wer, jargon_recall, n_words}` against a
 hand-corrected reference (the golden excerpt on the NAS). It uses
 [`docs/GLOSSARY.md`](docs/GLOSSARY.md) for jargon tokens.
+
+`tva frames <id>` writes JPEGs at chapter markers ± 0/2/5 s (or `--at t…`)
+to `$TVA_ROOT/sessions/<id>/frames/`. `--contact-sheet` adds
+`frames/contact_sheet.jpg` so ROIs in [`layout.yaml`](layout.yaml) can be
+measured. Raw frames stay under `TVA_ROOT` (PII).
 
 ASR and extraction default to **fake** providers (`TVA_ASR_PROVIDER=fake`,
 `TVA_EXTRACT_PROVIDER=fake`) so CI and first-run never call a paid API.

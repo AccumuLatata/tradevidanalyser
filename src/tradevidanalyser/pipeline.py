@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from tradevidanalyser import store
+from tradevidanalyser.frames import FramesResult, extract_frames
 from tradevidanalyser.ingest import ingest
 from tradevidanalyser.providers.asr import AsrError, get_asr_provider
 from tradevidanalyser.providers.extract import citation_problems, get_extract_provider
@@ -52,6 +53,28 @@ def _assert_citations(transcript: Transcript, insights: Insights) -> None:
     if problems:
         _field, _span, reason = problems[0]
         raise ValueError(reason)
+
+
+def frames_session(
+    session_id: str,
+    *,
+    root: Path,
+    times: list[float] | None = None,
+    contact_sheet: bool = False,
+    layout_id: str | None = None,
+) -> FramesResult:
+    if not store.is_safe_path_name(session_id):
+        raise ValueError(f"unsafe session id {session_id!r}")
+    record = store.load_session(root, session_id)
+    result = extract_frames(
+        record,
+        times,
+        root=root,
+        contact_sheet=contact_sheet,
+        layout_id=layout_id,
+    )
+    store.compute_status(root, session_id)
+    return result
 
 
 def run_latest(

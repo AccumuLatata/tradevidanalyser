@@ -56,7 +56,8 @@ feeds Grok from the videos.
    spoken bias, playbook names, stated stop/target, hourly check-ins, tilt
    language, brief references, hesitation, rule mentions. Quotes are quotes;
    no invented numbers.
-4. **Optional visual notes** — keyframes at chapter markers; ROI OCR of the
+4. **Optional visual notes** — keyframes at chapter markers (`tva frames`,
+   named ROIs in `layout.yaml`, JPEGs stay under `TVA_ROOT`); ROI OCR of the
    on-screen clock (helps later alignment); short clips around chapters.
    Full-frame "watch the chart" is out. A VLM pass on clips is opt-in.
 5. **Headless API** — local HTTP on the always-on Mac, reading the NAS root.

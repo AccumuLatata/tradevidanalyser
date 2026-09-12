@@ -12,7 +12,7 @@ product decision, not a hidden dependency.
 | **TVA0** | Plan lock, decisions, desk prep, golden excerpt | — | PR-00/01/02 landed; see [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) |
 | **TVA1** | Ingest + German transcript | TVA0 | PR-03…PR-07 landed; fake ASR default |
 | **TVA2** | Insights extract + headless API (`tva serve`) | TVA1 | PR-08…PR-10 landed; PR-11 Grok routine pack; fake providers default |
-| **TVA3** | Optional frames / clock OCR / chapter clips / opt-in VLM | TVA2 | |
+| **TVA3** | Optional frames / clock OCR / chapter clips / opt-in VLM | TVA2 | PR-12 layout + keyframes landed; OCR / clips / VLM still open |
 | **TVA4** | TradesViz executions join (broker-agnostic fills) | TVA2 | later |
 | **TVA5** | Alignment + per-trade windows + rule scorecard | TVA4 | later |
 | **TVA6** | Briefs + ThesisTester attribution + debrief/ledger | TVA5 | later |
@@ -76,7 +76,7 @@ round-trips to a real segment.
 
 ## TVA3 — Frames (feasibility slice)
 
-- Keyframes at chapter markers.
+- Keyframes at chapter markers (`tva frames`, `layout.yaml` ROIs; landed PR-12).
 - Optional ROI OCR of the platform clock (calibration contact sheet).
 - Optional short clips around chapters (ffmpeg stream copy, mic only).
 - Optional VLM notes on those clips, redaction mask on balance/account

@@ -16,12 +16,31 @@ def tva_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return root
 
 
+def _drawtext_pts_filter() -> str:
+    fonts = (
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+        Path("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"),
+        Path("/usr/share/fonts/truetype/freefont/FreeSans.ttf"),
+    )
+    fontfile = ""
+    for font in fonts:
+        if font.is_file():
+            fontfile = f"fontfile={font.as_posix()}:"
+            break
+    return (
+        f"drawtext={fontfile}text='%{{pts\\:hms}}':x=8:y=8:fontsize=22:"
+        "fontcolor=white:box=1:boxcolor=black@0.6"
+    )
+
+
 def make_test_video(
     dest: Path,
     *,
     seconds: float = 1.0,
     chapters: list[tuple[float, str]] | None = None,
     extra_audio: bool = False,
+    drawtext_pts: bool = False,
+    size: str = "160x120",
 ) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
     raw = dest if not chapters else dest.with_name(dest.stem + ".__raw__.mp4")
@@ -35,13 +54,15 @@ def make_test_video(
         "-f",
         "lavfi",
         "-i",
-        f"color=c=black:s=160x120:d={seconds}",
+        f"color=c=black:s={size}:d={seconds}",
     ]
     if extra_audio:
         cmd.extend(["-f", "lavfi", "-i", f"sine=frequency=880:duration={seconds}"])
     cmd.extend(["-map", "1:v:0", "-map", "0:a:0"])
     if extra_audio:
         cmd.extend(["-map", "2:a:0"])
+    if drawtext_pts:
+        cmd.extend(["-vf", _drawtext_pts_filter()])
     cmd.extend(
         [
             "-shortest",
