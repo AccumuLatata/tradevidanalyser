@@ -146,7 +146,7 @@ def test_r_3c_ct_table() -> None:
     ok = _evidence(_et(stated=StatedFields(setup=_cite("3c long", "seg_030"))))
     _assert_pass_cites(_by_id(ok)["R-3C-CT"])
 
-    events = [_event("rule_mention", 10, "seg_031", "gegen den Trend ohne 3c")]
+    events = [_event("rule_mention", 10, "seg_031", "gegen den Trend")]
     bad = _evidence(_et(commentary=["seg_001"]))
     check = _by_id(bad, events)["R-3C-CT"]
     assert check.status == "violated"
