@@ -14,6 +14,14 @@ class Chapter(BaseModel):
     name: str = ""
 
 
+class RecordingPart(BaseModel):
+    path: str
+    sha256: str
+    duration_s: float
+    offset_s: float = 0.0
+    filename: str = ""
+
+
 class RecordingInfo(BaseModel):
     path: str
     sha256: str
@@ -22,6 +30,7 @@ class RecordingInfo(BaseModel):
     tracks: list[str] = Field(default_factory=list)
     chapters: list[Chapter] = Field(default_factory=list)
     filename: str = ""
+    parts: list[RecordingPart] = Field(default_factory=list)
 
 
 class SessionRecord(BaseModel):

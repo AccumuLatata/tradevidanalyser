@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from tradevidanalyser.naming import FilenameError, parse_obs_filename
+from tradevidanalyser.naming import FilenameError, obs_name_prefix, parse_obs_filename
 
 
 def test_obs_filename_space_and_dashes() -> None:
@@ -23,3 +23,9 @@ def test_obs_filename_from_path() -> None:
 def test_rejects_unstructured_name() -> None:
     with pytest.raises(FilenameError):
         parse_obs_filename("session.mp4")
+
+
+def test_obs_name_prefix_default_and_custom() -> None:
+    assert obs_name_prefix("2026-09-11 14-30-00.mp4") == ""
+    assert obs_name_prefix("NY 2026-09-11 14-30-00.mp4") == "NY "
+    assert obs_name_prefix("session.mp4") is None

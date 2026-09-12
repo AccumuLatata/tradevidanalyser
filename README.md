@@ -47,10 +47,11 @@ If unset, the CLI uses `./.tva_store` under the current directory.
 
 ```bash
 tva ingest "2026-09-11 14-30-00.mp4"
+tva ingest "2026-09-11 14-30-00.mp4" --desktop-track
 tva transcribe 2026-09-11_143000
 tva extract 2026-09-11_143000
 tva run --latest
-tva run "2026-09-11 14-30-00.mp4"
+tva run "2026-09-11 14-30-00.mp4" --desktop-track
 tva status
 tva doctor
 tva watch --source /path/to/obs --once
@@ -61,7 +62,10 @@ tva serve --host 127.0.0.1 --port 8764
 OBS filenames must be `%CCYY-%MM-%DD %hh-%mm-%ss`. Record to the trading PC
 disk, then `tva watch --source <obs dir>` copies into `$TVA_ROOT/recordings/`
 (or pass the path to `tva ingest`). Watch never deletes the source and
-never records onto the NAS.
+never records onto the NAS. OBS auto-split siblings (same filename prefix,
+next start within 5 s of the previous duration) stitch into one session.
+`--desktop-track` writes `audio/desktop.opus` and is never transcribed by
+default.
 
 `tva wer` prints JSON `{wer, jargon_recall, n_words}` against a
 hand-corrected reference (the golden excerpt on the NAS). It uses

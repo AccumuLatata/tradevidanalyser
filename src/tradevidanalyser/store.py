@@ -39,6 +39,16 @@ def audio_path(root: Path, session_id: str) -> Path:
     return config.session_dir(root, session_id) / "audio" / "mic.opus"
 
 
+def desktop_audio_path(root: Path, session_id: str) -> Path:
+    return config.session_dir(root, session_id) / "audio" / "desktop.opus"
+
+
+def invalidate_downstream(root: Path, session_id: str) -> None:
+    """Drop transcript/insights so a changed recording is not left looking complete."""
+    transcript_path(root, session_id).unlink(missing_ok=True)
+    insights_path(root, session_id).unlink(missing_ok=True)
+
+
 def load_session(root: Path, session_id: str) -> SessionRecord:
     return SessionRecord.model_validate(read_json(session_json_path(root, session_id)))
 

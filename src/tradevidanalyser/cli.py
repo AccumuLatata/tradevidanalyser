@@ -28,6 +28,11 @@ def main(argv: list[str] | None = None) -> int:
 
     p_ing = sub.add_parser("ingest", help="register a recording and extract mic audio")
     p_ing.add_argument("video", type=Path)
+    p_ing.add_argument(
+        "--desktop-track",
+        action="store_true",
+        help="also extract 0:a:1 to audio/desktop.opus (never transcribed by default)",
+    )
 
     p_tr = sub.add_parser("transcribe", help="ASR a registered session")
     p_tr.add_argument("session")
@@ -43,6 +48,11 @@ def main(argv: list[str] | None = None) -> int:
     p_run = sub.add_parser("run", help="ingest (optional) + transcribe + extract")
     p_run.add_argument("--latest", action="store_true", help="use the newest session")
     p_run.add_argument("video", nargs="?", type=Path)
+    p_run.add_argument(
+        "--desktop-track",
+        action="store_true",
+        help="also extract 0:a:1 to audio/desktop.opus (never transcribed by default)",
+    )
 
     p_watch = sub.add_parser("watch", help="copy finished OBS files into TVA_ROOT (record local)")
     p_watch.add_argument("--source", type=Path, required=True, help="local OBS output directory")
@@ -68,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
             _emit(report.model_dump(mode="json"), as_json=args.json or True)
             return 0 if report.ok else 1
         if args.cmd == "ingest":
-            record = ingest(args.video, root=root)
+            record = ingest(args.video, root=root, desktop_track=args.desktop_track)
             _emit(record.model_dump(mode="json"), as_json=True)
             return 0
         if args.cmd == "transcribe":
@@ -86,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.cmd == "run":
             video = args.video
-            record = run_latest(root, video=video)
+            record = run_latest(root, video=video, desktop_track=args.desktop_track)
             status = store.compute_status(root, record.id)
             _emit(status.model_dump(mode="json"), as_json=True)
             return 0

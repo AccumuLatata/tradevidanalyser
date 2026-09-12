@@ -220,12 +220,8 @@ def already_ingested(
         session_id, _ = parse_obs_filename(src)
     except FilenameError:
         return False
-    session_path = store.session_json_path(root, session_id)
-    if not session_path.is_file():
-        return False
-    try:
-        session = store.load_session(root, session_id)
-    except (OSError, ValueError):
+    sessions = _sessions_covering(root, src, session_id)
+    if not sessions:
         return False
     dest = dest_path(root, src)
     if dest.is_file() and same_copy(src, dest):
@@ -235,7 +231,36 @@ def already_ingested(
         digest = hasher(src)
     except OSError:
         return False
-    return session.recording.sha256 == digest
+    return any(_digest_in_recording(session, digest) for session in sessions)
+
+
+def _digest_in_recording(session: Any, digest: str) -> bool:
+    if session.recording.sha256 == digest:
+        return True
+    return any(part.sha256 == digest for part in session.recording.parts)
+
+
+def _sessions_covering(root: Path, src: Path, session_id: str) -> list[Any]:
+    """Sessions that already own this file: its own id, or a stitched earlier part."""
+    found: list[Any] = []
+    session_path = store.session_json_path(root, session_id)
+    if session_path.is_file():
+        try:
+            found.append(store.load_session(root, session_id))
+        except (OSError, ValueError):
+            pass
+        if found:
+            return found
+    name = src.name
+    for sid in store.list_session_ids(root):
+        try:
+            session = store.load_session(root, sid)
+        except (OSError, ValueError):
+            continue
+        rec = session.recording
+        if rec.filename == name or any(part.filename == name for part in rec.parts):
+            found.append(session)
+    return found
 
 
 def _copy_via_part(src: Path, *, root: Path, copy_fn: CopyFn) -> Path:
@@ -325,6 +350,7 @@ def process_source(
                 record = ingest(dest, root=root)
                 event["action"] = "copied"
                 event["dest"] = dest.name
+            event["session_id"] = record.id
 
             if run:
                 transcribe_session(record.id, root=root)
