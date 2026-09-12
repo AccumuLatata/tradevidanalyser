@@ -13,6 +13,9 @@ from tradevidanalyser.schema import Insights, SessionRecord, SessionStatus, Tran
 
 _FRAME_JPG = re.compile(r"^\d+\.\d{3}\.jpg$")
 CONTACT_SHEET_NAME = "contact_sheet.jpg"
+# Optional CLI stages. Never emit "missing"; do not resurrect a stale
+# "failed" when the artifact is gone (PR-11 bot pack: ?status=missing,failed).
+OPTIONAL_STAGES = frozenset({"frames", "ocr"})
 
 _STATUS_LOCK = threading.Lock()
 
@@ -37,6 +40,10 @@ def transcript_path(root: Path, session_id: str) -> Path:
 
 def insights_path(root: Path, session_id: str) -> Path:
     return config.session_dir(root, session_id) / "insights.json"
+
+
+def ocr_path(root: Path, session_id: str) -> Path:
+    return config.session_dir(root, session_id) / "ocr.parquet"
 
 
 def status_path(root: Path, session_id: str) -> Path:
@@ -100,6 +107,7 @@ def invalidate_downstream(root: Path, session_id: str) -> None:
     """Drop transcript/insights/frames so a changed recording is not left looking complete."""
     transcript_path(root, session_id).unlink(missing_ok=True)
     insights_path(root, session_id).unlink(missing_ok=True)
+    ocr_path(root, session_id).unlink(missing_ok=True)
     frames = frames_dir(root, session_id)
     if frames.is_dir():
         shutil.rmtree(frames)
@@ -173,6 +181,10 @@ def _compute_status_locked(
     # bot pack (Sunday M count, "any stage missing" pings).
     if list_frame_jpgs(root, session_id):
         stages["frames"] = "ok"
+    # OCR is optional. Same rule as frames: never emit "missing" so the
+    # locked PR-11 bot pack (GET ?status=missing, Sunday M count) stays put.
+    if ocr_path(root, session_id).is_file():
+        stages["ocr"] = "ok"
     path = status_path(root, session_id)
     previous: SessionStatus | None = None
     if path.is_file():
@@ -185,6 +197,8 @@ def _compute_status_locked(
     if previous is not None:
         for name, state in previous.stages.items():
             if state == "failed" and stages.get(name) != "ok":
+                if name in OPTIONAL_STAGES and name != (failed or ""):
+                    continue
                 stages[name] = "failed"
     if failed and stages.get(failed) != "ok":
         stages[failed] = "failed"

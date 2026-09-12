@@ -7,6 +7,13 @@ from pathlib import Path
 from tradevidanalyser import store
 from tradevidanalyser.frames import FramesResult, extract_frames
 from tradevidanalyser.ingest import ingest
+from tradevidanalyser.ocr import (
+    OcrProvider,
+    get_ocr_provider,
+    ocr_frames,
+    ocr_result_dict,
+    write_ocr_parquet,
+)
 from tradevidanalyser.providers.asr import AsrError, get_asr_provider
 from tradevidanalyser.providers.extract import citation_problems, get_extract_provider
 from tradevidanalyser.schema import Insights, SessionRecord, Transcript
@@ -75,6 +82,29 @@ def frames_session(
     )
     store.compute_status(root, session_id)
     return result
+
+
+def ocr_session(
+    session_id: str,
+    *,
+    root: Path,
+    provider_name: str | None = None,
+    layout_id: str | None = None,
+) -> dict:
+    if not store.is_safe_path_name(session_id):
+        raise ValueError(f"unsafe session id {session_id!r}")
+    record = store.load_session(root, session_id)
+    provider: OcrProvider = get_ocr_provider(provider_name)
+    rows = ocr_frames(record, root=root, provider=provider, layout_id=layout_id)
+    path = store.ocr_path(root, session_id)
+    write_ocr_parquet(path, rows)
+    store.compute_status(root, session_id)
+    payload = ocr_result_dict(session_id, path, rows, provider)
+    try:
+        payload["path"] = str(path.resolve().relative_to(root.resolve()))
+    except ValueError:
+        pass
+    return payload
 
 
 def run_latest(

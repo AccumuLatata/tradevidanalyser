@@ -104,6 +104,11 @@ wired and no frame leaves the store. **docs.x.ai `video_url` verification is
 still pending (PR-15)** — the third-party Grok 4.3 reports in §2.2 are not a
 confirmed API contract.
 
+**PR-13 (ROI OCR):** `tva ocr` crops `clock` / `position` / `pnl` /
+`instrument` and writes `ocr.parquet` (`t, roi, text, confidence, parsed`).
+`OcrProvider` default is `fake` (`TVA_OCR_PROVIDER`). PaddleOCR is
+`tradevidanalyser[ocr]` and is never required in CI. No VLM call is wired.
+
 ---
 
 ## 3. Commercial trade journals with AI (what exists, where the gap is)

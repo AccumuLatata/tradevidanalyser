@@ -45,3 +45,7 @@ TVA_ROOT/fixtures/golden/
 ```
 
 Tests marked `@pytest.mark.golden` look for this folder and skip if absent.
+
+PR-13 clock gate (when PaddleOCR is installed): OCR'd `clock` on frames
+from this excerpt must land within 1 s of the filename prior
+(`start_wallclock_vienna + t`) on ≥ 90 % of parsed samples.
