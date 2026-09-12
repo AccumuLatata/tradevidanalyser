@@ -153,3 +153,79 @@ def test_different_filename_prefixes_do_not_stitch(
     assert first.recording.parts == []
     assert second.recording.parts == []
     assert store.list_session_ids(tva_root) == sorted([first.id, second.id])
+
+
+def test_desktop_track_on_reingest_extracts_when_missing(
+    tva_root: Path, tmp_path: Path, write_video
+) -> None:
+    video = write_video(
+        tmp_path / "2026-09-11 14-30-00.mp4",
+        seconds=1.0,
+        extra_audio=True,
+    )
+    first = ingest(video, root=tva_root)
+    assert not store.desktop_audio_path(tva_root, first.id).is_file()
+    second = ingest(video, root=tva_root, desktop_track=True)
+    assert store.desktop_audio_path(tva_root, second.id).is_file()
+    assert "desktop" in second.recording.tracks
+
+
+def test_desktop_track_without_second_audio_does_not_claim_desktop(
+    tva_root: Path, tmp_path: Path, write_video
+) -> None:
+    video = write_video(tmp_path / "2026-09-11 14-30-00.mp4", seconds=1.0)
+    record = ingest(video, root=tva_root, desktop_track=True)
+    assert not store.desktop_audio_path(tva_root, record.id).is_file()
+    assert "desktop" not in record.recording.tracks
+    assert store.audio_path(tva_root, record.id).is_file()
+
+
+def test_new_split_part_invalidates_transcript(
+    tva_root: Path, tmp_path: Path, write_video
+) -> None:
+    part1 = write_video(tmp_path / "2026-09-11 14-30-00.mp4", seconds=2.0)
+    record = ingest(part1, root=tva_root)
+    transcribe_session(record.id, root=tva_root, provider_name="fake")
+    extract_session(record.id, root=tva_root, provider_name="fake")
+    assert store.transcript_path(tva_root, record.id).is_file()
+    assert store.insights_path(tva_root, record.id).is_file()
+    write_video(tmp_path / "2026-09-11 14-30-02.mp4", seconds=2.0)
+    updated = ingest(part1, root=tva_root)
+    assert len(updated.recording.parts) == 2
+    assert not store.transcript_path(tva_root, record.id).is_file()
+    assert not store.insights_path(tva_root, record.id).is_file()
+    status = store.compute_status(tva_root, record.id)
+    assert status.stages["transcribe"] == "missing"
+    assert status.stages["extract"] == "missing"
+
+
+def test_unreadable_sibling_does_not_block_ingest(
+    tva_root: Path, tmp_path: Path, write_video
+) -> None:
+    good = write_video(tmp_path / "2026-09-11 14-30-00.mp4", seconds=2.0)
+    (tmp_path / "2026-09-11 14-30-02.mp4").write_bytes(b"not a video")
+    record = ingest(good, root=tva_root)
+    assert record.id == "2026-09-11_143000"
+    assert record.recording.parts == []
+    assert store.audio_path(tva_root, record.id).is_file()
+
+
+def test_reingest_restores_missing_mic(tva_root: Path, sample_video: Path) -> None:
+    record = ingest(sample_video, root=tva_root)
+    store.audio_path(tva_root, record.id).unlink()
+    again = ingest(sample_video, root=tva_root)
+    assert again.id == record.id
+    assert store.audio_path(tva_root, again.id).is_file()
+
+
+def test_later_part_alone_then_stitch_drops_orphan(
+    tva_root: Path, tmp_path: Path, write_video
+) -> None:
+    part2 = write_video(tmp_path / "2026-09-11 14-30-02.mp4", seconds=2.0)
+    orphan = ingest(part2, root=tva_root)
+    assert orphan.id == "2026-09-11_143002"
+    write_video(tmp_path / "2026-09-11 14-30-00.mp4", seconds=2.0)
+    stitched = ingest(tmp_path / "2026-09-11 14-30-00.mp4", root=tva_root)
+    assert stitched.id == "2026-09-11_143000"
+    assert len(stitched.recording.parts) == 2
+    assert store.list_session_ids(tva_root) == [stitched.id]

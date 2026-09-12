@@ -38,21 +38,39 @@ def ingest(video: Path, *, root: Path, desktop_track: bool = False) -> SessionRe
     dests = _copy_parts(chain, root=root)
     parts = _recording_parts(dests, root=root)
     digest = dests[0][1]
+    dest_files = [path for path, _digest in dests]
     existing_path = store.session_json_path(root, session_id)
+    existing: SessionRecord | None = None
     if existing_path.is_file():
         existing = store.load_session(root, session_id)
         existing_shas = [p.sha256 for p in existing.recording.parts]
         planned_shas = [p.sha256 for p in parts]
-        if existing.recording.sha256 == digest and existing_shas == planned_shas:
-            store.compute_status(root, session_id)
-            return existing
+        same_files = existing.recording.sha256 == digest and existing_shas == planned_shas
+        if same_files:
+            return _refresh_existing_audio(
+                existing,
+                dest_files,
+                root=root,
+                desktop_track=desktop_track,
+            )
+        store.invalidate_downstream(root, session_id)
 
-    dest_files = [path for path, _digest in dests]
-    chapters = _shifted_chapters(chain)
+    try:
+        _write_session_audio(
+            dest_files, root=root, session_id=session_id, desktop_track=desktop_track
+        )
+    except media.MediaError:
+        pass
+
+    chapters = _shifted_chapters(chain, [part.duration_s for part in parts] if parts else None)
     tracks = media.audio_track_labels(first.probe)
     if not tracks and _has_audio(first.probe):
         tracks = ["mic"]
-    if desktop_track and "desktop" not in tracks:
+    if (
+        desktop_track
+        and "desktop" not in tracks
+        and store.desktop_audio_path(root, session_id).is_file()
+    ):
         tracks = [*tracks, "desktop"]
 
     record = SessionRecord(
@@ -71,12 +89,7 @@ def ingest(video: Path, *, root: Path, desktop_track: bool = False) -> SessionRe
         app_version=__version__,
     )
     store.save_session(root, record)
-
-    try:
-        _write_session_audio(dest_files, root=root, session_id=session_id, desktop_track=desktop_track)
-    except media.MediaError:
-        pass
-
+    _drop_orphan_part_sessions(root, chain, keep_id=session_id)
     store.compute_status(root, session_id)
     return record
 
@@ -99,15 +112,22 @@ def discover_split_parts(video: Path) -> list[_Part]:
             session_id, start = parse_obs_filename(path)
         except FilenameError:
             continue
-        probe = media.ffprobe(path)
+        resolved = path.resolve()
+        try:
+            probe = media.ffprobe(path)
+            digest = media.sha256_file(path)
+        except (media.MediaError, OSError, ValueError):
+            if resolved == video:
+                raise
+            continue
         candidates.append(
             _Part(
-                path=path.resolve(),
+                path=resolved,
                 session_id=session_id,
                 start=start,
                 duration_s=media.duration_s(probe),
                 probe=probe,
-                digest=media.sha256_file(path),
+                digest=digest,
             )
         )
     if not candidates:
@@ -178,14 +198,66 @@ def _recording_parts(dests: list[tuple[Path, str]], *, root: Path) -> list[Recor
     return parts
 
 
-def _shifted_chapters(chain: list[_Part]) -> list[Chapter]:
+def _shifted_chapters(
+    chain: list[_Part], durations: list[float] | None = None
+) -> list[Chapter]:
     chapters: list[Chapter] = []
     offset = 0.0
-    for item in chain:
+    for index, item in enumerate(chain):
         for chapter in media.chapters_from_probe(item.probe):
             chapters.append(Chapter(t=chapter.t + offset, name=chapter.name))
-        offset += item.duration_s
+        offset += durations[index] if durations is not None else item.duration_s
     return chapters
+
+
+def _refresh_existing_audio(
+    existing: SessionRecord,
+    dest_files: list[Path],
+    *,
+    root: Path,
+    desktop_track: bool,
+) -> SessionRecord:
+    session_id = existing.id
+    need_mic = not store.audio_path(root, session_id).is_file()
+    need_desk = desktop_track and not store.desktop_audio_path(root, session_id).is_file()
+    if need_mic or need_desk:
+        try:
+            _write_session_audio(
+                dest_files,
+                root=root,
+                session_id=session_id,
+                desktop_track=desktop_track or need_desk,
+            )
+        except media.MediaError:
+            pass
+    if desktop_track and store.desktop_audio_path(root, session_id).is_file():
+        if "desktop" not in existing.recording.tracks:
+            existing = existing.model_copy(
+                update={
+                    "recording": existing.recording.model_copy(
+                        update={"tracks": [*existing.recording.tracks, "desktop"]}
+                    )
+                }
+            )
+            store.save_session(root, existing)
+    store.compute_status(root, session_id)
+    return existing
+
+
+def _drop_orphan_part_sessions(root: Path, chain: list[_Part], *, keep_id: str) -> None:
+    """Remove singleton sessions created from a later part before the stitch existed."""
+    for item in chain[1:]:
+        if item.session_id == keep_id:
+            continue
+        path = store.session_json_path(root, item.session_id)
+        if not path.is_file():
+            continue
+        try:
+            orphan = store.load_session(root, item.session_id)
+        except (OSError, ValueError):
+            continue
+        if orphan.recording.sha256 == item.digest and not orphan.recording.parts:
+            shutil.rmtree(config.session_dir(root, item.session_id), ignore_errors=True)
 
 
 def _write_session_audio(

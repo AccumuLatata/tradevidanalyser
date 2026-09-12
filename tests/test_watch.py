@@ -234,6 +234,71 @@ def test_dest_exists_same_copy_ingests_without_recopy(
     assert src.exists()
 
 
+def test_watch_skips_later_split_part_once_stitched(
+    tva_root: Path, tmp_path: Path, write_video
+) -> None:
+    source = tmp_path / "obs"
+    source.mkdir()
+    write_video(source / "2026-09-11 14-30-00.mp4", seconds=2.0)
+    write_video(source / "2026-09-11 14-30-02.mp4", seconds=2.0)
+    first = watch(source, root=tva_root, once=True, stable_s=0)
+    sid = "2026-09-11_143000"
+    session = store.load_session(tva_root, sid)
+    assert len(session.recording.parts) == 2
+    by_file = {event["file"]: event for event in first["events"]}
+    assert by_file["2026-09-11 14-30-02.mp4"]["session_id"] == sid
+
+    copies: list[Path] = []
+    second = watch(
+        source,
+        root=tva_root,
+        once=True,
+        run=True,
+        stable_s=0,
+        copy_fn=lambda a, b: copies.append(a),
+    )
+    assert copies == []
+    assert all(event["reason"] == "ingested" for event in second["events"])
+    assert not store.transcript_path(tva_root, sid).is_file()
+
+
+def test_watch_run_does_not_retranscribe_stitched_later_part(
+    tva_root: Path, tmp_path: Path, write_video
+) -> None:
+    source = tmp_path / "obs"
+    source.mkdir()
+    write_video(source / "2026-09-11 14-30-00.mp4", seconds=2.0)
+    write_video(source / "2026-09-11 14-30-02.mp4", seconds=2.0)
+    watch(source, root=tva_root, once=True, run=True, stable_s=0)
+    sid = "2026-09-11_143000"
+    path = store.transcript_path(tva_root, sid)
+    assert path.is_file()
+    path.write_text('{"sentinel": true}\n', encoding="utf-8")
+    watch(source, root=tva_root, once=True, run=True, stable_s=0)
+    assert path.read_text(encoding="utf-8") == '{"sentinel": true}\n'
+
+
+def test_already_ingested_later_part_does_not_hash(
+    tva_root: Path, tmp_path: Path, write_video, monkeypatch
+) -> None:
+    source = tmp_path / "obs"
+    source.mkdir()
+    write_video(source / "2026-09-11 14-30-00.mp4", seconds=2.0)
+    write_video(source / "2026-09-11 14-30-02.mp4", seconds=2.0)
+    watch(source, root=tva_root, once=True, stable_s=0)
+    hashes = {"n": 0}
+    real = media.sha256_file
+
+    def spy(path: Path, *, chunk: int = 1024 * 1024) -> str:
+        hashes["n"] += 1
+        return real(path, chunk=chunk)
+
+    monkeypatch.setattr("tradevidanalyser.watch.media.sha256_file", spy)
+    report = watch(source, root=tva_root, once=True, stable_s=0)
+    assert all(event["reason"] == "ingested" for event in report["events"])
+    assert hashes["n"] == 0
+
+
 def test_already_ingested_does_not_hash_when_dest_matches(
     tva_root: Path, tmp_path: Path, write_video, monkeypatch
 ) -> None:
