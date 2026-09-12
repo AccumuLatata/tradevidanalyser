@@ -223,10 +223,11 @@ couples the first useful API to a second repo and a journal export ritual.
 ## 6. Bot integration (v1)
 
 - **Any Grok bot**, on demand or as an evening routine: `GET /health`,
-  then `GET /sessions/latest`. If `insights` is present, write whatever
-  Notion/coaching note that bot already owns. If `status` is `missing` or
-  `failed`, ping. 23:30 watchdog if the session date has a recording and
-  no insights.
+  then `GET /sessions/latest`. Evening only proceeds when `session.id`
+  starts with **today’s** Europe/Vienna date. If `insights` is present,
+  write the bot's own Notion note. If a stage is `missing` or `failed`,
+  ping. 23:30 watchdog unless *TVA runs* already has `status ok` for
+  today’s session id (a today-dated line for yesterday does not count).
 - **Hard rules:** never edit `insights.json` / `transcript.json`; never
   invent a quote; every quoted line must exist in `transcript.json`; never
   treat a spoken price as a fill; never call anything but the API.
