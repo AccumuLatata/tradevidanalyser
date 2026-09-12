@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 from pathlib import Path
 
 from tradevidanalyser import config
 from tradevidanalyser.schema import Insights, SessionRecord, SessionStatus, Transcript
+
+_FRAME_JPG = re.compile(r"^\d+\.\d{3}\.jpg$")
+CONTACT_SHEET_NAME = "contact_sheet.jpg"
 
 _STATUS_LOCK = threading.Lock()
 
@@ -52,6 +56,29 @@ def clips_dir(root: Path, session_id: str) -> Path:
 
 def clip_path(root: Path, session_id: str, name: str) -> Path:
     return clips_dir(root, session_id) / name
+
+
+def frames_dir(root: Path, session_id: str) -> Path:
+    return config.session_dir(root, session_id) / "frames"
+
+
+def frame_filename(t: float) -> str:
+    return f"{round(float(t) + 0.0, 3):.3f}.jpg"
+
+
+def frame_path(root: Path, session_id: str, t: float) -> Path:
+    return frames_dir(root, session_id) / frame_filename(t)
+
+
+def contact_sheet_path(root: Path, session_id: str) -> Path:
+    return frames_dir(root, session_id) / CONTACT_SHEET_NAME
+
+
+def list_frame_jpgs(root: Path, session_id: str) -> list[Path]:
+    folder = frames_dir(root, session_id)
+    if not folder.is_dir():
+        return []
+    return sorted(path for path in folder.iterdir() if path.is_file() and _FRAME_JPG.match(path.name))
 
 
 def invalidate_downstream(root: Path, session_id: str) -> None:
@@ -123,6 +150,7 @@ def _compute_status_locked(
     stages["ingest"] = "ok" if session_json_path(root, session_id).is_file() else "missing"
     stages["transcribe"] = "ok" if transcript_path(root, session_id).is_file() else "missing"
     stages["extract"] = "ok" if insights_path(root, session_id).is_file() else "missing"
+    stages["frames"] = "ok" if list_frame_jpgs(root, session_id) else "missing"
     path = status_path(root, session_id)
     previous: SessionStatus | None = None
     if path.is_file():

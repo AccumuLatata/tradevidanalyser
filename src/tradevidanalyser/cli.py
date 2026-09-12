@@ -11,7 +11,7 @@ from pathlib import Path
 from tradevidanalyser import __version__, config, store
 from tradevidanalyser.doctor import run_doctor
 from tradevidanalyser.ingest import ingest
-from tradevidanalyser.pipeline import extract_session, run_latest, transcribe_session
+from tradevidanalyser.pipeline import extract_session, frames_session, run_latest, transcribe_session
 from tradevidanalyser.serve import create_app, token_required_for_host
 from tradevidanalyser.watch import watch
 from tradevidanalyser.wer import score_session
@@ -65,6 +65,23 @@ def main(argv: list[str] | None = None) -> int:
     p_wer = sub.add_parser("wer", help="WER and jargon recall vs a reference transcript")
     p_wer.add_argument("session")
     p_wer.add_argument("--ref", type=Path, required=True, help="hand-corrected reference .txt")
+
+    p_fr = sub.add_parser("frames", help="extract chapter keyframes under sessions/<id>/frames/")
+    p_fr.add_argument("session")
+    p_fr.add_argument(
+        "--at",
+        dest="at",
+        type=float,
+        nargs="+",
+        default=None,
+        metavar="T",
+        help="session times in seconds; default = chapter markers ± 0/2/5 s",
+    )
+    p_fr.add_argument(
+        "--contact-sheet",
+        action="store_true",
+        help="also write frames/contact_sheet.jpg (stays under TVA_ROOT)",
+    )
 
     p_serve = sub.add_parser("serve", help="HTTP API over TVA_ROOT")
     p_serve.add_argument("--host", default="127.0.0.1")
@@ -133,6 +150,15 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.cmd == "wer":
             _emit(score_session(args.session, ref=args.ref, root=root), as_json=True)
+            return 0
+        if args.cmd == "frames":
+            result = frames_session(
+                args.session,
+                root=root,
+                times=args.at or None,
+                contact_sheet=args.contact_sheet,
+            )
+            _emit(result.as_dict(root), as_json=True)
             return 0
         if args.cmd == "serve":
             import uvicorn
