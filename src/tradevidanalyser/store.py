@@ -69,13 +69,28 @@ def save_insights(root: Path, session_id: str, insights: Insights) -> Path:
     return path
 
 
-def compute_status(root: Path, session_id: str, *, error: str | None = None) -> SessionStatus:
+def compute_status(
+    root: Path,
+    session_id: str,
+    *,
+    error: str | None = None,
+    cost_usd: float | None = None,
+) -> SessionStatus:
     stages: dict[str, str] = {}
     stages["ingest"] = "ok" if session_json_path(root, session_id).is_file() else "missing"
     stages["transcribe"] = "ok" if transcript_path(root, session_id).is_file() else "missing"
     stages["extract"] = "ok" if insights_path(root, session_id).is_file() else "missing"
-    status = SessionStatus(session_id=session_id, stages=stages, error=error)  # type: ignore[arg-type]
-    write_json(status_path(root, session_id), status.model_dump(mode="json"))
+    path = status_path(root, session_id)
+    previous: SessionStatus | None = None
+    if path.is_file():
+        try:
+            previous = SessionStatus.model_validate(read_json(path))
+        except (ValueError, OSError):
+            previous = None
+    if cost_usd is None and previous is not None:
+        cost_usd = previous.cost_usd
+    status = SessionStatus(session_id=session_id, stages=stages, error=error, cost_usd=cost_usd)  # type: ignore[arg-type]
+    write_json(path, status.model_dump(mode="json"))
     return status
 
 

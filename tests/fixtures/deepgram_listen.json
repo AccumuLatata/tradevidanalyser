@@ -1,0 +1,55 @@
+{
+  "metadata": {
+    "request_id": "tva-fixture-deepgram-listen",
+    "created": "2026-09-12T00:00:00.000Z",
+    "duration": 5.2,
+    "channels": 1,
+    "models": ["nova-3"]
+  },
+  "results": {
+    "channels": [
+      {
+        "alternatives": [
+          {
+            "transcript": "Bias long. Playbook ONH Touch.",
+            "confidence": 0.94,
+            "words": [
+              {"word": "bias", "start": 0.0, "end": 0.4, "confidence": 0.99, "punctuated_word": "Bias"},
+              {"word": "long", "start": 0.4, "end": 0.8, "confidence": 0.98, "punctuated_word": "long."},
+              {"word": "playbook", "start": 1.0, "end": 1.5, "confidence": 0.97, "punctuated_word": "Playbook"},
+              {"word": "onh", "start": 1.5, "end": 1.9, "confidence": 0.95, "punctuated_word": "ONH"},
+              {"word": "touch", "start": 1.9, "end": 2.3, "confidence": 0.96, "punctuated_word": "Touch."}
+            ]
+          }
+        ]
+      }
+    ],
+    "utterances": [
+      {
+        "start": 0.0,
+        "end": 0.8,
+        "confidence": 0.98,
+        "channel": 0,
+        "transcript": "Bias long.",
+        "words": [
+          {"word": "bias", "start": 0.0, "end": 0.4, "confidence": 0.99, "punctuated_word": "Bias"},
+          {"word": "long", "start": 0.4, "end": 0.8, "confidence": 0.98, "punctuated_word": "long."}
+        ],
+        "id": 0
+      },
+      {
+        "start": 1.0,
+        "end": 2.3,
+        "confidence": 0.96,
+        "channel": 0,
+        "transcript": "Playbook ONH Touch.",
+        "words": [
+          {"word": "playbook", "start": 1.0, "end": 1.5, "confidence": 0.97, "punctuated_word": "Playbook"},
+          {"word": "onh", "start": 1.5, "end": 1.9, "confidence": 0.95, "punctuated_word": "ONH"},
+          {"word": "touch", "start": 1.9, "end": 2.3, "confidence": 0.96, "punctuated_word": "Touch."}
+        ],
+        "id": 1
+      }
+    ]
+  }
+}

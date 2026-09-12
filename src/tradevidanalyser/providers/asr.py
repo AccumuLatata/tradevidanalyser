@@ -370,4 +370,12 @@ def get_asr_provider(name: str | None = None) -> AsrProvider:
         return FakeAsrProvider()
     if chosen in {"whisperx", "whisper"}:
         return WhisperXAsrProvider()
+    if chosen in {"deepgram", "hosted"}:
+        from tradevidanalyser.providers.asr_hosted import DeepgramAsrProvider
+
+        return DeepgramAsrProvider()
+    if chosen in {"scribe", "elevenlabs"}:
+        from tradevidanalyser.providers.asr_hosted import ScribeAsrProvider
+
+        return ScribeAsrProvider()
     raise AsrError(f"unknown ASR provider {chosen!r}")

@@ -91,6 +91,7 @@ class SessionStatus(BaseModel):
     session_id: str
     stages: dict[str, StageState] = Field(default_factory=dict)
     error: str | None = None
+    cost_usd: float | None = None
 
 
 class DoctorCheck(BaseModel):
