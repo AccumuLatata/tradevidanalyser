@@ -489,6 +489,7 @@ def evidence_citation_problems(
     problems: list[tuple[str, StatedCite | str, str]] = []
     for trade in evidence.trades:
         prefix = trade.tva_trade_id
+        commentary = set(trade.commentary)
         for seg_id in trade.commentary:
             if seg_id not in known:
                 problems.append(
@@ -501,6 +502,14 @@ def evidence_citation_problems(
             reason = _stated_cite_problem(cite, known)
             if reason:
                 problems.append((f"{prefix}.stated.{field}", cite, reason))
+            elif cite.seg not in commentary:
+                problems.append(
+                    (
+                        f"{prefix}.stated.{field}",
+                        cite,
+                        f"citation {cite.seg} is not in the trade window",
+                    )
+                )
     return problems
 
 
@@ -537,14 +546,29 @@ def stated_fields_of(stated: StatedFieldsPass) -> StatedFields:
 
 
 def stated_fields_json_schema() -> dict[str, Any]:
-    schema = StatedFieldsPass.model_json_schema()
-    schema["additionalProperties"] = False
-    defs = schema.get("$defs")
-    if isinstance(defs, dict):
-        cite = defs.get("StatedCite")
-        if isinstance(cite, dict):
-            cite["additionalProperties"] = False
-    return schema
+    """xAI strict json_schema: every object is closed and every key is required."""
+    cite = {
+        "type": ["object", "null"],
+        "additionalProperties": False,
+        "properties": {
+            "value": {"type": "string"},
+            "seg": {"type": "string"},
+        },
+        "required": ["value", "seg"],
+    }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "setup": cite,
+            "bias": cite,
+            "stop_raw": cite,
+            "target_raw": cite,
+            "playbook": cite,
+            "gaps": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["setup", "bias", "stop_raw", "target_raw", "playbook", "gaps"],
+    }
 
 
 def stated_from_chat_payload(payload: dict[str, Any]) -> StatedFieldsPass:

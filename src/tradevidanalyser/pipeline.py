@@ -341,10 +341,15 @@ def evidence_session(
     if result.status == "ok" and store.transcript_path(root, session_id).is_file():
         evidence_file = store.evidence_path(root, session_id)
         if evidence_file.is_file():
-            _assert_citations(
-                store.load_transcript(root, session_id),
-                evidence=Evidence.model_validate(store.read_json(evidence_file)),
-            )
+            try:
+                _assert_citations(
+                    store.load_transcript(root, session_id),
+                    evidence=Evidence.model_validate(store.read_json(evidence_file)),
+                )
+            except ValueError:
+                evidence_file.unlink(missing_ok=True)
+                store.compute_status(root, session_id)
+                raise
     return result
 
 

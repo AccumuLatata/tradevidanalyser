@@ -6,7 +6,7 @@ import math
 import os
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -20,6 +20,7 @@ from tradevidanalyser.providers.extract import (
     STATED_PROMPT_FILENAME,
     STATED_PROMPT_VERSION_FAKE,
     default_prompt_path,
+    apply_stated_citation_guard,
     evidence_citation_problems,
     get_extract_provider,
     prompt_version_for,
@@ -108,12 +109,18 @@ def _float_env(name: str, default: float) -> float:
 
 
 def window_pads(*, pre_s: float | None = None, post_s: float | None = None) -> tuple[float, float]:
-    pre = DEFAULT_PRE_S if pre_s is None else float(pre_s)
-    post = DEFAULT_POST_S if post_s is None else float(post_s)
     if pre_s is None:
         pre = _float_env(ENV_PRE_S, DEFAULT_PRE_S)
+    else:
+        pre = float(pre_s)
+        if not math.isfinite(pre) or pre < 0:
+            pre = DEFAULT_PRE_S
     if post_s is None:
         post = _float_env(ENV_POST_S, DEFAULT_POST_S)
+    else:
+        post = float(post_s)
+        if not math.isfinite(post) or post < 0:
+            post = DEFAULT_POST_S
     return pre, post
 
 
@@ -208,9 +215,9 @@ def _clip_for_window(root: Path, session_id: str, t0: float, t1: float, entry_t:
         if t is None:
             continue
         items.append((t, path.name))
-    inside = [name for t, name in items if t0 <= t <= t1]
+    inside = [(t, name) for t, name in items if t0 <= t <= t1]
     if inside:
-        return inside[0]
+        return _nearest_name(inside, entry_t)
     return _nearest_name(items, entry_t)
 
 
@@ -219,13 +226,25 @@ def _markers_in_window(chapters: list[Chapter], t0: float, t1: float) -> list[Ch
 
 
 def _as_utc_dt(value: object) -> datetime | None:
+    """Parse a trades.parquet timestamp. Naive values are UTC (fills convention)."""
     if value is None:
         return None
+    if hasattr(value, "to_pydatetime") and not isinstance(value, datetime):
+        try:
+            value = value.to_pydatetime()
+        except (TypeError, ValueError):
+            return None
     if isinstance(value, datetime):
-        return value
-    if isinstance(value, str):
-        return _parse_dt(value)
-    return None
+        parsed = value
+    elif isinstance(value, str):
+        parsed = _parse_dt(value)
+        if parsed is None:
+            return None
+    else:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 def read_trade_rows(path: Path) -> list[tuple[str, datetime, datetime | None]]:
@@ -265,10 +284,13 @@ def _window_bounds(
     post_s: float,
     duration_s: float,
 ) -> tuple[float, float]:
+    if exit_t < entry_t:
+        exit_t = entry_t
     t0 = entry_t - pre_s
     t1 = exit_t + post_s
     t0 = max(0.0, t0)
-    if duration_s > 0:
+    if duration_s > 0 and math.isfinite(duration_s):
+        t0 = min(t0, duration_s)
         t1 = min(duration_s, t1)
     if t1 < t0:
         t1 = t0
@@ -322,7 +344,7 @@ def build_evidence(
             prompt_version=transcript.prompt_version if transcript else "",
             segments=window_segs,
         )
-        stated_pass = provider.stated_fields(window_tx)
+        stated_pass = apply_stated_citation_guard(window_tx, provider.stated_fields(window_tx))
         gaps = list(stated_pass.gaps)
         if not _has_window_speech(window_segs) and NO_SPEECH_GAP not in gaps:
             gaps.append(NO_SPEECH_GAP)

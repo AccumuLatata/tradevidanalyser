@@ -65,12 +65,12 @@ class StatedFields(BaseModel):
 
 
 class EvidenceWindow(BaseModel):
-    t0: float
-    t1: float
+    t0: float = Field(allow_inf_nan=False)
+    t1: float = Field(allow_inf_nan=False)
 
 
 class EvidenceOcrRef(BaseModel):
-    t: float
+    t: float = Field(allow_inf_nan=False)
     roi: str
     text: str
     parsed: str | None = None
@@ -85,7 +85,7 @@ class EvidenceTrade(BaseModel):
     frames: list[str] = Field(default_factory=list)
     ocr: list[EvidenceOcrRef] = Field(default_factory=list)
     clip: str | None = None
-    alignment_confidence: float
+    alignment_confidence: float = Field(ge=0, le=1, allow_inf_nan=False)
     alignment: Literal["low"] | None = None
     gaps: list[str] = Field(default_factory=list)
 

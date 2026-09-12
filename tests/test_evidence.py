@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -10,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tradevidanalyser import config, store
+from tradevidanalyser.align import align_session
 from tradevidanalyser.cli import main
 from tradevidanalyser.evidence import (
     ALIGNMENT_LOW,
@@ -21,13 +23,19 @@ from tradevidanalyser.evidence import (
 )
 from tradevidanalyser.ingest import ingest
 from tradevidanalyser.ocr import OcrRow, write_ocr_parquet
-from tradevidanalyser.pipeline import _assert_citations, extract_session, transcribe_session
+from tradevidanalyser.pipeline import (
+    _assert_citations,
+    extract_session,
+    fills_session,
+    transcribe_session,
+)
 from tradevidanalyser.providers.extract import (
     NO_SPEECH_GAP,
     FakeExtractProvider,
     GrokExtractProvider,
     apply_stated_citation_guard,
     evidence_citation_problems,
+    stated_fields_json_schema,
     stated_from_chat_payload,
 )
 from tradevidanalyser.schema import (
@@ -291,6 +299,158 @@ def test_invalidate_downstream_drops_evidence(tva_root: Path) -> None:
     store.invalidate_downstream(tva_root, record.id)
     assert not store.evidence_path(tva_root, record.id).is_file()
     assert "evidence" not in store.compute_status(tva_root, record.id).stages
+
+
+def test_clip_prefers_nearest_to_entry_not_first_in_window(tva_root: Path) -> None:
+    record = _session(tva_root)
+    _write_trades(tva_root, record.id, [("T01", 200.0, 260.0)])
+    _write_transcript(tva_root, record.id, [_seg(1, 190.0, 210.0, "Bias ist long.")])
+    clips = store.clips_dir(tva_root, record.id)
+    clips.mkdir(parents=True)
+    (clips / "20.000.mp4").write_bytes(b"early")
+    (clips / "200.000.mp4").write_bytes(b"near")
+    result = evidence_session(record.id, root=tva_root)
+    assert result.status == "ok"
+    evidence = Evidence.model_validate(store.read_json(store.evidence_path(tva_root, record.id)))
+    assert evidence.trades[0].clip == "200.000.mp4"
+
+
+def test_naive_utc_trade_timestamps_map_to_video(tva_root: Path) -> None:
+    record = _session(tva_root)
+    entry_utc = datetime(2026, 9, 11, 12, 33, 20)  # 14:33:20 Vienna, naive UTC
+    exit_utc = datetime(2026, 9, 11, 12, 34, 20)
+    table = pa.table(
+        {
+            "tva_trade_id": pa.array(["T01"], type=pa.string()),
+            "entry_timestamp": pa.array([entry_utc], type=pa.timestamp("us")),
+            "exit_timestamp": pa.array([exit_utc], type=pa.timestamp("us")),
+        }
+    )
+    path = store.trades_path(tva_root, record.id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(table, path)
+    result = evidence_session(record.id, root=tva_root)
+    assert result.status == "ok"
+    evidence = Evidence.model_validate(store.read_json(store.evidence_path(tva_root, record.id)))
+    trade = evidence.trades[0]
+    assert trade.window.t0 == pytest.approx(200.0 - DEFAULT_PRE_S)
+    assert trade.window.t1 == pytest.approx(260.0 + DEFAULT_POST_S)
+
+
+def test_window_clamps_past_duration(tva_root: Path) -> None:
+    record = _session(tva_root, duration_s=3600.0)
+    _write_trades(tva_root, record.id, [("T01", 4000.0, 4060.0)])
+    result = evidence_session(record.id, root=tva_root)
+    assert result.status == "ok"
+    evidence = Evidence.model_validate(store.read_json(store.evidence_path(tva_root, record.id)))
+    trade = evidence.trades[0]
+    assert trade.window.t0 == pytest.approx(3600.0)
+    assert trade.window.t1 == pytest.approx(3600.0)
+
+
+def test_exit_before_entry_does_not_invert_window(tva_root: Path) -> None:
+    record = _session(tva_root)
+    _write_trades(tva_root, record.id, [("T01", 500.0, 10.0)])
+    result = evidence_session(record.id, root=tva_root)
+    assert result.status == "ok"
+    evidence = Evidence.model_validate(store.read_json(store.evidence_path(tva_root, record.id)))
+    trade = evidence.trades[0]
+    assert trade.window.t0 == pytest.approx(500.0 - DEFAULT_PRE_S)
+    assert trade.window.t1 == pytest.approx(500.0 + DEFAULT_POST_S)
+
+
+def test_fills_skip_drops_stale_evidence(tva_root: Path) -> None:
+    record = _session(tva_root)
+    _write_trades(tva_root, record.id, [("T01", 200.0, 220.0)])
+    _write_transcript(tva_root, record.id, [_seg(1, 190.0, 210.0, "Bias ist long.")])
+    evidence_session(record.id, root=tva_root)
+    assert store.evidence_path(tva_root, record.id).is_file()
+    csv = Path(__file__).parent / "fixtures" / "tradesviz_synthetic.csv"
+    result = fills_session(record.id, root=tva_root, executions=csv, venue="amp")
+    assert result.status == "skipped"
+    assert not store.evidence_path(tva_root, record.id).is_file()
+    assert "evidence" not in store.compute_status(tva_root, record.id).stages
+
+
+def test_fills_rewrite_drops_stale_evidence(tva_root: Path) -> None:
+    record = _session(
+        tva_root,
+        session_id="2026-05-14_160000",
+        start=datetime(2026, 5, 14, 16, 0, tzinfo=VIENNA),
+    )
+    store.write_json(
+        store.evidence_path(tva_root, record.id),
+        {
+            "schema_version": "1",
+            "provider": "fake",
+            "model": "keyword-v1",
+            "prompt_version": "stated-keyword-v1",
+            "session_id": record.id,
+            "trades": [],
+        },
+    )
+    csv = Path(__file__).parent / "fixtures" / "tradesviz_synthetic.csv"
+    result = fills_session(record.id, root=tva_root, executions=csv, venue="amp")
+    assert result.status == "ok"
+    assert not store.evidence_path(tva_root, record.id).is_file()
+    assert "evidence" not in store.compute_status(tva_root, record.id).stages
+
+
+def test_align_rewrite_drops_stale_evidence(tva_root: Path) -> None:
+    record = _session(tva_root)
+    _write_trades(tva_root, record.id, [("T01", 200.0, 220.0)])
+    _write_transcript(tva_root, record.id, [_seg(1, 190.0, 210.0, "Bias ist long.")])
+    evidence_session(record.id, root=tva_root)
+    assert store.evidence_path(tva_root, record.id).is_file()
+    align_session(record.id, root=tva_root)
+    assert not store.evidence_path(tva_root, record.id).is_file()
+    assert "evidence" not in store.compute_status(tva_root, record.id).stages
+
+
+def test_stated_json_schema_is_xai_strict() -> None:
+    schema = stated_fields_json_schema()
+    blob = json.dumps(schema)
+    assert schema["additionalProperties"] is False
+    assert set(schema["required"]) == set(schema["properties"])
+    assert "$ref" not in blob
+    assert "default" not in blob
+    assert "$defs" not in blob
+    for field in ("setup", "bias", "stop_raw", "target_raw", "playbook"):
+        cite = schema["properties"][field]
+        assert cite["additionalProperties"] is False
+        assert set(cite["required"]) == set(cite["properties"])
+
+
+def test_cross_window_stated_fails_assert_citations() -> None:
+    transcript = Transcript(
+        provider="fake",
+        model="fake-v1",
+        segments=[
+            _seg(1, 0.0, 10.0, "Bias ist long."),
+            _seg(2, 800.0, 810.0, "Stop unter dem Level."),
+        ],
+    )
+    evidence = Evidence(
+        provider="fake",
+        model="fake-v1",
+        prompt_version="stated-keyword-v1",
+        session_id="2026-09-11_143000",
+        trades=[
+            EvidenceTrade(
+                tva_trade_id="T01",
+                window=EvidenceWindow(t0=0.0, t1=10.0),
+                commentary=["seg_001"],
+                stated=StatedFields(
+                    stop_raw=StatedCite(value="Stop unter dem Level.", seg="seg_002")
+                ),
+                alignment_confidence=0.96,
+            )
+        ],
+    )
+    problems = evidence_citation_problems(transcript, evidence)
+    assert problems
+    with pytest.raises(ValueError, match="not in the trade window"):
+        _assert_citations(transcript, evidence=evidence)
 
 
 def test_fabricated_stated_fails_assert_citations() -> None:
