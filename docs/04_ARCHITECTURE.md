@@ -223,10 +223,11 @@ couples the first useful API to a second repo and a journal export ritual.
 ## 6. Bot integration (v1)
 
 - **Any Grok bot**, on demand or as an evening routine: `GET /health`,
-  then `GET /sessions/latest`. If `insights` is present, write whatever
-  Notion/coaching note that bot already owns. If `status` is `missing` or
-  `failed`, ping. 23:30 watchdog if the session date has a recording and
-  no insights.
+  then `GET /sessions/latest`. Evening only proceeds when `session.id`
+  starts with **today’s** Europe/Vienna date. If `insights` is present,
+  write the bot's own Notion note. If a stage is `missing` or `failed`,
+  ping. 23:30 watchdog unless *TVA runs* already has `status ok` for
+  today’s session id (a today-dated line for yesterday does not count).
 - **Hard rules:** never edit `insights.json` / `transcript.json`; never
   invent a quote; every quoted line must exist in `transcript.json`; never
   treat a spoken price as a fill; never call anything but the API.
@@ -236,6 +237,10 @@ couples the first useful API to a second repo and a journal export ritual.
   `TVA_API_TOKEN`; the process refuses to start without it. Clients send
   `Authorization: Bearer …`. Clips stay off unless `TVA_SERVE_MEDIA=1`.
 - Sunday audit (Question Bot): `GET /sessions?days=7` + `/health`.
+
+Copy-ready pack: [`TVA_GROK_ROUTINE_PACK.md`](TVA_GROK_ROUTINE_PACK.md)
+and [`examples/bot/`](../examples/bot/). Paste `SYSTEM.md` as the bot
+system prompt; schedule evening + Sunday + 23:30 Vienna watchdog.
 
 A dedicated "TradeVid bot" is optional. v1 is useful to the bots that
 already exist.

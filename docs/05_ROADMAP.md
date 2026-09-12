@@ -11,7 +11,7 @@ product decision, not a hidden dependency.
 |---|---|---|---|
 | **TVA0** | Plan lock, decisions, desk prep, golden excerpt | — | PR-00/01/02 landed; see [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) |
 | **TVA1** | Ingest + German transcript | TVA0 | PR-03…PR-07 landed; fake ASR default |
-| **TVA2** | Insights extract + headless API (`tva serve`) | TVA1 | PR-08/09 extract landed; PR-10 API hardening; fake providers default |
+| **TVA2** | Insights extract + headless API (`tva serve`) | TVA1 | PR-08…PR-10 landed; PR-11 Grok routine pack; fake providers default |
 | **TVA3** | Optional frames / clock OCR / chapter clips / opt-in VLM | TVA2 | |
 | **TVA4** | TradesViz executions join (broker-agnostic fills) | TVA2 | later |
 | **TVA5** | Alignment + per-trade windows + rule scorecard | TVA4 | later |
@@ -67,7 +67,8 @@ recall ≥ 90 %; `session.json` re-runs byte-identical.
   `/sessions/{id}`, `/transcript`, `/insights`. Read-only except
   `POST /sessions/{id}/run` bound to localhost / Tailscale.
 - Example JSON committed for contract tests (no media).
-- Draft `docs/TVA_GROK_ROUTINE_PACK.md`: URL, schema, hard rules.
+- `docs/TVA_GROK_ROUTINE_PACK.md` + `examples/bot/`: API-only surfaces,
+  evening routine, 23:30 watchdog, Sunday audit, hard rules.
 
 **Exit:** a `curl` from another machine on the LAN (and, once tunneled,
 from a throwaway request) returns last session's insights; every quote
