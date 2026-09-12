@@ -63,6 +63,8 @@ tva clips 2026-09-11_143000 --redact
 tva vlm 2026-09-11_143000
 tva fills 2026-09-11_143000 --executions executions.csv --venue topstepx
 tva fills 2026-09-11_143000 --executions executions.csv --venue amp --reconcile-dir /path/to/journal
+tva align 2026-09-11_143000
+tva align 2026-09-11_143000 --manual-offset 1.8
 tva serve --host 127.0.0.1 --port 8764
 ```
 
@@ -111,6 +113,13 @@ when `pip install 'tradevidanalyser[journal]'`; otherwise the committed
 `--include-manual` pairs non-future rows. `commission` / `fees` are
 discarded (TJ1). `--reconcile-dir` reads ThesisTester `reconcile.json`
 and adds `recon_status` on `trades.parquet` (no AMP PDF parsing).
+
+`tva align <id>` writes `session.alignment` (`offset_s`, `drift_s_per_h`,
+`confidence`, `method`, `samples`). The prior is the OBS filename /
+`start_wallclock_vienna`; the measurement is `ocr.parquet` clock rows.
+Theil–Sen fits offset and drift; no usable clocks fall back to
+`method=filename` at `confidence=0.6`. `--manual-offset s` records
+`method=manual`. Not a bot `POST /run` stage.
 
 ASR and extraction default to **fake** providers (`TVA_ASR_PROVIDER=fake`,
 `TVA_EXTRACT_PROVIDER=fake`) so CI and first-run never call a paid API.

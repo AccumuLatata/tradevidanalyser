@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from tradevidanalyser import store
+from tradevidanalyser.align import Alignment, align_session as run_align
 from tradevidanalyser.clips import ClipResult, extract_clips
 from tradevidanalyser.fills import FillsResult, ingest_fills
 from tradevidanalyser.frames import FramesResult, extract_frames
@@ -303,6 +304,17 @@ def fills_session(
         prefer_import=prefer_import,
         reconcile_dir=reconcile_dir,
     )
+
+
+def align_session(
+    session_id: str,
+    *,
+    root: Path,
+    manual_offset: float | None = None,
+) -> Alignment:
+    if not store.is_safe_path_name(session_id):
+        raise ValueError(f"unsafe session id {session_id!r}")
+    return run_align(session_id, root=root, manual_offset=manual_offset)
 
 
 def run_latest(
