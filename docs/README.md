@@ -11,7 +11,7 @@ Read in order the first time.
 Build contract:
 
 - [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) — every PR (PR-00…PR-27), contracts, acceptance, regression envelope.
-- [`TVA_GROK_ROUTINE_PACK.md`](TVA_GROK_ROUTINE_PACK.md) — what the bot may call; hard rules (stub until PR-11).
+- [`TVA_GROK_ROUTINE_PACK.md`](TVA_GROK_ROUTINE_PACK.md) — full Grok bot pack (surfaces, evening, watchdog, Sunday, hard rules). Copy-ready prompts in [`examples/bot/`](../examples/bot/).
 - [`GOLDEN_EXCERPT.md`](GOLDEN_EXCERPT.md) — how to cut, redact and hand-correct the WER reference.
 - [`GLOSSARY.md`](GLOSSARY.md) — German speech + English level tokens for ASR.
 

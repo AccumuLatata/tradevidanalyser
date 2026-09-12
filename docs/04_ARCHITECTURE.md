@@ -237,6 +237,10 @@ couples the first useful API to a second repo and a journal export ritual.
   `Authorization: Bearer …`. Clips stay off unless `TVA_SERVE_MEDIA=1`.
 - Sunday audit (Question Bot): `GET /sessions?days=7` + `/health`.
 
+Copy-ready pack: [`TVA_GROK_ROUTINE_PACK.md`](TVA_GROK_ROUTINE_PACK.md)
+and [`examples/bot/`](../examples/bot/). Paste `SYSTEM.md` as the bot
+system prompt; schedule evening + Sunday + 23:30 Vienna watchdog.
+
 A dedicated "TradeVid bot" is optional. v1 is useful to the bots that
 already exist.
 

@@ -129,6 +129,7 @@ pytest -q
 | [`docs/04_ARCHITECTURE.md`](docs/04_ARCHITECTURE.md) | NAS, API, Session Record |
 | [`docs/05_ROADMAP.md`](docs/05_ROADMAP.md) | TVA0–TVA3 and locked D1–D9 |
 | [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) | Build contract: PR-00…PR-27, contracts, acceptance |
-| [`docs/TVA_GROK_ROUTINE_PACK.md`](docs/TVA_GROK_ROUTINE_PACK.md) | What the bot may call, hard rules |
+| [`docs/TVA_GROK_ROUTINE_PACK.md`](docs/TVA_GROK_ROUTINE_PACK.md) | Grok bot pack: API only, evening, watchdog, Sunday |
+| [`examples/bot/`](examples/bot/) | Copy-ready `SYSTEM.md` + evening + Sunday routines |
 | [`docs/GOLDEN_EXCERPT.md`](docs/GOLDEN_EXCERPT.md) | Cut, redact, hand-correct the WER reference |
 | [`docs/GLOSSARY.md`](docs/GLOSSARY.md) | German speech + English level tokens |
