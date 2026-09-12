@@ -74,11 +74,12 @@ feeds Grok from the videos.
 These are real, and they are how the tape becomes expensive in a good way.
 They wait until v1 is boring and reliable.
 
-7. **Fills from TradesViz** (TVA4, PR-16 landed) — `tva fills` loads the
+7. **Fills from TradesViz** (TVA4, PR-16/17 landed) — `tva fills` loads the
    executions CSV (ThesisTester import or `fills_mirror`), windows to the
    session, writes `fills.parquet` / `trades.parquet` with `venue` and
-   `tva_trade_id`. AMP Daily Statement PDF recon is still later (PR-17).
-   Not a TopstepX API client.
+   `tva_trade_id`. `--reconcile-dir` attaches `recon_status` from
+   ThesisTester `reconcile.json` (no PDF parse here). Not a TopstepX API
+   client.
 8. **Clock alignment + per-trade evidence windows** — video time ↔ fill
    time, once fills exist.
 9. **Rule scorecard** — the catalog in §6, including the $100 vs $200 daily

@@ -126,6 +126,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="pair manual (non-future) rows; default is imported futures only",
     )
+    p_fills.add_argument(
+        "--reconcile-dir",
+        type=Path,
+        default=None,
+        help="ThesisTester journal output (reads reconcile.json; no PDF parse)",
+    )
 
     p_serve = sub.add_parser("serve", help="HTTP API over TVA_ROOT")
     p_serve.add_argument("--host", default="127.0.0.1")
@@ -225,6 +231,7 @@ def main(argv: list[str] | None = None) -> int:
                 executions=args.executions,
                 venue=args.venue,
                 include_manual=args.include_manual,
+                reconcile_dir=args.reconcile_dir,
             )
             _emit(result.as_dict(), as_json=True)
             return 0

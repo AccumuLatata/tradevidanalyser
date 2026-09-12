@@ -62,6 +62,7 @@ tva ocr 2026-09-11_143000
 tva clips 2026-09-11_143000 --redact
 tva vlm 2026-09-11_143000
 tva fills 2026-09-11_143000 --executions executions.csv --venue topstepx
+tva fills 2026-09-11_143000 --executions executions.csv --venue amp --reconcile-dir /path/to/journal
 tva serve --host 127.0.0.1 --port 8764
 ```
 
@@ -108,7 +109,8 @@ the session window (start − 30 min … end + 30 min). ThesisTester is used
 when `pip install 'tradevidanalyser[journal]'`; otherwise the committed
 `fills_mirror` path runs (CI). Zero fills omit the stage (not an error).
 `--include-manual` pairs non-future rows. `commission` / `fees` are
-discarded (TJ1).
+discarded (TJ1). `--reconcile-dir` reads ThesisTester `reconcile.json`
+and adds `recon_status` on `trades.parquet` (no AMP PDF parsing).
 
 ASR and extraction default to **fake** providers (`TVA_ASR_PROVIDER=fake`,
 `TVA_EXTRACT_PROVIDER=fake`) so CI and first-run never call a paid API.

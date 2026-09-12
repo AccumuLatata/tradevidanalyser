@@ -289,6 +289,7 @@ def fills_session(
     venue: str | None = None,
     include_manual: bool = False,
     prefer_import: bool | None = None,
+    reconcile_dir: Path | None = None,
 ) -> FillsResult:
     if not store.is_safe_path_name(session_id):
         raise ValueError(f"unsafe session id {session_id!r}")
@@ -300,6 +301,7 @@ def fills_session(
         venue=venue,
         include_manual=include_manual,
         prefer_import=prefer_import,
+        reconcile_dir=reconcile_dir,
     )
 
 

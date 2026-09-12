@@ -35,6 +35,17 @@ FORBIDDEN_COST_COLUMNS = ("commission", "fees")
 WINDOW_PAD = timedelta(minutes=30)
 TVA_FILL_COLUMNS = FILL_RECORD_COLUMNS + ("venue",)
 TVA_TRADE_COLUMNS = JOURNAL_TRADE_COLUMNS + ("venue", "tva_trade_id")
+RECON_STATUSES = frozenset(
+    {
+        "reconciled",
+        "journal_missing",
+        "amp_missing",
+        "multiset_mismatch",
+        "pnl_mismatch",
+    }
+)
+RECONCILE_FILENAME = "reconcile.json"
+JOURNAL_STORE_SCHEMA = "journal/v1"
 _VENUE_TOKEN_RE = re.compile(r"[^a-z0-9]+")
 
 
@@ -54,6 +65,8 @@ class FillsResult:
     include_manual: bool
     status: str = "ok"
     reason: str | None = None
+    recon_days: int | None = None
+    recon_attached: int | None = None
 
     def as_dict(self) -> dict[str, Any]:
         payload = {
@@ -69,6 +82,10 @@ class FillsResult:
         }
         if self.reason:
             payload["reason"] = self.reason
+        if self.recon_days is not None:
+            payload["recon_days"] = self.recon_days
+        if self.recon_attached is not None:
+            payload["recon_attached"] = self.recon_attached
         return payload
 
 
@@ -497,6 +514,131 @@ def contract_trades_table(trades: list[JournalTrade]) -> pa.Table:
     return trades_table(trades, venue="_").drop(["venue", "tva_trade_id"])
 
 
+def reconcile_json_path(reconcile_dir: Path) -> Path:
+    """``--reconcile-dir`` may be the journal output folder or the JSON file."""
+    path = Path(reconcile_dir)
+    if path.is_file():
+        return path
+    return path / RECONCILE_FILENAME
+
+
+def _recon_date(value: Any) -> date | None:
+    """Normalize a DayReconcile ``session_date`` to ``datetime.date``.
+
+    ``datetime`` is a ``date`` subclass but hashes differently, so dict lookup
+    on a mixed ``(date, instrument)`` map would miss an equal-looking key.
+    """
+    if value is None or _is_nan(value):
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return date(value.year, value.month, value.day)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            parsed = date.fromisoformat(text)
+        except ValueError:
+            return None
+        return parsed.date() if isinstance(parsed, datetime) else parsed
+    getter = getattr(value, "date", None)
+    if callable(getter):
+        try:
+            parsed = getter()
+        except (TypeError, ValueError):
+            return None
+        if isinstance(parsed, date):
+            return date(parsed.year, parsed.month, parsed.day)
+    return None
+
+
+def _recon_instrument(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
+
+
+def load_reconcile_status_map(reconcile_dir: Path) -> dict[tuple[date, str], str]:
+    """Read ThesisTester ``reconcile.json`` → ``(session_date, instrument) → status``.
+
+    Join key is ThesisTester ``DayReconcile``: exact ``(session_date, instrument)``.
+    No PDF is opened. Unknown statuses and a non-object root fail closed.
+    """
+    path = reconcile_json_path(reconcile_dir)
+    if not path.is_file():
+        raise FillsError(f"reconcile.json not found under {reconcile_dir}")
+    try:
+        payload = store.read_json(path)
+    except (OSError, ValueError) as exc:
+        raise FillsError(f"reconcile.json is unreadable: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise FillsError("reconcile.json must be an object")
+    schema = payload.get("schema_version")
+    if schema is not None and schema != JOURNAL_STORE_SCHEMA:
+        raise FillsError(
+            f"reconcile.json schema_version must be {JOURNAL_STORE_SCHEMA} (got {schema!r})"
+        )
+    days = payload.get("days")
+    if not isinstance(days, list):
+        raise FillsError("reconcile.json has no days array")
+    mapping: dict[tuple[date, str], str] = {}
+    for index, raw in enumerate(days):
+        if not isinstance(raw, dict):
+            raise FillsError(f"reconcile.json days[{index}] is not an object")
+        session = raw.get("session_date")
+        instrument = _recon_instrument(raw.get("instrument"))
+        status = raw.get("status")
+        if not isinstance(session, str) or not session.strip():
+            raise FillsError(f"reconcile.json days[{index}] missing session_date")
+        if instrument is None:
+            raise FillsError(f"reconcile.json days[{index}] missing instrument")
+        if status not in RECON_STATUSES:
+            raise FillsError(
+                f"reconcile.json days[{index}] status must be one of "
+                + ", ".join(sorted(RECON_STATUSES))
+                + f" (got {status!r})"
+            )
+        day = _recon_date(session)
+        if day is None:
+            raise FillsError(f"reconcile.json days[{index}] bad session_date {session!r}")
+        key = (day, instrument)
+        if key in mapping and mapping[key] != status:
+            raise FillsError(
+                f"reconcile.json has conflicting status for {instrument} on {session}"
+            )
+        mapping[key] = status
+    return mapping
+
+
+def lookup_recon_status(
+    session_date: date,
+    instrument: str,
+    mapping: dict[tuple[date, str], str],
+) -> str | None:
+    """Exact ThesisTester ``DayReconcile`` key. Unmatched stays null."""
+    day = _recon_date(session_date)
+    inst = _recon_instrument(instrument)
+    if day is None or inst is None:
+        return None
+    return mapping.get((day, inst))
+
+
+def attach_recon_status(table: pa.Table, mapping: dict[tuple[date, str], str]) -> pa.Table:
+    """Additive ``recon_status`` column, joined by ``session_date`` + instrument."""
+    dates = table.column("session_date").to_pylist()
+    instruments = table.column("instrument").to_pylist()
+    statuses: list[str | None] = [
+        lookup_recon_status(raw_day, raw_inst, mapping)
+        for raw_day, raw_inst in zip(dates, instruments, strict=True)
+    ]
+    if "recon_status" in table.column_names:
+        table = table.drop(["recon_status"])
+    return table.append_column("recon_status", pa.array(statuses, type=pa.string()))
+
+
 def assert_no_cost_columns(table: pa.Table) -> None:
     present = set(table.column_names)
     leaked = [name for name in FORBIDDEN_COST_COLUMNS if name in present]
@@ -512,6 +654,7 @@ def ingest_fills(
     venue: str | None = None,
     include_manual: bool = False,
     prefer_import: bool | None = None,
+    reconcile_dir: Path | None = None,
 ) -> FillsResult:
     csv_path = Path(executions)
     chosen_venue = venue_from_hint(csv_path, venue)
@@ -523,6 +666,11 @@ def ingest_fills(
         raise
     start, end = session_utc_window(record)
     windowed = filter_fills_to_window(fills, start, end)
+    recon_map = None
+    if reconcile_dir is not None:
+        # Fail closed on a bad --reconcile-dir even when the window is empty
+        # (skip must not hide a missing / invalid reconcile.json).
+        recon_map = load_reconcile_status_map(Path(reconcile_dir))
     fills_file = store.fills_path(root, record.id)
     trades_file = store.trades_path(root, record.id)
     if not windowed:
@@ -549,6 +697,14 @@ def ingest_fills(
         raise
     fill_table = fills_table(windowed, venue=chosen_venue)
     trade_table = trades_table(trades, venue=chosen_venue)
+    recon_days = None
+    recon_attached = None
+    if recon_map is not None:
+        trade_table = attach_recon_status(trade_table, recon_map)
+        recon_days = len(recon_map)
+        recon_attached = sum(
+            1 for value in trade_table.column("recon_status").to_pylist() if value is not None
+        )
     assert_no_cost_columns(fill_table)
     assert_no_cost_columns(trade_table)
     write_table(fills_file, fill_table)
@@ -563,4 +719,6 @@ def ingest_fills(
         path="fills.parquet",
         trades_path="trades.parquet",
         include_manual=include_manual,
+        recon_days=recon_days,
+        recon_attached=recon_attached,
     )
