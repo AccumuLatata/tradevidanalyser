@@ -14,6 +14,7 @@ from tradevidanalyser.ingest import ingest
 from tradevidanalyser.pipeline import extract_session, transcribe_session
 from tradevidanalyser.providers.extract import (
     DEFAULT_GROK_MODEL,
+    EVENTS_PROMPT_FILENAME,
     HTTP_TIMEOUT,
     XAI_CHAT_URL,
     ExtractError,
@@ -49,6 +50,24 @@ def _payload(path: Path) -> dict:
 
 def _chat_response(insights: dict) -> dict:
     return {"choices": [{"message": {"content": json.dumps(insights, ensure_ascii=False)}}]}
+
+
+def _empty_events_body() -> dict:
+    return {"session_events": [], "summary_de": "", "summary_en": ""}
+
+
+def _is_events_request(request: httpx.Request) -> bool:
+    body = json.loads(request.content)
+    return body.get("response_format", {}).get("json_schema", {}).get("name") == "session_events"
+
+
+def _with_empty_events(handler):
+    def wrapped(request: httpx.Request) -> httpx.Response:
+        if _is_events_request(request):
+            return httpx.Response(200, json=_chat_response(_empty_events_body()))
+        return handler(request)
+
+    return wrapped
 
 
 def _transcript(texts: tuple[str, ...] = PLANTED_TEXTS) -> Transcript:
@@ -144,9 +163,10 @@ def test_grok_valid_mock_keeps_citations(monkeypatch: pytest.MonkeyPatch) -> Non
         captured.append(request)
         return httpx.Response(200, json=_chat_response(_payload(VALID)))
 
-    insights = _provider(handler, monkeypatch).extract(_transcript())
-    assert len(captured) == 1
-    request = captured[0]
+    insights = _provider(_with_empty_events(handler), monkeypatch).extract(_transcript())
+    window_reqs = [item for item in captured if not _is_events_request(item)]
+    assert len(window_reqs) == 1
+    request = window_reqs[0]
     assert str(request.url) == XAI_CHAT_URL
     assert request.headers["authorization"] == "Bearer xai-test-key"
     body = json.loads(request.content)
@@ -162,8 +182,10 @@ def test_grok_valid_mock_keeps_citations(monkeypatch: pytest.MonkeyPatch) -> Non
     assert insights.bias_statements[0].seg == "seg_001"
     assert insights.playbooks_mentioned[0].seg == "seg_002"
     assert insights.checkins[0].text == "Check-in zur vollen Stunde"
-    assert insights.prompt_version == prompt_version_for(
-        Path(__file__).resolve().parents[1] / "prompts" / "insights_v1.de.md"
+    prompts = Path(__file__).resolve().parents[1] / "prompts"
+    assert insights.prompt_version == (
+        f"{prompt_version_for(prompts / 'insights_v1.de.md')}"
+        f"+{prompt_version_for(prompts / EVENTS_PROMPT_FILENAME)}"
     )
     assert not any(item.startswith("dropped ") for item in insights.gaps)
 
@@ -172,7 +194,7 @@ def test_grok_fabricated_quote_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=_chat_response(_payload(FABRICATED)))
 
-    insights = _provider(handler, monkeypatch).extract(_transcript())
+    insights = _provider(_with_empty_events(handler), monkeypatch).extract(_transcript())
     assert insights.bias_statements == []
     assert any("quote not found" in gap for gap in insights.gaps)
     assert any("seg_001" in gap for gap in insights.gaps)
@@ -182,7 +204,7 @@ def test_grok_unknown_seg_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=_chat_response(_payload(UNKNOWN)))
 
-    insights = _provider(handler, monkeypatch).extract(_transcript())
+    insights = _provider(_with_empty_events(handler), monkeypatch).extract(_transcript())
     assert insights.playbooks_mentioned == []
     assert any("seg_999" in gap for gap in insights.gaps)
     assert any("not in the transcript" in gap for gap in insights.gaps)
@@ -203,8 +225,10 @@ def test_grok_three_windows_valid_fabricated_unknown(monkeypatch: pytest.MonkeyP
         captured.append(request)
         return httpx.Response(200, json=replies.pop(0))
 
-    insights = _provider(handler, monkeypatch, window_size=2, overlap=1).extract(_transcript())
-    assert len(captured) == 3
+    insights = _provider(_with_empty_events(handler), monkeypatch, window_size=2, overlap=1).extract(
+        _transcript()
+    )
+    assert len([item for item in captured if not _is_events_request(item)]) == 3
     assert insights.bias_statements[0].text == "Bias ist long"
     assert insights.playbooks_mentioned[0].seg == "seg_002"
     assert insights.observations == []
@@ -222,7 +246,9 @@ def test_grok_out_of_window_seg_dropped(monkeypatch: pytest.MonkeyPatch) -> None
     # Two segs, one per window. VALID cites seg_002, which is on the tape but
     # not in the first window — that citation must not be laundered.
     two = _transcript(PLANTED_TEXTS[:2])
-    insights = _provider(handler, monkeypatch, window_size=1, overlap=0).extract(two)
+    insights = _provider(_with_empty_events(handler), monkeypatch, window_size=1, overlap=0).extract(
+        two
+    )
     assert insights.bias_statements[0].seg == "seg_001"
     assert insights.playbooks_mentioned == []
     assert any("seg_002" in gap for gap in insights.gaps)
