@@ -11,7 +11,7 @@ product decision, not a hidden dependency.
 |---|---|---|---|
 | **TVA0** | Plan lock, decisions, desk prep, golden excerpt | — | PR-00/01/02 landed; see [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) |
 | **TVA1** | Ingest + German transcript | TVA0 | PR-03…PR-07 landed; fake ASR default |
-| **TVA2** | Insights extract + headless API (`tva serve`) | TVA1 | PR-08 Grok extractor landed; PR-09 session events + summaries; fake extract default |
+| **TVA2** | Insights extract + headless API (`tva serve`) | TVA1 | PR-08/09 extract landed; PR-10 API hardening; fake providers default |
 | **TVA3** | Optional frames / clock OCR / chapter clips / opt-in VLM | TVA2 | |
 | **TVA4** | TradesViz executions join (broker-agnostic fills) | TVA2 | later |
 | **TVA5** | Alignment + per-trade windows + rule scorecard | TVA4 | later |

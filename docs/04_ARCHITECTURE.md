@@ -231,7 +231,10 @@ couples the first useful API to a second repo and a journal export ritual.
   invent a quote; every quoted line must exist in `transcript.json`; never
   treat a spoken price as a fill; never call anything but the API.
 - **Reachability:** Tailscale URL or Cloudflare tunnel to the Mac, stored
-  like any other bot secret. Not a LAN IP.
+  like any other bot secret. Not a LAN IP. `tva serve` may bind loopback
+  without a token. Binding off-loopback (Tailscale IP, `0.0.0.0`) requires
+  `TVA_API_TOKEN`; the process refuses to start without it. Clients send
+  `Authorization: Bearer …`. Clips stay off unless `TVA_SERVE_MEDIA=1`.
 - Sunday audit (Question Bot): `GET /sessions?days=7` + `/health`.
 
 A dedicated "TradeVid bot" is optional. v1 is useful to the bots that

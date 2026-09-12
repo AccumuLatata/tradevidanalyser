@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -11,7 +12,7 @@ from tradevidanalyser import __version__, config, store
 from tradevidanalyser.doctor import run_doctor
 from tradevidanalyser.ingest import ingest
 from tradevidanalyser.pipeline import extract_session, run_latest, transcribe_session
-from tradevidanalyser.serve import create_app
+from tradevidanalyser.serve import create_app, token_required_for_host
 from tradevidanalyser.watch import watch
 from tradevidanalyser.wer import score_session
 
@@ -136,7 +137,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.cmd == "serve":
             import uvicorn
 
-            app = create_app(root)
+            token = (os.environ.get("TVA_API_TOKEN") or "").strip()
+            if token_required_for_host(args.host) and not token:
+                raise ValueError(
+                    "TVA_API_TOKEN is required when binding off-loopback (including 0.0.0.0)"
+                )
+            app = create_app(root, host=args.host)
             uvicorn.run(app, host=args.host, port=args.port, log_level="info")
             return 0
     except (FileNotFoundError, ValueError, OSError, RuntimeError) as exc:
