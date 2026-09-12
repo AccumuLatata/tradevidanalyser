@@ -14,7 +14,7 @@ product decision, not a hidden dependency.
 | **TVA2** | Insights extract + headless API (`tva serve`) | TVA1 | PR-08…PR-10 landed; PR-11 Grok routine pack; fake providers default |
 | **TVA3** | Optional frames / clock OCR / chapter clips / opt-in VLM | TVA2 | PR-12…PR-15 landed (frames, OCR, redact/clips, opt-in VLM) |
 | **TVA4** | TradesViz executions join (broker-agnostic fills) | TVA2 | PR-16/17 landed (loader + mirror + recon passthrough) |
-| **TVA5** | Alignment + per-trade windows + rule scorecard | TVA4 | started (PR-18 align landed; evidence/rules later) |
+| **TVA5** | Alignment + per-trade windows + rule scorecard | TVA4 | started (PR-18 align + PR-19 evidence landed; rules later) |
 | **TVA6** | Briefs + ThesisTester attribution + debrief/ledger | TVA5 | later |
 | **TVA7** | Coach loop: intent-tag proposals, experiments | TVA6 | later |
 | parked | Full-session Gemini pass; live fill → OBS chapters; viewer; TopstepX API as a *venue adapter* | — | parked |
@@ -96,8 +96,9 @@ enabled, is within 1 s of filename time on the golden excerpt.
 No TopstepX API required. Exit: three mixed-venue days parse.
 
 **TVA5 — Align + rules.** Video clock ↔ filename/OCR wall clock
-(`tva align`, PR-18 landed); per-trade windows and the rule catalog are
-still later. **D4 stays parked** until the deterministic rules PR.
+(`tva align`, PR-18 landed); per-trade evidence windows
+(`tva evidence`, PR-19 landed). The rule catalog is still later.
+**D4 stays parked** until the deterministic rules PR.
 
 **TVA6 — Context join.** Notion briefs (English) + DRC + ThesisTester
 `journal attribute|zones|triggers`. Optional `tva report` / publish.

@@ -15,7 +15,7 @@ _FRAME_JPG = re.compile(r"^\d+\.\d{3}\.jpg$")
 CONTACT_SHEET_NAME = "contact_sheet.jpg"
 # Optional CLI stages. Never emit "missing"; do not resurrect a stale
 # "failed" when the artifact is gone (PR-11 bot pack: ?status=missing,failed).
-OPTIONAL_STAGES = frozenset({"frames", "ocr", "clips", "vlm", "fills", "align"})
+OPTIONAL_STAGES = frozenset({"frames", "ocr", "clips", "vlm", "fills", "align", "evidence"})
 VISUAL_NOTES_NAME = "visual_notes.json"
 
 _STATUS_LOCK = threading.Lock()
@@ -57,6 +57,10 @@ def fills_path(root: Path, session_id: str) -> Path:
 
 def trades_path(root: Path, session_id: str) -> Path:
     return config.session_dir(root, session_id) / "trades.parquet"
+
+
+def evidence_path(root: Path, session_id: str) -> Path:
+    return config.session_dir(root, session_id) / "evidence.json"
 
 
 def status_path(root: Path, session_id: str) -> Path:
@@ -131,13 +135,14 @@ def list_frame_jpgs(root: Path, session_id: str) -> list[Path]:
 
 
 def invalidate_downstream(root: Path, session_id: str) -> None:
-    """Drop transcript/insights/frames/clips/fills/alignment so a changed recording is not left looking complete."""
+    """Drop transcript/insights/frames/clips/fills/evidence/alignment so a changed recording is not left looking complete."""
     transcript_path(root, session_id).unlink(missing_ok=True)
     insights_path(root, session_id).unlink(missing_ok=True)
     ocr_path(root, session_id).unlink(missing_ok=True)
     visual_notes_path(root, session_id).unlink(missing_ok=True)
     fills_path(root, session_id).unlink(missing_ok=True)
     trades_path(root, session_id).unlink(missing_ok=True)
+    evidence_path(root, session_id).unlink(missing_ok=True)
     frames = frames_dir(root, session_id)
     if frames.is_dir():
         shutil.rmtree(frames)
@@ -247,6 +252,9 @@ def _compute_status_locked(
                 stages["align"] = "ok"
         except (ValueError, OSError):
             pass
+    # Evidence is optional. Same omit-when-missing rule as frames/ocr/fills.
+    if evidence_path(root, session_id).is_file():
+        stages["evidence"] = "ok"
     path = status_path(root, session_id)
     previous: SessionStatus | None = None
     if path.is_file():

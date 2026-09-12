@@ -18,8 +18,13 @@ from tradevidanalyser.ocr import (
     read_ocr_parquet,
     write_ocr_parquet,
 )
+from tradevidanalyser.evidence import EvidenceResult, evidence_session as run_evidence
 from tradevidanalyser.providers.asr import AsrError, get_asr_provider
-from tradevidanalyser.providers.extract import citation_problems, get_extract_provider
+from tradevidanalyser.providers.extract import (
+    citation_problems,
+    evidence_citation_problems,
+    get_extract_provider,
+)
 from tradevidanalyser.providers.vlm import (
     VlmContext,
     apply_visual_note_guard,
@@ -27,7 +32,7 @@ from tradevidanalyser.providers.vlm import (
     merge_visual_note_gaps,
     vlm_artifact,
 )
-from tradevidanalyser.schema import Insights, SessionRecord, Transcript, VisualNote
+from tradevidanalyser.schema import Evidence, Insights, SessionRecord, Transcript, VisualNote
 
 
 def transcribe_session(
@@ -123,11 +128,21 @@ def _visual_notes_to_preserve(root: Path, session_id: str) -> list[VisualNote]:
     return notes
 
 
-def _assert_citations(transcript: Transcript, insights: Insights) -> None:
-    problems = citation_problems(transcript, insights)
-    if problems:
-        _field, _span, reason = problems[0]
-        raise ValueError(reason)
+def _assert_citations(
+    transcript: Transcript,
+    insights: Insights | None = None,
+    evidence: Evidence | None = None,
+) -> None:
+    if insights is not None:
+        problems = citation_problems(transcript, insights)
+        if problems:
+            _field, _span, reason = problems[0]
+            raise ValueError(reason)
+    if evidence is not None:
+        problems = evidence_citation_problems(transcript, evidence)
+        if problems:
+            _field, _span, reason = problems[0]
+            raise ValueError(reason)
 
 
 def frames_session(
@@ -304,6 +319,38 @@ def fills_session(
         prefer_import=prefer_import,
         reconcile_dir=reconcile_dir,
     )
+
+
+def evidence_session(
+    session_id: str,
+    *,
+    root: Path,
+    provider_name: str | None = None,
+    pre_s: float | None = None,
+    post_s: float | None = None,
+) -> EvidenceResult:
+    if not store.is_safe_path_name(session_id):
+        raise ValueError(f"unsafe session id {session_id!r}")
+    result = run_evidence(
+        session_id,
+        root=root,
+        provider_name=provider_name,
+        pre_s=pre_s,
+        post_s=post_s,
+    )
+    if result.status == "ok" and store.transcript_path(root, session_id).is_file():
+        evidence_file = store.evidence_path(root, session_id)
+        if evidence_file.is_file():
+            try:
+                _assert_citations(
+                    store.load_transcript(root, session_id),
+                    evidence=Evidence.model_validate(store.read_json(evidence_file)),
+                )
+            except ValueError:
+                evidence_file.unlink(missing_ok=True)
+                store.compute_status(root, session_id)
+                raise
+    return result
 
 
 def align_session(

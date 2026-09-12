@@ -37,6 +37,19 @@ Second-pass prompt for PR-09 (`session_events`, `summary_de`, `summary_en`).
 
 `prompt_version` becomes `{insights_stem}+{hash}+{events_stem}+{hash}`.
 
+## `stated_v1.de.md`
+
+Per-trade window prompt for PR-19 (`tva evidence`). Used by
+`GrokExtractProvider.stated_fields`. Fake extract ignores this file.
+
+- Input is only the transcript segments that overlap the trade window.
+- Fields: `setup`, `bias`, `stop_raw`, `target_raw`, `playbook`, each
+  `{value, seg} | null`, plus `gaps`.
+- Same citation rule as insights: verbatim substring, real `seg` id.
+
+`prompt_version` on `evidence.json` is `{stem}+{sha256[:12]}` (Grok) or
+`stated-keyword-v1` (fake).
+
 ## `vlm_v1.md`
 
 System prompt for opt-in VLM notes (PR-15). Used by `GrokVlmProvider`

@@ -251,6 +251,8 @@ def align_session(
         )
     alignment = compute_alignment(record, root=root, manual_offset=manual_offset)
     store.save_session(root, record.model_copy(update={"alignment": alignment}))
+    # Windows are alignment-dependent; keep evidence from pointing at the old clock.
+    store.evidence_path(root, session_id).unlink(missing_ok=True)
     store.compute_status(root, session_id)
     return alignment
 
