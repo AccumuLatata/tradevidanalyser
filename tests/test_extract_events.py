@@ -88,7 +88,7 @@ def test_session_event_kind_closed_set() -> None:
 def test_window_schema_excludes_event_fields() -> None:
     schema = insights_json_schema()
     props = schema.get("properties") or {}
-    for key in ("session_events", "summary_de", "summary_en"):
+    for key in ("session_events", "summary_de", "summary_en", "visual_notes"):
         assert key not in props
     assert "SessionEvent" not in (schema.get("$defs") or {})
 
@@ -113,6 +113,7 @@ def test_insights_additive_no_schema_bump() -> None:
     assert insights.session_events == []
     assert insights.summary_de == ""
     assert insights.summary_en == ""
+    assert insights.visual_notes == []
 
 
 def test_summary_digit_leak_dropped() -> None:

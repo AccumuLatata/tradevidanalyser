@@ -66,17 +66,25 @@ Two very different tools exist now; use each for what it is good at.
   sampling misses fast DOM changes; the Enterprise platform caps a single
   video at ~45 min with audio, so files may need splitting.
 
-### 2.2 Short-form: Grok 4.3 native video input
+### 2.2 Short-form: Grok image understanding (not Imagine video)
 
-- Multiple developer guides (Apiyi, ChatForest, apidog, AI Learning Guides)
-  report that **Grok 4.3 (API GA May 2026) accepts `video_url` content blocks**
-  (mp4/mov/webm, ≤ 1080p, recommended ≤ 5 min, sampled at 1–4 fps, billed as
-  image tokens; $1.25 / $2.50 per M in/out; 1M context). The official
-  docs.x.ai page for video *understanding* was not reachable from this
-  session, so **verify against docs.x.ai before depending on it** (TVA3 spike).
-- Fit: a per-trade clip (entry −3 min … exit +2 min) is almost exactly the
-  5-minute envelope. This is the natural way to let *Grok* look at the trade
-  the way the user asked, without shipping the whole session.
+- **Verified against docs.x.ai (PR-15, 2026-09-12).** Official
+  [image understanding](https://docs.x.ai/developers/model-capabilities/images/understanding)
+  is real: Chat Completions `content[]` with `type: "image_url"`
+  (`url` = public URL or `data:image/jpeg;base64,…`, optional `detail`)
+  on `https://api.x.ai/v1/chat/completions`. Responses API uses
+  `input_image`. Confirmed for `grok-4` / `grok-4.6`. Limits: 20 MiB,
+  jpg/png.
+- **`video_url` on docs.x.ai is Imagine generation/edit, not "watch this
+  desk clip."** `/v1/videos/generations` and `/v1/videos/edits` produce
+  or edit video. Do not wire that as VLM understanding.
+- `enable_video_understanding` is an **X Search tool flag** for videos
+  *in X posts*, not an upload path for TVA clips.
+- Third-party Grok 4.3 `video_url` blogs (Apiyi, ChatForest, apidog) are
+  **not** an official understanding contract. TVA does not send MP4s to
+  xAI.
+- Fit: redacted chapter JPEGs as `image_url` data URLs. Gemini File API
+  remains the clip-upload path.
 
 ### 2.3 Frame-level, deterministic
 
@@ -93,16 +101,14 @@ Two very different tools exist now; use each for what it is good at.
   of keyframes per trade, never for reading numbers.
 
 **Decision:** three layers, in order of trust: (1) OCR on ROIs for numbers and
-the clock; (2) keyframes at fill timestamps for the record; (3) VLM on
-per-trade clips (Grok 4.3 first, Gemini as the alternative) for qualitative
-evidence, opt-in per provider. Full-session Gemini agentic pass is an
-*optional* weekly deep-review, not the daily path.
+the clock; (2) keyframes at chapter / fill timestamps for the record; (3)
+opt-in VLM for qualitative notes — **Grok on redacted JPEG `image_url`s**,
+**Gemini File API for a redacted clip** (or inline frames). Full-session
+Gemini agentic pass stays parked.
 
 **PR-12 (keyframes):** `tva frames` writes chapter ±0/2/5 s JPEGs under
 `TVA_ROOT/sessions/<id>/frames/` from `layout.yaml` ROIs. No VLM provider is
-wired and no frame leaves the store. **docs.x.ai `video_url` verification is
-still pending (PR-15)** — the third-party Grok 4.3 reports in §2.2 are not a
-confirmed API contract.
+wired and no frame leaves the store.
 
 **PR-13 (ROI OCR):** `tva ocr` crops `clock` / `position` / `pnl` /
 `instrument` and writes `ocr.parquet` (`t, roi, text, confidence, parsed`).
@@ -111,8 +117,15 @@ confirmed API contract.
 
 **PR-14 (redact + clips):** `tva frames` applies `*_mask` drawboxes before
 saving JPEGs. `tva clips` writes chapter −30 s … +60 s MP4s (stream copy,
-mic only). `--redact` re-encodes with the same masks. **docs.x.ai
-`video_url` verification is still pending (PR-15).**
+mic only). `--redact` re-encodes with the same masks.
+
+**PR-15 (opt-in VLM):** `tva vlm` is off unless `TVA_VLM_PROVIDER` is set.
+Grok = official image understanding (`image_url` data URLs of redacted
+frames on the same chat-completions URL as extract). Gemini = File API
+for a redacted clip, or inline frames. Guard drops any note whose digit
+runs are absent from `ocr.parquet`. Cost adds to `status.cost_usd`.
+CI mocks HTTP; no API key. **Do not send `recording.path` or Imagine
+`video_url`.**
 
 ---
 

@@ -36,3 +36,18 @@ Second-pass prompt for PR-09 (`session_events`, `summary_de`, `summary_en`).
   `summary_de` longer than 120 words.
 
 `prompt_version` becomes `{insights_stem}+{hash}+{events_stem}+{hash}`.
+
+## `vlm_v1.md`
+
+System prompt for opt-in VLM notes (PR-15). Used by `GrokVlmProvider`
+and `GeminiVlmProvider`. Fake ignores this file.
+
+- Qualitative layout / structure only.
+- `frames_cited` must be stems of attached JPEGs.
+- Forbids numerals unless they appear in the OCR list in the user
+  message. Empty OCR → no digits in `text`.
+- Never the raw recording. Grok gets redacted JPEGs as `image_url`;
+  Gemini may receive a redacted clip via File API.
+
+`prompt_version` is `{stem}+{sha256[:12]}`. Off unless `TVA_VLM_PROVIDER`
+is set. Default Grok model `grok-4.6` (`TVA_VLM_MODEL`).

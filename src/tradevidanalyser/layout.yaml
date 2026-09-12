@@ -17,6 +17,10 @@
 # PR-13 `tva ocr` crops clock / position / pnl / instrument (skips w=h=0 and
 # *_mask). parsed: ISO datetime for clock, signed float for pnl, int for
 # position, null for instrument / low confidence. Fake OCR is the default.
+#
+# PR-15 `tva vlm` is off unless TVA_VLM_PROVIDER is set. The VLM sees only
+# these redacted `frames/<t>.jpg` files and/or `clips/` (never the raw
+# recording). Notes may not state a number that `ocr.parquet` did not read.
 schema_version: "1"
 layouts:
   quantower_default:

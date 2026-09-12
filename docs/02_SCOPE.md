@@ -59,8 +59,11 @@ feeds Grok from the videos.
 4. **Optional visual notes** — keyframes at chapter markers (`tva frames`,
    named ROIs in `layout.yaml`, JPEGs stay under `TVA_ROOT`); ROI OCR of the
    on-screen clock / position / P&L (`tva ocr`, `ocr.parquet`, fake default);
-   short chapter clips (`tva clips`, mic only, optional `--redact` masks).
-   Full-frame "watch the chart" is out. A VLM pass on clips is opt-in.
+   short chapter clips (`tva clips`, mic only, optional `--redact` masks);
+   opt-in VLM (`tva vlm`, `TVA_VLM_PROVIDER` unset = off; fake / grok frames
+   as `image_url` / gemini File API). Input is redacted frames or clips only.
+   Notes may not state a number OCR did not read. Full-frame "watch the
+   chart" is out.
 5. **Headless API** — local HTTP on the always-on Mac, reading the NAS root.
    List sessions, return transcript + insights + status. No UI.
 6. **Bot routine pack** — copy-ready prompt: where the API lives, what the
