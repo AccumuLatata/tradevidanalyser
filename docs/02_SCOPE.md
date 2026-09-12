@@ -74,10 +74,11 @@ feeds Grok from the videos.
 These are real, and they are how the tape becomes expensive in a good way.
 They wait until v1 is boring and reliable.
 
-7. **Fills from TradesViz** (TVA4) — executions CSV, broker-agnostic
-   (TopstepX today, AMP as the goal, anything TradesViz already journals).
-   AMP Daily Statement PDF is money-truth if we need fees/P&S; ThesisTester
-   already parses it (`amp_statement`). Not a TopstepX API client.
+7. **Fills from TradesViz** (TVA4, PR-16 landed) — `tva fills` loads the
+   executions CSV (ThesisTester import or `fills_mirror`), windows to the
+   session, writes `fills.parquet` / `trades.parquet` with `venue` and
+   `tva_trade_id`. AMP Daily Statement PDF recon is still later (PR-17).
+   Not a TopstepX API client.
 8. **Clock alignment + per-trade evidence windows** — video time ↔ fill
    time, once fills exist.
 9. **Rule scorecard** — the catalog in §6, including the $100 vs $200 daily

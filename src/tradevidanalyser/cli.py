@@ -19,6 +19,7 @@ from tradevidanalyser.pipeline import (
     run_latest,
     transcribe_session,
     vlm_session,
+    fills_session,
 )
 from tradevidanalyser.serve import create_app, token_required_for_host
 from tradevidanalyser.watch import watch
@@ -111,6 +112,21 @@ def main(argv: list[str] | None = None) -> int:
         help="fake / grok / gemini; default is TVA_VLM_PROVIDER (off if unset)",
     )
 
+    p_fills = sub.add_parser("fills", help="TradesViz executions → fills.parquet / trades.parquet")
+    p_fills.add_argument("session")
+    p_fills.add_argument("--executions", type=Path, required=True, help="TradesViz executions CSV")
+    p_fills.add_argument(
+        "--venue",
+        choices=("topstepx", "amp", "unknown"),
+        default=None,
+        help="venue column; default = filename hint or unknown",
+    )
+    p_fills.add_argument(
+        "--include-manual",
+        action="store_true",
+        help="pair manual (non-future) rows; default is imported futures only",
+    )
+
     p_serve = sub.add_parser("serve", help="HTTP API over TVA_ROOT")
     p_serve.add_argument("--host", default="127.0.0.1")
     p_serve.add_argument("--port", type=int, default=8764)
@@ -201,6 +217,16 @@ def main(argv: list[str] | None = None) -> int:
         if args.cmd == "vlm":
             payload = vlm_session(args.session, root=root, provider_name=args.provider)
             _emit(payload, as_json=True)
+            return 0
+        if args.cmd == "fills":
+            result = fills_session(
+                args.session,
+                root=root,
+                executions=args.executions,
+                venue=args.venue,
+                include_manual=args.include_manual,
+            )
+            _emit(result.as_dict(), as_json=True)
             return 0
         if args.cmd == "serve":
             import uvicorn
