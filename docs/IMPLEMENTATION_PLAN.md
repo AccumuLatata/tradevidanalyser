@@ -555,8 +555,9 @@ topstepx|amp [--include-manual]`, `tests/fixtures/tradesviz_synthetic.csv`
 the ThesisTester functions.
 **Behaviour:** filter the CSV to fills whose UTC instant falls within the
 session's `[start − 30 min, start + duration + 30 min]` window; write
-`fills.parquet` / `trades.parquet` with `venue` and `tva_trade_id`; refuse
-if zero fills (status `missing`, not error).
+`fills.parquet` / `trades.parquet` with `venue` and `tva_trade_id`; omit
+the optional `fills` stage when zero/absent (not an error; never emit
+`missing`).
 **Tests:** import path and mirror path produce identical frames; venue
 column present; window filter; `commission/fees` discarded (assert not in
 columns per TJ1 lock).

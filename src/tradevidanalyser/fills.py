@@ -6,8 +6,9 @@ use ``fills_mirror``. Window, ``venue``, and ``tva_trade_id`` are TVA-owned.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +35,7 @@ FORBIDDEN_COST_COLUMNS = ("commission", "fees")
 WINDOW_PAD = timedelta(minutes=30)
 TVA_FILL_COLUMNS = FILL_RECORD_COLUMNS + ("venue",)
 TVA_TRADE_COLUMNS = JOURNAL_TRADE_COLUMNS + ("venue", "tva_trade_id")
+_VENUE_TOKEN_RE = re.compile(r"[^a-z0-9]+")
 
 
 class FillsError(RuntimeError):
@@ -85,12 +87,19 @@ def venue_from_hint(path: Path, explicit: str | None) -> str:
         if venue not in VENUES:
             raise FillsError(f"venue must be topstepx, amp, or unknown (got {explicit!r})")
         return venue
-    name = path.name.lower()
-    if "topstep" in name:
+    tokens = {part for part in _VENUE_TOKEN_RE.split(path.name.lower()) if part}
+    if "topstepx" in tokens or "topstep" in tokens:
         return "topstepx"
-    if "amp" in name:
+    if "amp" in tokens:
         return "amp"
     return "unknown"
+
+
+def _is_journal_ingest_error(exc: BaseException) -> bool:
+    """True for mirror *or* ThesisTester ``JournalIngestError`` (distinct classes)."""
+    if isinstance(exc, JournalIngestError):
+        return True
+    return type(exc).__name__ == "JournalIngestError" and isinstance(exc, Exception)
 
 
 def session_utc_window(record: SessionRecord) -> tuple[datetime, datetime]:
@@ -151,11 +160,7 @@ def _fill_from_pandas_row(row: dict[str, Any]) -> FillRecord:
     ts = row["timestamp"]
     if hasattr(ts, "to_pydatetime"):
         ts = ts.to_pydatetime()
-    session = row["session_date"]
-    if hasattr(session, "to_pydatetime"):
-        session = session.to_pydatetime().date()
-    elif hasattr(session, "date") and not isinstance(session, datetime):
-        pass
+    session = _as_date(row["session_date"])
     tags = row.get("tags") or ()
     flags = row.get("flags") or ()
     qty = row.get("qty")
@@ -195,9 +200,7 @@ def _trade_from_pandas_row(row: dict[str, Any]) -> JournalTrade:
             return value.replace(tzinfo=timezone.utc)
         return value
 
-    session = row["session_date"]
-    if hasattr(session, "to_pydatetime"):
-        session = session.to_pydatetime().date()
+    session = _as_date(row["session_date"])
     tags = row.get("tags") or ()
     year = row.get("contract_year")
     return JournalTrade(
@@ -248,7 +251,19 @@ def _is_nan(value: Any) -> bool:
     try:
         return bool(value != value)  # NaN / NaT
     except (TypeError, ValueError):
-        return False
+        return type(value).__name__ in {"NAType", "NaTType"}
+
+
+def _as_date(value: Any) -> date:
+    if value is None or _is_nan(value):
+        raise FillsError("fill session_date must be a calendar date")
+    if hasattr(value, "to_pydatetime"):
+        value = value.to_pydatetime()
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    raise FillsError(f"fill session_date must be a calendar date (got {value!r})")
 
 
 def _none_if_nan(value: Any) -> str | None:
@@ -502,8 +517,10 @@ def ingest_fills(
     chosen_venue = venue_from_hint(csv_path, venue)
     try:
         loader, fills = load_fills(csv_path, prefer_import=prefer_import)
-    except JournalIngestError as exc:
-        raise FillsError(str(exc)) from exc
+    except Exception as exc:
+        if _is_journal_ingest_error(exc):
+            raise FillsError(str(exc)) from exc
+        raise
     start, end = session_utc_window(record)
     windowed = filter_fills_to_window(fills, start, end)
     fills_file = store.fills_path(root, record.id)
@@ -526,8 +543,10 @@ def ingest_fills(
         )
     try:
         trades = pair_fills(windowed, include_manual=include_manual, loader=loader)
-    except JournalIngestError as exc:
-        raise FillsError(str(exc)) from exc
+    except Exception as exc:
+        if _is_journal_ingest_error(exc):
+            raise FillsError(str(exc)) from exc
+        raise
     fill_table = fills_table(windowed, venue=chosen_venue)
     trade_table = trades_table(trades, venue=chosen_venue)
     assert_no_cost_columns(fill_table)

@@ -131,11 +131,13 @@ def list_frame_jpgs(root: Path, session_id: str) -> list[Path]:
 
 
 def invalidate_downstream(root: Path, session_id: str) -> None:
-    """Drop transcript/insights/frames/clips so a changed recording is not left looking complete."""
+    """Drop transcript/insights/frames/clips/fills so a changed recording is not left looking complete."""
     transcript_path(root, session_id).unlink(missing_ok=True)
     insights_path(root, session_id).unlink(missing_ok=True)
     ocr_path(root, session_id).unlink(missing_ok=True)
     visual_notes_path(root, session_id).unlink(missing_ok=True)
+    fills_path(root, session_id).unlink(missing_ok=True)
+    trades_path(root, session_id).unlink(missing_ok=True)
     frames = frames_dir(root, session_id)
     if frames.is_dir():
         shutil.rmtree(frames)
@@ -221,7 +223,8 @@ def _compute_status_locked(
     # VLM is opt-in / optional. Same omit-when-missing rule as frames.
     if visual_notes_path(root, session_id).is_file():
         stages["vlm"] = "ok"
-    if fills_path(root, session_id).is_file():
+    # Fills writes both parquet files. Either one alone is a half-stage.
+    if fills_path(root, session_id).is_file() and trades_path(root, session_id).is_file():
         stages["fills"] = "ok"
     path = status_path(root, session_id)
     previous: SessionStatus | None = None
