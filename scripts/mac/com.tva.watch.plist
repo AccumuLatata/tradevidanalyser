@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.tva.watch</string>
+  <key>Comment</key>
+  <string>TVA copy-after-record. Record OBS to a local disk, never to the NAS. Edit ProgramArguments and TVA_ROOT.</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/tva</string>
+    <string>--root</string>
+    <string>/Volumes/tradevid</string>
+    <string>watch</string>
+    <string>--source</string>
+    <string>/Users/accumu/Movies/OBS</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>TVA_ROOT</key>
+    <string>/Volumes/tradevid</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/tmp/tva-watch.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/tva-watch.err</string>
+</dict>
+</plist>

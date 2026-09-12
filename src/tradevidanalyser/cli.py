@@ -12,6 +12,7 @@ from tradevidanalyser.doctor import run_doctor
 from tradevidanalyser.ingest import ingest
 from tradevidanalyser.pipeline import extract_session, run_latest, transcribe_session
 from tradevidanalyser.serve import create_app
+from tradevidanalyser.watch import watch
 from tradevidanalyser.wer import score_session
 
 
@@ -42,6 +43,13 @@ def main(argv: list[str] | None = None) -> int:
     p_run = sub.add_parser("run", help="ingest (optional) + transcribe + extract")
     p_run.add_argument("--latest", action="store_true", help="use the newest session")
     p_run.add_argument("video", nargs="?", type=Path)
+
+    p_watch = sub.add_parser("watch", help="copy finished OBS files into TVA_ROOT (record local)")
+    p_watch.add_argument("--source", type=Path, required=True, help="local OBS output directory")
+    p_watch.add_argument("--once", action="store_true", help="scan once and exit")
+    p_watch.add_argument("--run", action="store_true", help="ingest + transcribe + extract after copy")
+    p_watch.add_argument("--stable-seconds", type=float, default=None, help="mtime must be this old")
+    p_watch.add_argument("--interval", type=float, default=None, help="poll interval when not --once")
 
     p_wer = sub.add_parser("wer", help="WER and jargon recall vs a reference transcript")
     p_wer.add_argument("session")
@@ -81,6 +89,17 @@ def main(argv: list[str] | None = None) -> int:
             record = run_latest(root, video=video)
             status = store.compute_status(root, record.id)
             _emit(status.model_dump(mode="json"), as_json=True)
+            return 0
+        if args.cmd == "watch":
+            payload = watch(
+                args.source,
+                root=root,
+                once=args.once,
+                run=args.run,
+                stable_s=args.stable_seconds,
+                poll_s=args.interval,
+            )
+            _emit(payload, as_json=True)
             return 0
         if args.cmd == "wer":
             _emit(score_session(args.session, ref=args.ref, root=root), as_json=True)

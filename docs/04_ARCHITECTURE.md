@@ -64,9 +64,17 @@ multi-GB video.
 
 1. **Record local, copy after.** OBS Hybrid MP4 onto a Synology share drops
    frames and makes crash-recovery less useful. Trading PC SSD → post-session
-   copy to `recordings/YYYY-MM-DD/`. A 20–40 GB file wants wired Ethernet
-   (2.5G/10G if you have it); Wi-Fi copies will still be running when the
-   evening bot fires.
+   copy to `TVA_ROOT/recordings/` (never record OBS onto the NAS). A 20–40 GB
+   file wants wired Ethernet (2.5G/10G if you have it); Wi-Fi copies will
+   still be running when the evening bot fires. `tva watch --source <obs dir>`
+   does the copy (`.part` + `recordings/<name>.lock`, never deletes the
+   source). Desk wiring:
+   [`scripts/windows/tva-watch.xml`](../scripts/windows/tva-watch.xml)
+   (Task Scheduler),
+   [`scripts/windows/copy-after-obs.ps1`](../scripts/windows/copy-after-obs.ps1)
+   (one-shot),
+   [`scripts/mac/com.tva.watch.plist`](../scripts/mac/com.tva.watch.plist)
+   (launchd).
 2. **One env var, same layout everywhere.** `TVA_ROOT=/Volumes/tradevid` or
    `T:\tradevid`. Layout:
    `recordings/`, `sessions/<id>/`, `fixtures/`. The API and the CLI both
