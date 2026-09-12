@@ -35,6 +35,16 @@ FORBIDDEN_COST_COLUMNS = ("commission", "fees")
 WINDOW_PAD = timedelta(minutes=30)
 TVA_FILL_COLUMNS = FILL_RECORD_COLUMNS + ("venue",)
 TVA_TRADE_COLUMNS = JOURNAL_TRADE_COLUMNS + ("venue", "tva_trade_id")
+RECON_STATUSES = frozenset(
+    {
+        "reconciled",
+        "journal_missing",
+        "amp_missing",
+        "multiset_mismatch",
+        "pnl_mismatch",
+    }
+)
+RECONCILE_FILENAME = "reconcile.json"
 _VENUE_TOKEN_RE = re.compile(r"[^a-z0-9]+")
 
 
@@ -54,6 +64,8 @@ class FillsResult:
     include_manual: bool
     status: str = "ok"
     reason: str | None = None
+    recon_days: int | None = None
+    recon_attached: int | None = None
 
     def as_dict(self) -> dict[str, Any]:
         payload = {
@@ -69,6 +81,10 @@ class FillsResult:
         }
         if self.reason:
             payload["reason"] = self.reason
+        if self.recon_days is not None:
+            payload["recon_days"] = self.recon_days
+        if self.recon_attached is not None:
+            payload["recon_attached"] = self.recon_attached
         return payload
 
 
@@ -497,6 +513,89 @@ def contract_trades_table(trades: list[JournalTrade]) -> pa.Table:
     return trades_table(trades, venue="_").drop(["venue", "tva_trade_id"])
 
 
+def reconcile_json_path(reconcile_dir: Path) -> Path:
+    """``--reconcile-dir`` may be the journal output folder or the JSON file."""
+    path = Path(reconcile_dir)
+    if path.is_file():
+        return path
+    return path / RECONCILE_FILENAME
+
+
+def load_reconcile_status_map(reconcile_dir: Path) -> dict[tuple[date, str], str]:
+    """Read ThesisTester ``reconcile.json`` → ``(session_date, instrument) → status``.
+
+    No PDF is opened. Unknown statuses fail closed.
+    """
+    path = reconcile_json_path(reconcile_dir)
+    if not path.is_file():
+        raise FillsError(f"reconcile.json not found under {reconcile_dir}")
+    try:
+        payload = store.read_json(path)
+    except (OSError, ValueError) as exc:
+        raise FillsError(f"reconcile.json is unreadable: {exc}") from exc
+    days = payload.get("days")
+    if not isinstance(days, list):
+        raise FillsError("reconcile.json has no days array")
+    mapping: dict[tuple[date, str], str] = {}
+    for index, raw in enumerate(days):
+        if not isinstance(raw, dict):
+            raise FillsError(f"reconcile.json days[{index}] is not an object")
+        session = raw.get("session_date")
+        instrument = raw.get("instrument")
+        status = raw.get("status")
+        if not isinstance(session, str) or not session:
+            raise FillsError(f"reconcile.json days[{index}] missing session_date")
+        if not isinstance(instrument, str) or not instrument:
+            raise FillsError(f"reconcile.json days[{index}] missing instrument")
+        if status not in RECON_STATUSES:
+            raise FillsError(
+                f"reconcile.json days[{index}] status must be one of "
+                + ", ".join(sorted(RECON_STATUSES))
+                + f" (got {status!r})"
+            )
+        try:
+            day = date.fromisoformat(session)
+        except ValueError as exc:
+            raise FillsError(f"reconcile.json days[{index}] bad session_date {session!r}") from exc
+        key = (day, instrument)
+        if key in mapping and mapping[key] != status:
+            raise FillsError(
+                f"reconcile.json has conflicting status for {instrument} on {session}"
+            )
+        mapping[key] = status
+    return mapping
+
+
+def lookup_recon_status(
+    session_date: date,
+    instrument: str,
+    mapping: dict[tuple[date, str], str],
+) -> str | None:
+    """Prefer ``(session_date, instrument)``; fall back if that date has one status."""
+    exact = mapping.get((session_date, instrument))
+    if exact is not None:
+        return exact
+    same_day = [status for (day, _inst), status in mapping.items() if day == session_date]
+    if len(set(same_day)) == 1:
+        return same_day[0]
+    return None
+
+
+def attach_recon_status(table: pa.Table, mapping: dict[tuple[date, str], str]) -> pa.Table:
+    """Additive ``recon_status`` column. Plan §5 PR-17: per session date."""
+    dates = table.column("session_date").to_pylist()
+    instruments = table.column("instrument").to_pylist()
+    statuses: list[str | None] = []
+    for raw_day, raw_inst in zip(dates, instruments, strict=True):
+        if hasattr(raw_day, "date") and not isinstance(raw_day, date):
+            raw_day = raw_day.date()
+        day = raw_day if isinstance(raw_day, date) else date.fromisoformat(str(raw_day))
+        statuses.append(lookup_recon_status(day, str(raw_inst), mapping))
+    if "recon_status" in table.column_names:
+        table = table.drop(["recon_status"])
+    return table.append_column("recon_status", pa.array(statuses, type=pa.string()))
+
+
 def assert_no_cost_columns(table: pa.Table) -> None:
     present = set(table.column_names)
     leaked = [name for name in FORBIDDEN_COST_COLUMNS if name in present]
@@ -512,6 +611,7 @@ def ingest_fills(
     venue: str | None = None,
     include_manual: bool = False,
     prefer_import: bool | None = None,
+    reconcile_dir: Path | None = None,
 ) -> FillsResult:
     csv_path = Path(executions)
     chosen_venue = venue_from_hint(csv_path, venue)
@@ -549,6 +649,15 @@ def ingest_fills(
         raise
     fill_table = fills_table(windowed, venue=chosen_venue)
     trade_table = trades_table(trades, venue=chosen_venue)
+    recon_days = None
+    recon_attached = None
+    if reconcile_dir is not None:
+        mapping = load_reconcile_status_map(Path(reconcile_dir))
+        trade_table = attach_recon_status(trade_table, mapping)
+        recon_days = len(mapping)
+        recon_attached = sum(
+            1 for value in trade_table.column("recon_status").to_pylist() if value is not None
+        )
     assert_no_cost_columns(fill_table)
     assert_no_cost_columns(trade_table)
     write_table(fills_file, fill_table)
@@ -563,4 +672,6 @@ def ingest_fills(
         path="fills.parquet",
         trades_path="trades.parquet",
         include_manual=include_manual,
+        recon_days=recon_days,
+        recon_attached=recon_attached,
     )

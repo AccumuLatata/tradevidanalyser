@@ -191,7 +191,8 @@ broker API.
 **PR-16:** `tva fills` is that TradesViz loader. Import ThesisTester when
 the `[journal]` extra is present; otherwise `fills_mirror` (CI). Window
 the CSV to the session, write `venue` + `tva_trade_id`, discard
-`commission` / `fees`. AMP recon and a TopstepX venue adapter stay later.
+`commission` / `fees`. **PR-17** attaches `recon_status` from ThesisTester
+`reconcile.json` (`--reconcile-dir`). A TopstepX venue adapter stays later.
 
 ---
 
