@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from tradevidanalyser.cli import main
 from tradevidanalyser.ingest import ingest
 from tradevidanalyser.pipeline import extract_session, transcribe_session
-from tradevidanalyser.serve import create_app, token_required_for_host
+from tradevidanalyser.serve import _within_days, create_app, token_required_for_host
 from tradevidanalyser import store
 
 EXAMPLE_LATEST = Path(__file__).resolve().parents[1] / "examples" / "api" / "latest.json"
@@ -94,6 +94,33 @@ def test_sessions_days_and_status_filter(tva_root: Path, tmp_path: Path, write_v
     assert ok_only  # ingest is ok on both
 
 
+def test_compute_status_preserves_failed_until_retry(
+    tva_root: Path, sample_video: Path
+) -> None:
+    record = ingest(sample_video, root=tva_root)
+    written = store.compute_status(tva_root, record.id, error="asr exploded", failed="transcribe")
+    assert written.stages["transcribe"] == "failed"
+    assert written.error == "asr exploded"
+    again = store.compute_status(tva_root, record.id)
+    assert again.stages["transcribe"] == "failed"
+    assert again.error == "asr exploded"
+    running = store.compute_status(tva_root, record.id, running=["transcribe"])
+    assert running.stages["transcribe"] == "running"
+    assert running.error is None
+
+
+def test_days_window_is_n_calendar_days() -> None:
+    today = date(2026, 9, 12)
+    assert _within_days("2026-09-12_143000", 7, today=today)
+    assert _within_days("2026-09-06_100000", 7, today=today)
+    assert not _within_days("2026-09-05_100000", 7, today=today)
+    assert _within_days("2026-09-12_143000", 1, today=today)
+    assert not _within_days("2026-09-11_143000", 1, today=today)
+    assert _within_days("2026-09-12_143000", 0, today=today)
+    assert not _within_days("2026-09-11_143000", 0, today=today)
+    assert not _within_days("2026-09-13_143000", 7, today=today)
+
+
 def test_background_run_flips_status(tva_root: Path, sample_video: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     record = ingest(sample_video, root=tva_root)
     release = threading.Event()
@@ -142,3 +169,51 @@ def test_latest_contract_matches_example_keys(
     openapi = TestClient(create_app(tva_root)).get("/openapi.json").json()
     latest_schema = openapi["paths"]["/sessions/latest"]["get"]["responses"]["200"]
     assert "content" in latest_schema
+
+
+def test_background_run_persists_failed_and_error(
+    tva_root: Path, sample_video: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = ingest(sample_video, root=tva_root)
+    started = threading.Event()
+    release = threading.Event()
+
+    def boom(session_id, *, root, provider_name=None):
+        started.set()
+        release.wait(timeout=5)
+        raise RuntimeError("asr exploded")
+
+    monkeypatch.setattr("tradevidanalyser.serve.transcribe_session", boom)
+    client = TestClient(create_app(tva_root))
+    posted = client.post(f"/sessions/{record.id}/run", params={"stages": "transcribe"})
+    assert posted.status_code == 202
+    assert started.wait(timeout=2)
+    second = client.post(f"/sessions/{record.id}/run", params={"stages": "transcribe"})
+    assert second.status_code == 409
+    listed = client.get("/sessions", params={"status": "running"}).json()["sessions"]
+    assert record.id in listed
+    bundle = client.get(f"/sessions/{record.id}").json()
+    assert bundle["status"]["stages"]["transcribe"] == "running"
+    release.set()
+    body = {}
+    deadline = time.time() + 8
+    while time.time() < deadline:
+        body = client.get(f"/sessions/{record.id}/status").json()
+        if body["stages"].get("transcribe") == "failed":
+            break
+        time.sleep(0.05)
+    assert body["stages"]["transcribe"] == "failed"
+    assert body["error"] == "asr exploded"
+    again = client.get(f"/sessions/{record.id}/status").json()
+    assert again["stages"]["transcribe"] == "failed"
+    assert again["error"] == "asr exploded"
+    failed = client.get("/sessions", params={"status": "failed"}).json()["sessions"]
+    assert record.id in failed
+
+
+def test_session_id_rejects_path_escape(tva_root: Path, sample_video: Path) -> None:
+    record = ingest(sample_video, root=tva_root)
+    client = TestClient(create_app(tva_root))
+    assert client.get("/sessions/%2e%2e").status_code == 404
+    assert client.get("/sessions/foo%5cbar").status_code == 404
+    assert client.get(f"/sessions/{record.id}/status").status_code == 200

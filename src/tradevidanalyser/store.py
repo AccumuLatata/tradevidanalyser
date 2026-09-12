@@ -94,14 +94,12 @@ def compute_status(
     error: str | None = None,
     cost_usd: float | None = None,
     running: list[str] | None = None,
+    failed: str | None = None,
 ) -> SessionStatus:
     stages: dict[str, str] = {}
     stages["ingest"] = "ok" if session_json_path(root, session_id).is_file() else "missing"
     stages["transcribe"] = "ok" if transcript_path(root, session_id).is_file() else "missing"
     stages["extract"] = "ok" if insights_path(root, session_id).is_file() else "missing"
-    for name in running or []:
-        if stages.get(name) != "ok":
-            stages[name] = "running"
     path = status_path(root, session_id)
     previous: SessionStatus | None = None
     if path.is_file():
@@ -111,6 +109,20 @@ def compute_status(
             previous = None
     if cost_usd is None and previous is not None:
         cost_usd = previous.cost_usd
+    running_set = set(running or [])
+    if previous is not None:
+        for name, state in previous.stages.items():
+            if state == "failed" and stages.get(name) == "missing" and name not in running_set:
+                stages[name] = "failed"
+    if failed and stages.get(failed) != "ok" and failed not in running_set:
+        stages[failed] = "failed"
+    for name in running or []:
+        if stages.get(name) != "ok":
+            stages[name] = "running"
+    if error is None and previous is not None:
+        error = previous.error
+    if not any(state == "failed" for state in stages.values()):
+        error = None
     status = SessionStatus(session_id=session_id, stages=stages, error=error, cost_usd=cost_usd)  # type: ignore[arg-type]
     write_json(path, status.model_dump(mode="json"))
     return status

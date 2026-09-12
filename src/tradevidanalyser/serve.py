@@ -7,7 +7,7 @@ import json
 import os
 import re
 import threading
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict
 
 from tradevidanalyser import __version__, store
 from tradevidanalyser.doctor import run_doctor
+from tradevidanalyser.naming import VIENNA
 from tradevidanalyser.pipeline import extract_session, transcribe_session
 from tradevidanalyser.schema import Insights, SessionRecord, SessionStatus, Transcript
 
@@ -120,7 +121,16 @@ def create_app(
             ids = [sid for sid in ids if _within_days(sid, days)]
         if status:
             wanted = {part.strip() for part in status.split(",") if part.strip()}
-            ids = [sid for sid in ids if wanted & set(store.compute_status(app.state.root, sid).stages.values())]
+            ids = [
+                sid
+                for sid in ids
+                if wanted
+                & set(
+                    store.compute_status(
+                        app.state.root, sid, running=_running_stages(app, sid)
+                    ).stages.values()
+                )
+            ]
         return {"sessions": ids, "latest": ids[-1] if ids else None}
 
     @app.get("/sessions/latest", response_model=SessionBundle)
@@ -128,26 +138,22 @@ def create_app(
         session_id = store.latest_session_id(app.state.root)
         if session_id is None:
             raise HTTPException(status_code=404, detail="no sessions")
-        return _bundle(app.state.root, session_id)
+        return _bundle(app.state.root, session_id, running=_running_stages(app, session_id))
 
     @app.get("/sessions/{session_id}/status", response_model=SessionStatus)
     def session_status(session_id: str) -> dict:
-        if not store.session_json_path(app.state.root, session_id).is_file():
-            raise HTTPException(status_code=404, detail="session missing")
-        with app.state.jobs_lock:
-            running = sorted(app.state.jobs.get(session_id) or [])
+        _require_session(app.state.root, session_id)
+        running = _running_stages(app, session_id)
         return store.compute_status(app.state.root, session_id, running=running).model_dump(mode="json")
 
     @app.get("/sessions/{session_id}/clips/{name}")
     def session_clip(session_id: str, name: str):
         if not serve_media_enabled():
             raise HTTPException(status_code=404, detail="not found")
-        if not store.session_json_path(app.state.root, session_id).is_file():
-            raise HTTPException(status_code=404, detail="session missing")
-        safe = Path(name).name
-        if not safe or safe != name or safe in {".", ".."}:
+        _require_session(app.state.root, session_id)
+        if not _is_safe_path_name(name):
             raise HTTPException(status_code=404, detail="not found")
-        path = store.clip_path(app.state.root, session_id, safe)
+        path = store.clip_path(app.state.root, session_id, name)
         try:
             path.resolve().relative_to(store.clips_dir(app.state.root, session_id).resolve())
         except ValueError:
@@ -158,10 +164,12 @@ def create_app(
 
     @app.get("/sessions/{session_id}", response_model=SessionBundle)
     def one_session(session_id: str) -> dict:
-        return _bundle(app.state.root, session_id)
+        _require_session(app.state.root, session_id)
+        return _bundle(app.state.root, session_id, running=_running_stages(app, session_id))
 
     @app.get("/sessions/{session_id}/transcript", response_model=Transcript)
     def transcript(session_id: str) -> dict:
+        _require_session(app.state.root, session_id)
         path = store.transcript_path(app.state.root, session_id)
         if not path.is_file():
             raise HTTPException(status_code=404, detail="transcript missing")
@@ -169,6 +177,7 @@ def create_app(
 
     @app.get("/sessions/{session_id}/insights", response_model=Insights)
     def insights(session_id: str) -> dict:
+        _require_session(app.state.root, session_id)
         path = store.insights_path(app.state.root, session_id)
         if not path.is_file():
             raise HTTPException(status_code=404, detail="insights missing")
@@ -179,22 +188,26 @@ def create_app(
         session_id: str,
         stages: str = Query(default="transcribe,extract", description="Comma-separated stages"),
     ) -> dict:
-        if not store.session_json_path(app.state.root, session_id).is_file():
-            raise HTTPException(status_code=404, detail="session missing")
+        _require_session(app.state.root, session_id)
         requested = _parse_run_stages(stages)
         with app.state.jobs_lock:
             current = app.state.jobs.get(session_id) or set()
             if current:
                 raise HTTPException(status_code=409, detail="run already in progress")
             app.state.jobs[session_id] = set(requested)
-        status = store.compute_status(app.state.root, session_id, running=requested)
-        thread = threading.Thread(
-            target=_run_stages,
-            args=(app, session_id, requested),
-            name=f"tva-run-{session_id}",
-            daemon=True,
-        )
-        thread.start()
+        try:
+            status = store.compute_status(app.state.root, session_id, running=requested)
+            thread = threading.Thread(
+                target=_run_stages,
+                args=(app, session_id, requested),
+                name=f"tva-run-{session_id}",
+                daemon=True,
+            )
+            thread.start()
+        except Exception:
+            with app.state.jobs_lock:
+                app.state.jobs.pop(session_id, None)
+            raise
         return {
             "accepted": True,
             "session_id": session_id,
@@ -222,17 +235,47 @@ def _parse_run_stages(raw: str) -> list[str]:
 
 def _run_stages(app: FastAPI, session_id: str, stages: list[str]) -> None:
     error: str | None = None
+    failed: str | None = None
+    current: str | None = None
     try:
         if "transcribe" in stages:
+            current = "transcribe"
             transcribe_session(session_id, root=app.state.root)
         if "extract" in stages:
+            current = "extract"
             extract_session(session_id, root=app.state.root)
+        current = None
     except Exception as exc:  # noqa: BLE001 — surface any stage failure on status
         error = str(exc)
+        failed = current
     finally:
-        with app.state.jobs_lock:
-            app.state.jobs.pop(session_id, None)
-        store.compute_status(app.state.root, session_id, error=error)
+        try:
+            store.compute_status(app.state.root, session_id, error=error, failed=failed)
+        finally:
+            with app.state.jobs_lock:
+                app.state.jobs.pop(session_id, None)
+
+
+def _is_safe_path_name(name: str) -> bool:
+    return (
+        bool(name)
+        and name not in {".", ".."}
+        and Path(name).name == name
+        and "/" not in name
+        and "\\" not in name
+    )
+
+
+def _require_session(root: Path, session_id: str) -> None:
+    if not _is_safe_path_name(session_id):
+        raise HTTPException(status_code=404, detail="session missing")
+    if not store.session_json_path(root, session_id).is_file():
+        raise HTTPException(status_code=404, detail="session missing")
+
+
+def _running_stages(app: FastAPI, session_id: str) -> list[str]:
+    with app.state.jobs_lock:
+        return sorted(app.state.jobs.get(session_id) or [])
 
 
 def _session_date(session_id: str) -> date | None:
@@ -249,16 +292,19 @@ def _within_days(session_id: str, days: int, *, today: date | None = None) -> bo
     parsed = _session_date(session_id)
     if parsed is None:
         return False
-    cutoff = (today or date.today()) - timedelta(days=days)
-    return parsed >= cutoff
+    ref = today or datetime.now(VIENNA).date()
+    age = (ref - parsed).days
+    if days <= 0:
+        return age == 0
+    return 0 <= age < days
 
 
-def _bundle(root: Path, session_id: str) -> dict:
+def _bundle(root: Path, session_id: str, *, running: list[str] | None = None) -> dict:
     if not store.session_json_path(root, session_id).is_file():
         raise HTTPException(status_code=404, detail="session missing")
     payload: dict = {
         "session": store.load_session(root, session_id).model_dump(mode="json"),
-        "status": store.compute_status(root, session_id).model_dump(mode="json"),
+        "status": store.compute_status(root, session_id, running=running).model_dump(mode="json"),
         "transcript": None,
         "insights": None,
     }
