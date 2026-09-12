@@ -1,0 +1,14 @@
+# Screen layout ROIs for TVA3 (frames / OCR / redaction). PR-12 adds the loader.
+# Coordinates are normalised 0..1 (x, y, w, h) so one layout survives resolution changes.
+# Masks named *_mask are blacked out before any frame is written or sent anywhere.
+schema_version: "1"
+layouts:
+  quantower_default:
+    description: "Trading PC, Quantower main chart, clock bottom-right"
+    rois:
+      clock:        {x: 0.90, y: 0.96, w: 0.09, h: 0.03}
+      position:     {x: 0.00, y: 0.00, w: 0.00, h: 0.00}   # fill in with the contact sheet (PR-12)
+      pnl:          {x: 0.00, y: 0.00, w: 0.00, h: 0.00}
+      instrument:   {x: 0.00, y: 0.00, w: 0.00, h: 0.00}
+      account_mask: {x: 0.00, y: 0.00, w: 0.00, h: 0.00}
+      balance_mask: {x: 0.00, y: 0.00, w: 0.00, h: 0.00}

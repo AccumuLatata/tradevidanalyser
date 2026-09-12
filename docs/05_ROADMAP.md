@@ -9,8 +9,8 @@ product decision, not a hidden dependency.
 
 | Milestone | Intent | Depends on | Status |
 |---|---|---|---|
-| **TVA0** | Plan lock, decisions, desk prep, golden excerpt | — | decisions locked 12 Sep 2026; repo skeleton landed |
-| **TVA1** | Ingest + German transcript | TVA0 | skeleton: `tva ingest` + fake ASR; WhisperX still stub |
+| **TVA0** | Plan lock, decisions, desk prep, golden excerpt | — | PR-00/01/02 landed; see [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) |
+| **TVA1** | Ingest + German transcript | TVA0 | PR-03…PR-07 scoped; `tva ingest` + fake ASR landed |
 | **TVA2** | Insights extract + headless API (`tva serve`) | TVA1 | |
 | **TVA3** | Optional frames / clock OCR / chapter clips / opt-in VLM | TVA2 | |
 | **TVA4** | TradesViz executions join (broker-agnostic fills) | TVA2 | later |
