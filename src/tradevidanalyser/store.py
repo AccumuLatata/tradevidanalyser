@@ -151,7 +151,13 @@ def invalidate_downstream(root: Path, session_id: str) -> None:
         except (ValueError, OSError):
             record = None
         if record is not None and record.alignment is not None:
-            save_session(root, record.model_copy(update={"alignment": None}))
+            # Write back under the directory id. record.id can differ and
+            # must not be allowed to escape sessions/.
+            if is_safe_path_name(session_id):
+                save_session(
+                    root,
+                    record.model_copy(update={"alignment": None, "id": session_id}),
+                )
 
 
 def load_session(root: Path, session_id: str) -> SessionRecord:

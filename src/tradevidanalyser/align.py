@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, tzinfo
 from pathlib import Path
 
 from tradevidanalyser import store
+from tradevidanalyser.naming import VIENNA
 from tradevidanalyser.ocr import read_ocr_parquet
 from tradevidanalyser.schema import Alignment, AlignmentSample, SessionRecord
 
@@ -49,6 +51,8 @@ def theil_sen(xs: list[float], ys: list[float]) -> tuple[float, float]:
         raise ValueError("theil_sen xs/ys length mismatch")
     if not xs:
         raise ValueError("theil_sen requires at least one sample")
+    if any(not math.isfinite(x) or not math.isfinite(y) for x, y in zip(xs, ys, strict=True)):
+        raise ValueError("theil_sen requires finite samples")
     if len(xs) == 1:
         return 0.0, ys[0]
     slopes: list[float] = []
@@ -66,14 +70,20 @@ def theil_sen(xs: list[float], ys: list[float]) -> tuple[float, float]:
 
 
 def confidence_from_residuals(residuals: list[float]) -> float:
-    """0–1 score from sample count and residual MAD (seconds)."""
-    n = len(residuals)
-    if n == 0:
+    """0–1 score from sample count and residual MAD (seconds).
+
+    MAD is taken around the residual median (robust scatter). ``|median|`` is
+    also charged so a systematic bias — e.g. a manual offset that disagrees
+    with every OCR clock — cannot report high confidence.
+    """
+    finite = [float(r) for r in residuals if math.isfinite(r)]
+    n = len(finite)
+    if n == 0 or n != len(residuals):
         return 0.0
     n_score = min(1.0, n / 10.0)
-    centre = _median(list(residuals))
-    mad = _median([abs(r - centre) for r in residuals])
-    spread_score = max(0.0, 1.0 - mad / 2.0)
+    centre = _median(list(finite))
+    mad = _median([abs(r - centre) for r in finite])
+    spread_score = max(0.0, 1.0 - max(mad, abs(centre)) / 2.0)
     confidence = n_score * spread_score
     if n < 3:
         confidence = min(confidence, 0.5)
@@ -89,10 +99,34 @@ def _parse_dt(text: str) -> datetime | None:
         return None
 
 
+def _parse_start(text: str) -> datetime:
+    """Filename prior. Naive values are Vienna; garbage is fail-closed."""
+    start = _parse_dt(text)
+    if start is None:
+        raise ValueError(f"unparseable start_wallclock_vienna {text!r}")
+    return _as_aware(start, VIENNA)
+
+
+def _as_aware(dt: datetime, tz: tzinfo | None) -> datetime:
+    if dt.tzinfo is not None:
+        return dt
+    if tz is None:
+        return dt.replace(tzinfo=VIENNA)
+    return dt.replace(tzinfo=tz)
+
+
+def _require_safe_session_id(session_id: str) -> str:
+    if not store.is_safe_path_name(session_id):
+        raise ValueError(f"unsafe session id {session_id!r}")
+    return session_id
+
+
 def _clock_measurements(root: Path, session_id: str, start: datetime) -> list[_Measurement]:
+    _require_safe_session_id(session_id)
     path = store.ocr_path(root, session_id)
     if not path.is_file():
         return []
+    start = _as_aware(start, VIENNA)
     out: list[_Measurement] = []
     for row in read_ocr_parquet(path):
         if row.roi != "clock" or not row.parsed:
@@ -100,10 +134,13 @@ def _clock_measurements(root: Path, session_id: str, start: datetime) -> list[_M
         parsed = _parse_dt(row.parsed)
         if parsed is None:
             continue
-        if (parsed.tzinfo is None) != (start.tzinfo is None):
-            continue
+        parsed = _as_aware(parsed, start.tzinfo)
         video_t = float(row.t)
+        if not math.isfinite(video_t):
+            continue
         y = (parsed - start).total_seconds() - video_t
+        if not math.isfinite(y):
+            continue
         out.append(
             _Measurement(
                 video_t=video_t,
@@ -149,6 +186,8 @@ def _filename_alignment() -> Alignment:
 
 
 def _manual_alignment(manual_offset: float, measurements: list[_Measurement]) -> Alignment:
+    if not math.isfinite(manual_offset):
+        raise ValueError("manual offset must be a finite number of seconds")
     offset_s = _r(manual_offset, 6)
     samples, residuals = _samples_for(measurements, offset_s=offset_s, drift_s_per_h=0.0)
     confidence = (
@@ -188,10 +227,9 @@ def compute_alignment(
     manual_offset: float | None = None,
 ) -> Alignment:
     """Fit alignment from filename prior + ``ocr.parquet`` clock rows."""
-    start = _parse_dt(record.recording.start_wallclock_vienna)
-    measurements: list[_Measurement] = []
-    if start is not None:
-        measurements = _clock_measurements(root, record.id, start)
+    session_id = _require_safe_session_id(record.id)
+    start = _parse_start(record.recording.start_wallclock_vienna)
+    measurements = _clock_measurements(root, session_id, start)
     if manual_offset is not None:
         return _manual_alignment(manual_offset, measurements)
     if not measurements:
@@ -205,9 +243,12 @@ def align_session(
     root: Path,
     manual_offset: float | None = None,
 ) -> Alignment:
-    if not store.is_safe_path_name(session_id):
-        raise ValueError(f"unsafe session id {session_id!r}")
+    session_id = _require_safe_session_id(session_id)
     record = store.load_session(root, session_id)
+    if record.id != session_id:
+        raise ValueError(
+            f"session.json id {record.id!r} does not match directory {session_id!r}"
+        )
     alignment = compute_alignment(record, root=root, manual_offset=manual_offset)
     store.save_session(root, record.model_copy(update={"alignment": alignment}))
     store.compute_status(root, session_id)

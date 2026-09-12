@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from tradevidanalyser import config, store
 from tradevidanalyser.align import (
     FILENAME_CONFIDENCE,
     align_session,
+    compute_alignment,
     confidence_from_residuals,
     theil_sen,
 )
@@ -83,10 +85,21 @@ def test_theil_sen_outlier_does_not_pull_fit() -> None:
     assert slope == pytest.approx(0.0, abs=1e-9)
 
 
+def test_theil_sen_rejects_nonfinite() -> None:
+    with pytest.raises(ValueError, match="finite"):
+        theil_sen([0.0, math.nan], [1.0, 1.0])
+
+
 def test_low_sample_count_low_confidence() -> None:
     assert confidence_from_residuals([0.0]) < 0.5
     assert confidence_from_residuals([0.0, 0.0]) < 0.5
     assert confidence_from_residuals([0.0] * 10) >= 0.9
+
+
+def test_confidence_penalizes_systematic_bias() -> None:
+    assert confidence_from_residuals([60.0] * 10) < 0.8
+    assert confidence_from_residuals([0.0] * 9 + [60.0]) >= 0.9
+    assert confidence_from_residuals([math.nan]) == 0.0
 
 
 def test_ocr_clock_recovers_offset_and_drift(tva_root: Path) -> None:
@@ -237,6 +250,20 @@ def test_align_refuses_path_escape(tva_root: Path) -> None:
     assert main(["--root", str(tva_root), "align", "foo/bar"]) == 1
 
 
+def test_align_refuses_record_id_path_escape(tva_root: Path) -> None:
+    record = _session(tva_root)
+    _write_clocks(tva_root, record.id, [_clock_row(0.0, offset_s=1.8)])
+    payload = store.read_json(store.session_json_path(tva_root, record.id))
+    payload["id"] = "../outside"
+    store.write_json(store.session_json_path(tva_root, record.id), payload)
+    with pytest.raises(ValueError, match="does not match directory"):
+        align_session(record.id, root=tva_root)
+    assert not (tva_root / "outside" / "session.json").exists()
+    assert store.session_json_path(tva_root, record.id).is_file()
+    with pytest.raises(ValueError, match="unsafe session id"):
+        compute_alignment(record.model_copy(update={"id": "../outside"}), root=tva_root)
+
+
 def test_align_not_in_bot_run_stages() -> None:
     assert ALLOWED_RUN_STAGES == ("transcribe", "extract")
     assert "align" not in ALLOWED_RUN_STAGES
@@ -271,6 +298,84 @@ def test_desk_exit_synthetic_residuals_and_confidence(tva_root: Path) -> None:
     assert alignment.confidence >= 0.9
     within = sum(1 for sample in alignment.samples if abs(sample.residual_s) <= 2.0)
     assert within / len(alignment.samples) >= 0.9
+
+
+def test_naive_start_still_fits_aware_clocks(tva_root: Path) -> None:
+    record = _session(tva_root)
+    payload = store.read_json(store.session_json_path(tva_root, record.id))
+    payload["recording"]["start_wallclock_vienna"] = START.replace(tzinfo=None).isoformat()
+    store.write_json(store.session_json_path(tva_root, record.id), payload)
+    rows = [_clock_row(float(i * 600), offset_s=1.8) for i in range(8)]
+    _write_clocks(tva_root, record.id, rows)
+    alignment = align_session(record.id, root=tva_root)
+    assert alignment.method == "ocr_clock"
+    assert alignment.offset_s == pytest.approx(1.8, abs=1e-6)
+
+
+def test_naive_ocr_clocks_still_fit(tva_root: Path) -> None:
+    record = _session(tva_root)
+    rows = []
+    for i in range(8):
+        video_t = float(i * 600)
+        wall = START + timedelta(seconds=video_t + 1.8)
+        rows.append(
+            OcrRow(
+                t=video_t,
+                roi="clock",
+                text=wall.strftime("%H:%M:%S"),
+                confidence=0.95,
+                parsed=wall.replace(tzinfo=None).isoformat(),
+            )
+        )
+    _write_clocks(tva_root, record.id, rows)
+    alignment = align_session(record.id, root=tva_root)
+    assert alignment.method == "ocr_clock"
+    assert alignment.offset_s == pytest.approx(1.8, abs=1e-6)
+    assert len(alignment.samples) == 8
+
+
+def test_unparseable_start_fail_closed(tva_root: Path) -> None:
+    record = _session(tva_root)
+    payload = store.read_json(store.session_json_path(tva_root, record.id))
+    payload["recording"]["start_wallclock_vienna"] = "not-a-timestamp"
+    store.write_json(store.session_json_path(tva_root, record.id), payload)
+    with pytest.raises(ValueError, match="unparseable start_wallclock_vienna"):
+        align_session(record.id, root=tva_root)
+    assert store.load_session(tva_root, record.id).alignment is None
+
+
+def test_nonfinite_manual_offset_rejected(tva_root: Path) -> None:
+    record = _session(tva_root)
+    with pytest.raises(ValueError, match="finite"):
+        align_session(record.id, root=tva_root, manual_offset=math.nan)
+    with pytest.raises(ValueError, match="finite"):
+        align_session(record.id, root=tva_root, manual_offset=math.inf)
+    assert store.load_session(tva_root, record.id).alignment is None
+    assert main(["--root", str(tva_root), "align", record.id, "--manual-offset", "nan"]) == 1
+
+
+def test_manual_offset_bias_lowers_confidence(tva_root: Path) -> None:
+    record = _session(tva_root)
+    rows = [_clock_row(float(i * 600), offset_s=1.8) for i in range(10)]
+    _write_clocks(tva_root, record.id, rows)
+    alignment = compute_alignment(store.load_session(tva_root, record.id), root=tva_root, manual_offset=61.8)
+    assert alignment.method == "manual"
+    assert alignment.offset_s == pytest.approx(61.8)
+    assert alignment.confidence < 0.8
+
+
+def test_invalidate_clears_alignment_when_record_id_differs(tva_root: Path) -> None:
+    record = _session(tva_root)
+    _write_clocks(tva_root, record.id, [_clock_row(0.0, offset_s=1.8)])
+    align_session(record.id, root=tva_root)
+    payload = store.read_json(store.session_json_path(tva_root, record.id))
+    payload["id"] = "other-id"
+    store.write_json(store.session_json_path(tva_root, record.id), payload)
+    store.invalidate_downstream(tva_root, record.id)
+    cleared = store.read_json(store.session_json_path(tva_root, record.id))
+    assert cleared["id"] == record.id
+    assert cleared["alignment"] is None
+    assert not store.session_json_path(tva_root, "other-id").exists()
 
 
 @pytest.mark.golden

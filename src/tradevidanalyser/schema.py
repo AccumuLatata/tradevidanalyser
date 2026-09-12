@@ -37,16 +37,16 @@ AlignmentMethod = Literal["ocr_clock", "filename", "chapter_fill", "manual"]
 
 
 class AlignmentSample(BaseModel):
-    video_t: float
+    video_t: float = Field(allow_inf_nan=False)
     ocr_text: str
     parsed_wallclock: str
-    residual_s: float
+    residual_s: float = Field(allow_inf_nan=False)
 
 
 class Alignment(BaseModel):
-    offset_s: float
-    drift_s_per_h: float
-    confidence: float
+    offset_s: float = Field(allow_inf_nan=False)
+    drift_s_per_h: float = Field(allow_inf_nan=False)
+    confidence: float = Field(ge=0, le=1, allow_inf_nan=False)
     method: AlignmentMethod
     samples: list[AlignmentSample] = Field(default_factory=list)
 
