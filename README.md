@@ -59,6 +59,7 @@ tva watch --source /path/to/obs --once
 tva wer 2026-09-11_143000 --ref path/to/reference.txt
 tva frames 2026-09-11_143000 --contact-sheet
 tva ocr 2026-09-11_143000
+tva clips 2026-09-11_143000 --redact
 tva serve --host 127.0.0.1 --port 8764
 ```
 
@@ -84,6 +85,11 @@ measured. Raw frames stay under `TVA_ROOT` (PII).
 time, P&L to a signed float, position to an int. Fake OCR is the default
 (`TVA_OCR_PROVIDER=fake`); `pip install 'tradevidanalyser[ocr]'` +
 `TVA_OCR_PROVIDER=paddleocr` is opt-in and never required in CI.
+
+`tva clips <id>` writes chapter windows (marker −30 s … +60 s) as
+`clips/<t>.mp4` with the mic track only (`-c copy`). `--redact` applies
+`layout.yaml` `*_mask` ROIs as black boxes (re-encodes video). The same
+masks are burned into every JPEG `tva frames` writes.
 
 ASR and extraction default to **fake** providers (`TVA_ASR_PROVIDER=fake`,
 `TVA_EXTRACT_PROVIDER=fake`) so CI and first-run never call a paid API.

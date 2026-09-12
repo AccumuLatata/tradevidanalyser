@@ -17,7 +17,7 @@ excerpt** that lives on the NAS, never in git.
 # cut 20 minutes starting at 01:10:00, stream copy
 ffmpeg -ss 01:10:00 -to 01:30:00 -i "2026-09-11 14-30-00.mp4" -c copy excerpt_raw.mp4
 
-# black-box the account / balance regions (coordinates from layout.yaml, pixels)
+# black-box the account / balance regions (or run tva clips --redact after ingest)
 ffmpeg -i excerpt_raw.mp4 \
   -vf "drawbox=x=1500:y=980:w=420:h=100:color=black:t=fill,drawbox=x=0:y=0:w=300:h=40:color=black:t=fill" \
   -c:a copy "2026-09-11 15-40-00.mp4"

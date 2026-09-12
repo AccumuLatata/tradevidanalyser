@@ -6,6 +6,7 @@ import math
 import os
 import re
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
@@ -173,12 +174,20 @@ def extract_frames(
     dest_dir = _under_root(store.frames_dir(root, session.id), root)
     dest_dir.mkdir(parents=True, exist_ok=True)
     frames: list[Path] = []
-    for t in chosen:
-        src, seek = media_for_time(session, root, t)
-        dest = store.frame_path(root, session.id, t)
-        _under_root(dest, dest_dir)
-        _extract_one(src, seek, dest)
-        frames.append(dest)
+    from tradevidanalyser.redact import redact_image
+
+    # Extract off-tree, then redact into frames/. A failed drawbox must not
+    # leave the unmasked JPEG at the public path (status.frames would say ok).
+    with tempfile.TemporaryDirectory(prefix="tva-frame-") as tmp:
+        tmp_dir = Path(tmp)
+        for t in chosen:
+            src, seek = media_for_time(session, root, t)
+            dest = store.frame_path(root, session.id, t)
+            _under_root(dest, dest_dir)
+            raw = tmp_dir / store.frame_filename(t)
+            _extract_one(src, seek, raw)
+            redact_image(raw, dest, layout)
+            frames.append(dest)
     sheet: Path | None = None
     if contact_sheet:
         if not frames:

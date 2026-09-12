@@ -9,9 +9,9 @@
 #
 # Required roi names (per layout_id): clock, position, pnl, instrument,
 # account_mask, balance_mask. Names ending in _mask are account / balance
-# regions. PR-14 redact.py black-boxes those before a frame leaves the
-# machine. Until then, raw JPEGs must stay under TVA_ROOT — never git, never
-# a hosted upload, never TVA_SERVE_MEDIA.
+# regions. PR-14 `redact.py` black-boxes those before `tva frames` writes
+# `frames/<t>.jpg`, and on `tva clips --redact` via ffmpeg drawbox. Raw
+# media still stays under TVA_ROOT — never git, never a hosted upload.
 #
 # Coordinates are normalised {x, y, w, h}. Values must be in 0..1.
 # PR-13 `tva ocr` crops clock / position / pnl / instrument (skips w=h=0 and

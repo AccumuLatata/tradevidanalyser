@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from tradevidanalyser import store
+from tradevidanalyser.clips import ClipResult, extract_clips
 from tradevidanalyser.frames import FramesResult, extract_frames
 from tradevidanalyser.ingest import ingest
 from tradevidanalyser.ocr import (
@@ -105,6 +106,21 @@ def ocr_session(
     except ValueError:
         pass
     return payload
+
+
+def clips_session(
+    session_id: str,
+    *,
+    root: Path,
+    redact: bool = False,
+    layout_id: str | None = None,
+) -> ClipResult:
+    if not store.is_safe_path_name(session_id):
+        raise ValueError(f"unsafe session id {session_id!r}")
+    record = store.load_session(root, session_id)
+    result = extract_clips(record, root=root, redact=redact, layout_id=layout_id)
+    store.compute_status(root, session_id)
+    return result
 
 
 def run_latest(

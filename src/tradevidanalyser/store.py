@@ -15,7 +15,7 @@ _FRAME_JPG = re.compile(r"^\d+\.\d{3}\.jpg$")
 CONTACT_SHEET_NAME = "contact_sheet.jpg"
 # Optional CLI stages. Never emit "missing"; do not resurrect a stale
 # "failed" when the artifact is gone (PR-11 bot pack: ?status=missing,failed).
-OPTIONAL_STAGES = frozenset({"frames", "ocr"})
+OPTIONAL_STAGES = frozenset({"frames", "ocr", "clips"})
 
 _STATUS_LOCK = threading.Lock()
 
@@ -66,6 +66,20 @@ def clip_path(root: Path, session_id: str, name: str) -> Path:
     return clips_dir(root, session_id) / name
 
 
+def list_clips(root: Path, session_id: str) -> list[Path]:
+    folder = clips_dir(root, session_id)
+    if not folder.is_dir():
+        return []
+    return sorted(
+        path
+        for path in folder.iterdir()
+        if path.is_file()
+        and path.suffix.lower() == ".mp4"
+        and is_safe_path_name(path.name)
+        and path.stat().st_size > 0
+    )
+
+
 def frames_dir(root: Path, session_id: str) -> Path:
     return config.session_dir(root, session_id) / "frames"
 
@@ -104,13 +118,16 @@ def list_frame_jpgs(root: Path, session_id: str) -> list[Path]:
 
 
 def invalidate_downstream(root: Path, session_id: str) -> None:
-    """Drop transcript/insights/frames so a changed recording is not left looking complete."""
+    """Drop transcript/insights/frames/clips so a changed recording is not left looking complete."""
     transcript_path(root, session_id).unlink(missing_ok=True)
     insights_path(root, session_id).unlink(missing_ok=True)
     ocr_path(root, session_id).unlink(missing_ok=True)
     frames = frames_dir(root, session_id)
     if frames.is_dir():
         shutil.rmtree(frames)
+    clips = clips_dir(root, session_id)
+    if clips.is_dir():
+        shutil.rmtree(clips)
 
 
 def load_session(root: Path, session_id: str) -> SessionRecord:
@@ -185,6 +202,8 @@ def _compute_status_locked(
     # locked PR-11 bot pack (GET ?status=missing, Sunday M count) stays put.
     if ocr_path(root, session_id).is_file():
         stages["ocr"] = "ok"
+    if list_clips(root, session_id):
+        stages["clips"] = "ok"
     path = status_path(root, session_id)
     previous: SessionStatus | None = None
     if path.is_file():
