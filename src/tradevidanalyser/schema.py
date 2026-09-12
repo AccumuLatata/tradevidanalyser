@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import BaseModel, Field
 
@@ -76,6 +76,28 @@ class CitedSpan(BaseModel):
     raw_text: str | None = None
 
 
+EventKind = Literal[
+    "hourly_checkin",
+    "bias_statement",
+    "no_trade_zone",
+    "trade_zone",
+    "tilt",
+    "break",
+    "rule_mention",
+    "brief_ref",
+    "grok_ref",
+]
+
+EVENT_KINDS: tuple[str, ...] = get_args(EventKind)
+
+
+class SessionEvent(BaseModel):
+    t: float
+    kind: EventKind
+    seg: str
+    text: str = ""
+
+
 class Insights(BaseModel):
     schema_version: str = SCHEMA_VERSION
     provider: str
@@ -90,6 +112,9 @@ class Insights(BaseModel):
     brief_refs: list[CitedSpan] = Field(default_factory=list)
     observations: list[CitedSpan] = Field(default_factory=list)
     gaps: list[str] = Field(default_factory=list)
+    session_events: list[SessionEvent] = Field(default_factory=list)
+    summary_de: str = ""
+    summary_en: str = ""
 
 
 StageState = Literal["ok", "missing", "failed", "ingesting"]

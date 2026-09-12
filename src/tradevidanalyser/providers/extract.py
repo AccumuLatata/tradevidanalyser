@@ -12,8 +12,17 @@ from typing import Any, Protocol
 
 import httpx
 
+from pydantic import BaseModel, Field
+
 from tradevidanalyser.glossary import load_glossary
-from tradevidanalyser.schema import CitedSpan, Insights, Transcript, TranscriptSegment
+from tradevidanalyser.schema import (
+    EVENT_KINDS,
+    CitedSpan,
+    Insights,
+    SessionEvent,
+    Transcript,
+    TranscriptSegment,
+)
 from tradevidanalyser.wer import contains_token
 
 _BIAS = re.compile(r"\b(bias|richtung|long|short|bullish|bearish)\b", re.IGNORECASE)
@@ -32,6 +41,10 @@ XAI_CHAT_URL = "https://api.x.ai/v1/chat/completions"
 # grok-4.6 is a reasoning model; xAI documents a 3600s client timeout.
 HTTP_TIMEOUT = 3600.0
 PROMPT_FILENAME = "insights_v1.de.md"
+EVENTS_PROMPT_FILENAME = "events_v1.de.md"
+SUMMARY_WORD_LIMIT = 120
+_DIGIT_RUN = re.compile(r"\d+")
+_WINDOW_EXCLUDE = frozenset({"session_events", "summary_de", "summary_en"})
 INSIGHT_SPAN_FIELDS = (
     "bias_statements",
     "playbooks_mentioned",
@@ -89,35 +102,60 @@ class FakeExtractProvider:
         if not transcript.segments:
             gaps.append("empty transcript")
 
+        bias = _hits(_BIAS, transcript)
+        checkins = _hits(_CHECKIN, transcript)
+        tilts = _hits(_TILT, transcript)
+        briefs = _hits(_BRIEF, transcript)
+        events: list[SessionEvent] = []
+        for span, kind in (
+            *((item, "bias_statement") for item in bias),
+            *((item, "hourly_checkin") for item in checkins),
+            *((item, "tilt") for item in tilts),
+            *((item, "rule_mention") for item in playbooks),
+        ):
+            events.append(
+                SessionEvent(t=span.t or 0.0, kind=kind, seg=span.seg, text=span.text)
+            )
+        for span in briefs:
+            if re.search(r"\bgrok\b", span.text, re.I):
+                events.append(
+                    SessionEvent(t=span.t or 0.0, kind="grok_ref", seg=span.seg, text=span.text)
+                )
+            if re.search(r"\b(brief|briefing)\b", span.text, re.I):
+                events.append(
+                    SessionEvent(t=span.t or 0.0, kind="brief_ref", seg=span.seg, text=span.text)
+                )
+
         return Insights(
             provider=self.name,
             model=self.model,
-            bias_statements=_hits(_BIAS, transcript),
+            bias_statements=bias,
             playbooks_mentioned=playbooks,
             stated_levels=levels,
             stated_stops_targets=stops,
-            checkins=_hits(_CHECKIN, transcript),
-            tilt_markers=_hits(_TILT, transcript),
-            brief_refs=_hits(_BRIEF, transcript),
+            checkins=checkins,
+            tilt_markers=tilts,
+            brief_refs=briefs,
             observations=[],
             gaps=gaps,
+            session_events=events,
         )
 
 
-def _walk_prompt_candidates(start: Path, *, levels: int) -> list[Path]:
-    """Walk *start* and its parents for prompts/insights_v1.de.md."""
+def _walk_prompt_candidates(start: Path, filename: str, *, levels: int) -> list[Path]:
+    """Walk *start* and its parents for prompts/<filename>."""
     found: list[Path] = []
     current = start
     for _ in range(levels):
-        found.append(current / "prompts" / PROMPT_FILENAME)
+        found.append(current / "prompts" / filename)
         if current.parent == current:
             break
         current = current.parent
     return found
 
 
-def default_prompt_path() -> Path:
-    """Resolve the repo prompt from this file, then cwd.
+def default_prompt_path(filename: str = PROMPT_FILENAME) -> Path:
+    """Resolve a repo prompt from this file, then cwd.
 
     ``extract.py`` lives one directory deeper than ``glossary.py``, so
     ``Path(__file__).parents[2]`` is ``src/`` and misses ``prompts/``.
@@ -125,8 +163,8 @@ def default_prompt_path() -> Path:
     is TVA_ROOT on the NAS.
     """
     here = Path(__file__).resolve()
-    candidates = _walk_prompt_candidates(here.parent, levels=8)
-    candidates.extend(_walk_prompt_candidates(Path.cwd(), levels=6))
+    candidates = _walk_prompt_candidates(here.parent, filename, levels=8)
+    candidates.extend(_walk_prompt_candidates(Path.cwd(), filename, levels=6))
     seen: set[Path] = set()
     for path in candidates:
         resolved = path.resolve() if path.exists() else path
@@ -135,7 +173,7 @@ def default_prompt_path() -> Path:
         seen.add(resolved)
         if path.is_file():
             return path
-    raise ExtractError(f"prompts/{PROMPT_FILENAME} not found")
+    raise ExtractError(f"prompts/{filename} not found")
 
 
 def prompt_version_for(path: Path) -> str:
@@ -144,8 +182,48 @@ def prompt_version_for(path: Path) -> str:
 
 
 def insights_json_schema() -> dict[str, Any]:
-    """JSON Schema for constrained Grok output, from the Pydantic Insights model."""
-    return Insights.model_json_schema()
+    """Window-pass schema: Insights minus PR-09 event/summary fields."""
+    schema = Insights.model_json_schema()
+    props = schema.get("properties")
+    if isinstance(props, dict):
+        for key in _WINDOW_EXCLUDE:
+            props.pop(key, None)
+    required = schema.get("required")
+    if isinstance(required, list):
+        schema["required"] = [key for key in required if key not in _WINDOW_EXCLUDE]
+    defs = schema.get("$defs")
+    if isinstance(defs, dict):
+        defs.pop("SessionEvent", None)
+    return schema
+
+
+class SessionEventDraft(BaseModel):
+    """Second-pass event: ids only. Text is re-hydrated from the transcript."""
+
+    kind: str
+    seg: str
+    t: float | None = None
+
+
+class EventsPass(BaseModel):
+    session_events: list[SessionEventDraft] = Field(default_factory=list)
+    summary_de: str = ""
+    summary_en: str = ""
+
+
+def events_pass_json_schema() -> dict[str, Any]:
+    """Second-pass schema: closed kind set, no extra properties (no event text)."""
+    schema = EventsPass.model_json_schema()
+    schema["additionalProperties"] = False
+    defs = schema.get("$defs")
+    if isinstance(defs, dict):
+        draft = defs.get("SessionEventDraft")
+        if isinstance(draft, dict):
+            props = draft.get("properties")
+            if isinstance(props, dict) and "kind" in props:
+                props["kind"] = {"type": "string", "enum": list(EVENT_KINDS)}
+            draft["additionalProperties"] = False
+    return schema
 
 
 def window_segments(
@@ -221,44 +299,112 @@ def _quote_in_segment(segment_text: str, quote: str) -> bool:
     return _nfc(quote) in _nfc(segment_text)
 
 
-def citation_problems(transcript: Transcript, insights: Insights) -> list[tuple[str, CitedSpan, str]]:
-    """Shared citation guard. pipeline._assert_citations raises; Grok drops into gaps."""
+def _span_problem(span: CitedSpan, known: dict[str, str]) -> str | None:
+    if span.seg not in known:
+        return f"citation {span.seg} is not in the transcript"
+    segment_text = known[span.seg]
+    if span.text and not _quote_in_segment(segment_text, span.text):
+        return f"quote not found in {span.seg}"
+    if span.raw_text and not _quote_in_segment(segment_text, span.raw_text):
+        return f"raw_text not found in {span.seg}"
+    if span.token and not (
+        contains_token(segment_text, span.token) or _quote_in_segment(segment_text, span.token)
+    ):
+        return f"token not found in {span.seg}"
+    return None
+
+
+def _event_problem(event: SessionEvent, known: dict[str, str]) -> str | None:
+    if event.kind not in EVENT_KINDS:
+        return f"unknown kind {event.kind!r}"
+    if event.seg not in known:
+        return f"citation {event.seg} is not in the transcript"
+    if event.text and not _quote_in_segment(known[event.seg], event.text):
+        return f"quote not found in {event.seg}"
+    return None
+
+
+def _cited_segment_blob(transcript: Transcript, insights: Insights) -> str:
+    """Concatenate text of segments that still have a valid citation or event."""
     known = {seg.id: seg.text for seg in transcript.segments}
-    problems: list[tuple[str, CitedSpan, str]] = []
+    segs: list[str] = []
+    seen: set[str] = set()
     for field in INSIGHT_SPAN_FIELDS:
         for span in getattr(insights, field):
-            if span.seg not in known:
-                problems.append((field, span, f"citation {span.seg} is not in the transcript"))
+            if _span_problem(span, known) is not None:
                 continue
-            segment_text = known[span.seg]
-            if span.text and not _quote_in_segment(segment_text, span.text):
-                problems.append((field, span, f"quote not found in {span.seg}"))
-            elif span.raw_text and not _quote_in_segment(segment_text, span.raw_text):
-                problems.append((field, span, f"raw_text not found in {span.seg}"))
-            elif span.token and not (
-                contains_token(segment_text, span.token)
-                or _quote_in_segment(segment_text, span.token)
-            ):
-                problems.append((field, span, f"token not found in {span.seg}"))
+            if not (span.text or span.raw_text or span.token):
+                continue
+            if span.seg not in seen:
+                seen.add(span.seg)
+                segs.append(span.seg)
+    for event in insights.session_events:
+        if _event_problem(event, known) is not None:
+            continue
+        if event.seg not in seen:
+            seen.add(event.seg)
+            segs.append(event.seg)
+    return " ".join(known[seg] for seg in segs if seg in known)
+
+
+def citation_problems(
+    transcript: Transcript, insights: Insights
+) -> list[tuple[str, CitedSpan | SessionEvent | str, str]]:
+    """Shared citation guard. pipeline._assert_citations raises; Grok drops into gaps."""
+    known = {seg.id: seg.text for seg in transcript.segments}
+    problems: list[tuple[str, CitedSpan | SessionEvent | str, str]] = []
+    for field in INSIGHT_SPAN_FIELDS:
+        for span in getattr(insights, field):
+            reason = _span_problem(span, known)
+            if reason:
+                problems.append((field, span, reason))
+    for event in insights.session_events:
+        reason = _event_problem(event, known)
+        if reason:
+            problems.append(("session_events", event, reason))
+    cited_runs = set(_DIGIT_RUN.findall(_nfc(_cited_segment_blob(transcript, insights))))
+    for field in ("summary_de", "summary_en"):
+        text = getattr(insights, field) or ""
+        if not text:
+            continue
+        if field == "summary_de" and len(text.split()) > SUMMARY_WORD_LIMIT:
+            problems.append((field, text, f"{field} exceeds {SUMMARY_WORD_LIMIT} words"))
+        for run in _DIGIT_RUN.findall(text):
+            if run not in cited_runs:
+                problems.append((field, text, f"{field} digit {run} not in cited segments"))
     return problems
 
 
 def apply_citation_guard(transcript: Transcript, insights: Insights) -> Insights:
-    """Drop offending spans into gaps[] with a reason instead of failing the stage."""
+    """Drop offending spans/events and leaky summaries into gaps[] instead of failing."""
     problems = citation_problems(transcript, insights)
     if not problems:
         return insights
     drop: dict[str, set[int]] = {field: set() for field in INSIGHT_SPAN_FIELDS}
+    drop_events: set[int] = set()
+    clear_summaries: set[str] = set()
     gaps = list(insights.gaps)
-    for field, span, reason in problems:
-        drop[field].add(id(span))
-        gaps.append(f"dropped {field} {span.seg}: {reason}")
-    cleaned: dict[str, list[CitedSpan]] = {}
+    for field, obj, reason in problems:
+        if field in INSIGHT_SPAN_FIELDS and isinstance(obj, CitedSpan):
+            drop[field].add(id(obj))
+            gaps.append(f"dropped {field} {obj.seg}: {reason}")
+        elif field == "session_events" and isinstance(obj, SessionEvent):
+            drop_events.add(id(obj))
+            gaps.append(f"dropped session_events {obj.seg}: {reason}")
+        elif field in {"summary_de", "summary_en"}:
+            clear_summaries.add(field)
+            gaps.append(f"dropped {field}: {reason}")
+    cleaned: dict[str, Any] = {}
     for field in INSIGHT_SPAN_FIELDS:
         marked = drop[field]
         cleaned[field] = [span for span in getattr(insights, field) if id(span) not in marked]
-    unique_gaps = sorted(set(gaps))
-    return insights.model_copy(update={**cleaned, "gaps": unique_gaps})
+    cleaned["session_events"] = [
+        event for event in insights.session_events if id(event) not in drop_events
+    ]
+    for field in clear_summaries:
+        cleaned[field] = ""
+    cleaned["gaps"] = sorted(set(gaps))
+    return insights.model_copy(update=cleaned)
 
 
 def _window_transcript(transcript: Transcript, window: list[Any]) -> Transcript:
@@ -283,6 +429,58 @@ def _format_window(segments: list[Any]) -> str:
     return "\n".join(lines)
 
 
+def _format_timeline_ids(
+    segments: list[Any], insights: Insights | None = None
+) -> str:
+    lines = [
+        "Zeitleiste. Nur seg-ids und Zeiten — keinen Segmenttext. Text setzt der Client.",
+        "",
+    ]
+    for seg in segments:
+        lines.append(f"{seg.id} t={seg.t0:.2f}–{seg.t1:.2f}")
+    if insights is not None:
+        cited_lines = []
+        for field in INSIGHT_SPAN_FIELDS:
+            segs = sorted({span.seg for span in getattr(insights, field)})
+            if segs:
+                cited_lines.append(f"{field}: {', '.join(segs)}")
+        if cited_lines:
+            lines.append("")
+            lines.append("Fenster-Fundstellen (nur seg-ids, kein Text):")
+            lines.extend(cited_lines)
+    return "\n".join(lines)
+
+
+def hydrate_session_events(
+    drafts: list[SessionEventDraft],
+    transcript: Transcript,
+) -> tuple[list[SessionEvent], list[str]]:
+    """Fill event.text from the transcript. Drop unknown segs or kinds."""
+    known = {seg.id: seg for seg in transcript.segments}
+    events: list[SessionEvent] = []
+    gaps: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for draft in drafts:
+        if draft.kind not in EVENT_KINDS:
+            gaps.append(f"dropped session_events {draft.seg}: unknown kind {draft.kind!r}")
+            continue
+        segment = known.get(draft.seg)
+        if segment is None:
+            gaps.append(
+                f"dropped session_events {draft.seg}: citation {draft.seg} is not in the transcript"
+            )
+            continue
+        key = (draft.kind, draft.seg)
+        if key in seen:
+            continue
+        seen.add(key)
+        events.append(
+            SessionEvent(t=segment.t0, kind=draft.kind, seg=draft.seg, text=segment.text)
+        )
+    events.sort(key=lambda item: (item.t, item.seg, item.kind))
+    return events, gaps
+
+
 def _message_content(message: dict[str, Any]) -> str:
     content = message.get("content")
     if isinstance(content, str):
@@ -300,7 +498,7 @@ def _message_content(message: dict[str, Any]) -> str:
     return ""
 
 
-def insights_from_chat_payload(payload: dict[str, Any]) -> Insights:
+def _payload_body(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ExtractError("Grok returned a non-object JSON body")
     choices = payload.get("choices")
@@ -328,6 +526,21 @@ def insights_from_chat_payload(payload: dict[str, Any]) -> Insights:
             raise ExtractError("Grok message content is not JSON") from exc
     if not isinstance(body, dict):
         raise ExtractError("Grok JSON content is not an object")
+    return body
+
+
+def events_from_chat_payload(payload: dict[str, Any]) -> EventsPass:
+    body = _payload_body(payload)
+    try:
+        return EventsPass.model_validate(body)
+    except (TypeError, ValueError) as exc:
+        raise ExtractError(f"Grok JSON did not match EventsPass: {exc}") from exc
+
+
+def insights_from_chat_payload(payload: dict[str, Any]) -> Insights:
+    body = _payload_body(payload)
+    for key in _WINDOW_EXCLUDE:
+        body.pop(key, None)
     body.setdefault("provider", "grok")
     body.setdefault("model", "unknown")
     try:
@@ -364,7 +577,9 @@ class GrokExtractProvider:
             raise ExtractError("XAI_API_KEY is unset. Set it or use TVA_EXTRACT_PROVIDER=fake.")
         path = self.prompt_path or default_prompt_path()
         system_prompt = path.read_text(encoding="utf-8")
-        version = prompt_version_for(path)
+        events_path = default_prompt_path(EVENTS_PROMPT_FILENAME)
+        events_prompt = events_path.read_text(encoding="utf-8")
+        version = f"{prompt_version_for(path)}+{prompt_version_for(events_path)}"
         windows = window_segments(
             list(transcript.segments),
             size=self.window_size,
@@ -389,18 +604,37 @@ class GrokExtractProvider:
                     system_prompt=system_prompt,
                     user_prompt=_format_window(window),
                     schema=schema,
+                    schema_name="insights",
                 )
                 part = insights_from_chat_payload(payload)
                 parts.append(apply_citation_guard(_window_transcript(transcript, window), part))
+            merged = merge_partial_insights(
+                parts,
+                provider=self.name,
+                model=self.model,
+                prompt_version=version,
+            )
+            events_payload = self._complete(
+                client,
+                key=key,
+                system_prompt=events_prompt,
+                user_prompt=_format_timeline_ids(list(transcript.segments), merged),
+                schema=events_pass_json_schema(),
+                schema_name="session_events",
+            )
+            draft = events_from_chat_payload(events_payload)
+            events, event_gaps = hydrate_session_events(draft.session_events, transcript)
+            merged = merged.model_copy(
+                update={
+                    "session_events": events,
+                    "summary_de": draft.summary_de,
+                    "summary_en": draft.summary_en,
+                    "gaps": sorted(set(merged.gaps) | set(event_gaps)),
+                }
+            )
         finally:
             if owns_client:
                 client.close()
-        merged = merge_partial_insights(
-            parts,
-            provider=self.name,
-            model=self.model,
-            prompt_version=version,
-        )
         return apply_citation_guard(transcript, merged)
 
     def _complete(
@@ -411,6 +645,7 @@ class GrokExtractProvider:
         system_prompt: str,
         user_prompt: str,
         schema: dict[str, Any],
+        schema_name: str = "insights",
     ) -> dict[str, Any]:
         body = {
             "model": self.model,
@@ -421,7 +656,7 @@ class GrokExtractProvider:
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {
-                    "name": "insights",
+                    "name": schema_name,
                     "strict": True,
                     "schema": schema,
                 },

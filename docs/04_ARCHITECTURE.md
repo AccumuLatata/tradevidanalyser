@@ -151,9 +151,16 @@ insights:                        # model-derived, every field cited or null
   brief_refs: [{seg, text}]
   observations: [{seg, text}]    # labelled interpretation
   gaps: [string]                 # what the extractor could not hear
-  # PR-08: provider/model/prompt_version on the file; grok windows ≤40 / overlap 5
+  session_events: [{t, kind, seg, text}]
+    # kind ∈ hourly_checkin|bias_statement|no_trade_zone|trade_zone|tilt|
+    #         break|rule_mention|brief_ref|grok_ref
+  summary_de: string             # labelled prose, ≤ 120 words
+  summary_en: string
+  # PR-08: provider/model/prompt_version; grok windows ≤40 / overlap 5
   # citation failures drop into gaps[] (unknown seg or fabricated quote)
-  # session_events / summary_de / summary_en are PR-09
+  # PR-09: events from a second pass (ids + first-pass citation ids, no
+  # transcript text; event text re-hydrated); summaries drop if they contain
+  # a digit run that is not an exact digit run in any *valid* cited segment
 
 fills: null                      # later
 trades: null                     # later
@@ -171,6 +178,12 @@ PR-08 extractor: `tva extract --provider grok` (`XAI_API_KEY`, optional
 `TVA_EXTRACT_MODEL`). System prompt is `prompts/insights_v1.de.md`;
 `prompt_version` is `{stem}+{sha256[:12]}`. Fake keyword scan stays the
 default so CI never calls xAI.
+
+PR-09: additive `session_events` / `summary_de` / `summary_en` on the same
+`schema_version: "1"`. Grok’s second pass uses `prompts/events_v1.de.md`
+and the closed `kind` set above. The citation guard covers events and
+rejects summaries whose digit runs are not exact runs in a valid cited
+segment (`summary_de` also capped at 120 words).
 
 ---
 
