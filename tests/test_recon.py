@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -131,6 +131,37 @@ def test_recon_status_by_instrument(tmp_path: Path) -> None:
     assert lookup_recon_status(date(2026, 6, 13), "MES", mapping) is None
 
 
+def test_unmatched_instrument_same_day_is_null(tva_root: Path, tmp_path: Path) -> None:
+    """DayReconcile key is (session_date, instrument). Do not reuse a lone same-day status."""
+    record = _session(tva_root)
+    recon = _write_reconcile(
+        tmp_path / "reconcile.json",
+        [{"session_date": "2026-05-14", "instrument": "MES", "status": "pnl_mismatch"}],
+    )
+    result = fills_session(
+        record.id,
+        root=tva_root,
+        executions=SYNTHETIC,
+        venue="amp",
+        reconcile_dir=recon,
+    )
+    assert result.recon_attached == 0
+    statuses = pq.read_table(store.trades_path(tva_root, record.id)).column("recon_status")
+    assert statuses.to_pylist() == [None, None]
+
+
+def test_lookup_does_not_reuse_same_day_status() -> None:
+    mapping = {(date(2026, 5, 14), "MES"): "reconciled"}
+    assert lookup_recon_status(date(2026, 5, 14), "MNQ", mapping) is None
+    assert lookup_recon_status(date(2026, 5, 14), "MES", mapping) == "reconciled"
+
+
+def test_lookup_normalizes_datetime_session_date() -> None:
+    mapping = {(date(2026, 5, 14), "MNQ"): "reconciled"}
+    instant = datetime(2026, 5, 14, 16, 0, tzinfo=timezone.utc)
+    assert lookup_recon_status(instant, " MNQ ", mapping) == "reconciled"
+
+
 def test_unmatched_day_is_null(tva_root: Path, tmp_path: Path) -> None:
     record = _session(tva_root)
     recon = _write_reconcile(
@@ -155,6 +186,25 @@ def test_without_reconcile_dir_omits_column(tva_root: Path) -> None:
     assert "recon_status" not in trades.column_names
 
 
+def test_rerun_without_reconcile_dir_omits_column(tva_root: Path, tmp_path: Path) -> None:
+    record = _session(tva_root)
+    recon = _write_reconcile(
+        tmp_path / "reconcile.json",
+        [{"session_date": "2026-05-14", "instrument": "MNQ", "status": "reconciled"}],
+    )
+    fills_session(
+        record.id,
+        root=tva_root,
+        executions=SYNTHETIC,
+        venue="amp",
+        reconcile_dir=recon,
+    )
+    assert "recon_status" in pq.read_table(store.trades_path(tva_root, record.id)).column_names
+    fills_session(record.id, root=tva_root, executions=SYNTHETIC, venue="amp")
+    trades = pq.read_table(store.trades_path(tva_root, record.id))
+    assert "recon_status" not in trades.column_names
+
+
 def test_missing_reconcile_json_errors(tva_root: Path, tmp_path: Path) -> None:
     record = _session(tva_root)
     with pytest.raises(FillsError, match="reconcile.json"):
@@ -174,6 +224,95 @@ def test_unknown_status_fails_closed(tmp_path: Path) -> None:
     )
     with pytest.raises(FillsError, match="status"):
         load_reconcile_status_map(path)
+
+
+def test_missing_reconcile_errors_even_when_no_fills(tva_root: Path, tmp_path: Path) -> None:
+    record = _session(
+        tva_root,
+        session_id="2026-09-11_143000",
+        start="2026-09-11T14:30:00+02:00",
+    )
+    with pytest.raises(FillsError, match="reconcile.json"):
+        fills_session(
+            record.id,
+            root=tva_root,
+            executions=SYNTHETIC,
+            venue="amp",
+            reconcile_dir=tmp_path / "empty",
+        )
+
+
+def test_non_object_reconcile_json_fails_closed(tmp_path: Path) -> None:
+    path = tmp_path / "reconcile.json"
+    path.write_text("[]\n", encoding="utf-8")
+    with pytest.raises(FillsError, match="object"):
+        load_reconcile_status_map(path)
+
+
+def test_cli_non_object_reconcile_is_error(tva_root: Path, tmp_path: Path, capsys) -> None:
+    record = _session(tva_root)
+    recon = tmp_path / "reconcile.json"
+    recon.write_text("[]\n", encoding="utf-8")
+    assert (
+        main(
+            [
+                "--root",
+                str(tva_root),
+                "fills",
+                record.id,
+                "--executions",
+                str(SYNTHETIC),
+                "--venue",
+                "amp",
+                "--reconcile-dir",
+                str(recon),
+            ]
+        )
+        == 1
+    )
+    out = json.loads(capsys.readouterr().out)
+    assert "error" in out
+    assert "object" in out["error"]
+
+
+def test_conflicting_status_fails_closed(tmp_path: Path) -> None:
+    path = _write_reconcile(
+        tmp_path / "reconcile.json",
+        [
+            {"session_date": "2026-05-14", "instrument": "MNQ", "status": "reconciled"},
+            {"session_date": "2026-05-14", "instrument": "MNQ", "status": "pnl_mismatch"},
+        ],
+    )
+    with pytest.raises(FillsError, match="conflicting"):
+        load_reconcile_status_map(path)
+
+
+def test_wrong_schema_version_fails_closed(tmp_path: Path) -> None:
+    path = tmp_path / "reconcile.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "journal/v0",
+                "days": [
+                    {"session_date": "2026-05-14", "instrument": "MNQ", "status": "reconciled"}
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(FillsError, match="schema_version"):
+        load_reconcile_status_map(path)
+
+
+@pytest.mark.parametrize("status", sorted(RECON_STATUSES))
+def test_all_recon_statuses_accepted(tmp_path: Path, status: str) -> None:
+    path = _write_reconcile(
+        tmp_path / "reconcile.json",
+        [{"session_date": "2026-05-14", "instrument": "MNQ", "status": status}],
+    )
+    mapping = load_reconcile_status_map(path)
+    assert mapping[(date(2026, 5, 14), "MNQ")] == status
 
 
 def test_attach_does_not_parse_pdf(tmp_path: Path) -> None:
