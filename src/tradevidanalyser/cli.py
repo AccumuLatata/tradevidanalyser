@@ -12,6 +12,7 @@ from tradevidanalyser.doctor import run_doctor
 from tradevidanalyser.ingest import ingest
 from tradevidanalyser.pipeline import extract_session, run_latest, transcribe_session
 from tradevidanalyser.serve import create_app
+from tradevidanalyser.wer import score_session
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -41,6 +42,10 @@ def main(argv: list[str] | None = None) -> int:
     p_run = sub.add_parser("run", help="ingest (optional) + transcribe + extract")
     p_run.add_argument("--latest", action="store_true", help="use the newest session")
     p_run.add_argument("video", nargs="?", type=Path)
+
+    p_wer = sub.add_parser("wer", help="WER and jargon recall vs a reference transcript")
+    p_wer.add_argument("session")
+    p_wer.add_argument("--ref", type=Path, required=True, help="hand-corrected reference .txt")
 
     p_serve = sub.add_parser("serve", help="HTTP API over TVA_ROOT")
     p_serve.add_argument("--host", default="127.0.0.1")
@@ -76,6 +81,9 @@ def main(argv: list[str] | None = None) -> int:
             record = run_latest(root, video=video)
             status = store.compute_status(root, record.id)
             _emit(status.model_dump(mode="json"), as_json=True)
+            return 0
+        if args.cmd == "wer":
+            _emit(score_session(args.session, ref=args.ref, root=root), as_json=True)
             return 0
         if args.cmd == "serve":
             import uvicorn

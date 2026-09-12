@@ -40,12 +40,17 @@ tva run --latest
 tva run "2026-09-11 14-30-00.mp4"
 tva status
 tva doctor
+tva wer 2026-09-11_143000 --ref path/to/reference.txt
 tva serve --host 127.0.0.1 --port 8764
 ```
 
 OBS filenames must be `%CCYY-%MM-%DD %hh-%mm-%ss`. Record to the trading PC
 disk, then copy the file into `$TVA_ROOT/recordings/` (or pass the path to
 `tva ingest`, which copies it there).
+
+`tva wer` prints JSON `{wer, jargon_recall, n_words}` against a
+hand-corrected reference (the golden excerpt on the NAS). It uses
+[`docs/GLOSSARY.md`](docs/GLOSSARY.md) for jargon tokens.
 
 ASR and extraction default to **fake** providers (`TVA_ASR_PROVIDER=fake`,
 `TVA_EXTRACT_PROVIDER=fake`) so CI and first-run never call a paid API.
