@@ -17,6 +17,7 @@ Python 3.11+, `ffmpeg` / `ffprobe` on PATH.
 | Host | Install | `TVA_ASR_PROVIDER` | Notes |
 |---|---|---|---|
 | CI / first-run | `pip install -e ".[dev]"` | `fake` (default) | No GPU, no model download, no API key |
+| Trading PC OCR | `pip install -e ".[dev,ocr]"` | ASR unchanged; `TVA_OCR_PROVIDER=paddleocr` | Optional PaddleOCR extra. Fake OCR stays the default |
 | Trading PC (CUDA) | `pip install -e ".[dev,whisperx]"` | `whisperx` | `compute_type=float16`; install a CUDA torch wheel from pytorch.org if pip gave you CPU-only |
 | Mac (CPU) | `pip install -e ".[dev,whisperx]"` | `whisperx` | `compute_type=int8` + a warning; slow. Prefer the PC GPU or hosted ASR |
 | Mac hosted fallback | `pip install -e ".[dev]"` | `deepgram` | `DEEPGRAM_API_KEY`; uploads `audio/mic.opus` only. Scribe is reserved, not the PR-05 pick |
@@ -57,6 +58,7 @@ tva doctor
 tva watch --source /path/to/obs --once
 tva wer 2026-09-11_143000 --ref path/to/reference.txt
 tva frames 2026-09-11_143000 --contact-sheet
+tva ocr 2026-09-11_143000
 tva serve --host 127.0.0.1 --port 8764
 ```
 
@@ -76,6 +78,12 @@ hand-corrected reference (the golden excerpt on the NAS). It uses
 to `$TVA_ROOT/sessions/<id>/frames/`. `--contact-sheet` adds
 `frames/contact_sheet.jpg` so ROIs in [`layout.yaml`](layout.yaml) can be
 measured. Raw frames stay under `TVA_ROOT` (PII).
+
+`tva ocr <id>` reads those frames through `layout.yaml` ROIs and writes
+`ocr.parquet` (`t, roi, text, confidence, parsed`). Clock parses to ISO
+time, P&L to a signed float, position to an int. Fake OCR is the default
+(`TVA_OCR_PROVIDER=fake`); `pip install 'tradevidanalyser[ocr]'` +
+`TVA_OCR_PROVIDER=paddleocr` is opt-in and never required in CI.
 
 ASR and extraction default to **fake** providers (`TVA_ASR_PROVIDER=fake`,
 `TVA_EXTRACT_PROVIDER=fake`) so CI and first-run never call a paid API.

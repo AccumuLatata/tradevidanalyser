@@ -14,7 +14,9 @@
 # a hosted upload, never TVA_SERVE_MEDIA.
 #
 # Coordinates are normalised {x, y, w, h}. Values must be in 0..1.
-# PR-13 ocr.py reads clock / position / pnl / instrument from these crops.
+# PR-13 `tva ocr` crops clock / position / pnl / instrument (skips w=h=0 and
+# *_mask). parsed: ISO datetime for clock, signed float for pnl, int for
+# position, null for instrument / low confidence. Fake OCR is the default.
 schema_version: "1"
 layouts:
   quantower_default:

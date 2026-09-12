@@ -11,7 +11,13 @@ from pathlib import Path
 from tradevidanalyser import __version__, config, store
 from tradevidanalyser.doctor import run_doctor
 from tradevidanalyser.ingest import ingest
-from tradevidanalyser.pipeline import extract_session, frames_session, run_latest, transcribe_session
+from tradevidanalyser.pipeline import (
+    extract_session,
+    frames_session,
+    ocr_session,
+    run_latest,
+    transcribe_session,
+)
 from tradevidanalyser.serve import create_app, token_required_for_host
 from tradevidanalyser.watch import watch
 from tradevidanalyser.wer import score_session
@@ -82,6 +88,10 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="also write frames/contact_sheet.jpg (stays under TVA_ROOT)",
     )
+
+    p_ocr = sub.add_parser("ocr", help="ROI OCR of chapter frames → ocr.parquet")
+    p_ocr.add_argument("session")
+    p_ocr.add_argument("--provider", default=None, help="fake (default) or paddleocr")
 
     p_serve = sub.add_parser("serve", help="HTTP API over TVA_ROOT")
     p_serve.add_argument("--host", default="127.0.0.1")
@@ -159,6 +169,12 @@ def main(argv: list[str] | None = None) -> int:
                 contact_sheet=args.contact_sheet,
             )
             _emit(result.as_dict(root), as_json=True)
+            return 0
+        if args.cmd == "ocr":
+            _emit(
+                ocr_session(args.session, root=root, provider_name=args.provider),
+                as_json=True,
+            )
             return 0
         if args.cmd == "serve":
             import uvicorn

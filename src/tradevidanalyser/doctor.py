@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from tradevidanalyser import __version__, media
+from tradevidanalyser.ocr import paddleocr_importable
 from tradevidanalyser.providers.asr import cuda_available, whisperx_importable
 from tradevidanalyser.schema import DoctorCheck, DoctorReport
 
@@ -129,6 +130,17 @@ def run_doctor(root: Path) -> DoctorReport:
     else:
         dg_status, dg_detail = "warn", "DEEPGRAM_API_KEY unset (hosted ASR uses fake unless set)"
     checks.append(DoctorCheck(id="deepgram_key", status=dg_status, detail=dg_detail))
+
+    ocr_provider = (os.environ.get("TVA_OCR_PROVIDER") or "fake").strip().lower() or "fake"
+    paddle_ok = paddleocr_importable()
+    if paddle_ok:
+        ocr_status, ocr_detail = "ok", "paddleocr importable"
+    elif ocr_provider in {"paddleocr", "paddle", "ppocr"}:
+        ocr_status = "fail"
+        ocr_detail = "TVA_OCR_PROVIDER=paddleocr but paddleocr is not installed"
+    else:
+        ocr_status, ocr_detail = "warn", "paddleocr not installed (pip install 'tradevidanalyser[ocr]')"
+    checks.append(DoctorCheck(id="paddleocr", status=ocr_status, detail=ocr_detail))
 
     el_key = bool((os.environ.get("ELEVENLABS_API_KEY") or "").strip())
     checks.append(

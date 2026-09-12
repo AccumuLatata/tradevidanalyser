@@ -112,7 +112,8 @@ Every stage is a CLI subcommand, idempotent, writing into
 | Register | `tva ingest <video.mp4>` | `POST /sessions` (path on NAS) | `session.json`, `audio/mic.opus` | yes |
 | Transcribe | `tva transcribe <session>` | (kicked by `POST /sessions/{id}/run`) | `transcript.json` | yes |
 | Extract | `tva extract <session>` | same | `insights.json` (cited) | yes |
-| Frames | `tva frames <session> [--at t…] [--contact-sheet]` | CLI (keyframes stay on `TVA_ROOT`; not a bot media route) | `frames/<t>.jpg` + optional contact sheet; OCR/clips later | yes, optional |
+| Frames | `tva frames <session> [--at t…] [--contact-sheet]` | CLI (keyframes stay on `TVA_ROOT`; not a bot media route) | `frames/<t>.jpg` + optional contact sheet | yes, optional |
+| OCR | `tva ocr <session>` | CLI (not a bot run stage) | `ocr.parquet` (`t, roi, text, confidence, parsed`) | yes, optional |
 | Status | `tva status` | `GET /sessions`, `GET /sessions/latest` | stage states | yes |
 | Read | — | `GET /sessions/{id}`, `/transcript`, `/insights` | JSON | yes |
 | Doctor | `tva doctor` | `GET /health` | ffmpeg / GPU / keys / NAS mount | yes |
