@@ -44,7 +44,7 @@ tva = "tradevidanalyser.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-tradevidanalyser = ["layout.yaml"]
+tradevidanalyser = ["layout.yaml", "rules.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

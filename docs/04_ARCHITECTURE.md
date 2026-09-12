@@ -122,7 +122,7 @@ Every stage is a CLI subcommand, idempotent, writing into
 | Fills | `tva fills <session> --executions <csv> --venue topstepx\|amp` | CLI (not a bot run stage) | `fills.parquet` / `trades.parquet` | yes, optional |
 | Align | `tva align <session> [--manual-offset s]` | CLI (not a bot run stage) | `session.alignment` (offset/drift/confidence/method/samples) | yes, optional |
 | Evidence | `tva evidence <session>` | CLI (not a bot run stage) | `evidence.json` per-trade windows + cited stated fields | yes, optional |
-| Rules | `tva rules <session>` | — | scorecard | **later** |
+| Rules | `tva rules <session>` | CLI (not a bot run stage) | `rules.json` deterministic scorecard from `trades.parquet` | yes, optional |
 | Context | `tva context <session>` | — | briefs + ThesisTester attribution | **later** |
 
 `tva run --latest` is the scheduler entry on the PC. `tva serve` is the
@@ -181,7 +181,11 @@ evidence:                        # PR-19; omit until `tva evidence`
 
 fills: null                      # later
 trades: null                     # later
-rule_checks: null                # later
+rules:                           # PR-20; omit until `tva rules`
+  [{rule: R-DLL|R-MAX10|R-3L30|R-5M|R-REENTRY|R-CLOSE,
+    status: pass|violated|unverifiable, evidence{…}, reason?}]
+  # thresholds in rules.yaml; daily_loss_limit_usd / flat_by null → unverifiable
+  # deterministic; trades.parquet only; never the model
 context: null                    # later — briefs, DRC, lab
 
 provenance: {app_version, ffmpeg, models, created_at}

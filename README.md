@@ -66,6 +66,7 @@ tva fills 2026-09-11_143000 --executions executions.csv --venue amp --reconcile-
 tva align 2026-09-11_143000
 tva align 2026-09-11_143000 --manual-offset 1.8
 tva evidence 2026-09-11_143000
+tva rules 2026-09-11_143000
 tva serve --host 127.0.0.1 --port 8764
 ```
 
@@ -130,6 +131,13 @@ nearest frames/ocr/clip, and `alignment_confidence`. Confidence below 0.8
 sets `alignment: low`. A trade with no speech keeps `stated` all null and
 records a gap. Fake extract is the default; citations are required or
 dropped. Not a bot `POST /run` stage.
+
+`tva rules <id>` writes `rules.json` from `trades.parquet` only
+(R-DLL, R-MAX10, R-3L30, R-5M, R-REENTRY, R-CLOSE). Thresholds live in
+[`rules.yaml`](rules.yaml). `daily_loss_limit_usd` is null (D4 parked) so
+R-DLL is `unverifiable` until the desk sets it. PnL prefers
+`net_pnl_currency`, else `gross_pnl_currency` with a `fees_unknown` note.
+Deterministic — no model. Not a bot `POST /run` stage.
 
 ASR and extraction default to **fake** providers (`TVA_ASR_PROVIDER=fake`,
 `TVA_EXTRACT_PROVIDER=fake`) so CI and first-run never call a paid API.

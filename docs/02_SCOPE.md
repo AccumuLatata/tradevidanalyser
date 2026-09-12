@@ -86,9 +86,10 @@ They wait until v1 is boring and reliable.
    recorded as `method=manual`). `tva evidence` (PR-19) maps each
    `tva_trade_id` to a video window, cited `stated` fields, and nearest
    frames/ocr/clip. `alignment.confidence < 0.8` flags `alignment: low`.
-   Rule scorecard is still later.
-9. **Rule scorecard** — the catalog in §6, including the $100 vs $200 daily
-   loss question. Needs fills. Parked (see D4).
+9. **Rule scorecard** — `tva rules` (PR-20) grades R-DLL…R-CLOSE from
+   `trades.parquet` only. `daily_loss_limit_usd` stays null (D4 parked)
+   so R-DLL is `unverifiable` until the desk sets $100 or $200 in
+   `rules.yaml`. Evidence-backed rules (R-PLAYBOOK…) are still later.
 10. **ThesisTester join** — `journal attribute` / `zones` / `triggers` next
     to spoken setup names. "He said ONH; the lab tagged pdPOC."
 11. **Daily debrief page + coaching ledger + Notion publish** — Grok can
@@ -132,12 +133,14 @@ They wait until v1 is boring and reliable.
 
 ---
 
-## 7. Rule catalog (parked until TVA4+)
+## 7. Rule catalog
 
-Kept so it is not forgotten. **None of this is a v1 deliverable.** D4
-(daily loss $100 vs $200) only matters here.
+Deterministic fills-only rules landed in PR-20 (`tva rules`).
+Evidence-backed rows stay later (PR-21). D4 (daily loss $100 vs $200)
+is still parked: `rules.yaml` `daily_loss_limit_usd: null` → R-DLL
+`unverifiable`.
 
-Decidable from fills alone (deterministic):
+Decidable from fills alone (deterministic, PR-20):
 
 | id | Rule | Check |
 |---|---|---|
