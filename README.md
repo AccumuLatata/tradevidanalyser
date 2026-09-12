@@ -132,12 +132,18 @@ sets `alignment: low`. A trade with no speech keeps `stated` all null and
 records a gap. Fake extract is the default; citations are required or
 dropped. Not a bot `POST /run` stage.
 
-`tva rules <id>` writes `rules.json` from `trades.parquet` only
-(R-DLL, R-MAX10, R-3L30, R-5M, R-REENTRY, R-CLOSE). Thresholds live in
-[`rules.yaml`](rules.yaml). `daily_loss_limit_usd` is null (D4 parked) so
-R-DLL is `unverifiable` until the desk sets it. PnL prefers
-`net_pnl_currency`, else `gross_pnl_currency` with a `fees_unknown` note.
-Deterministic — no model. Not a bot `POST /run` stage.
+`tva rules <id>` writes `rules.json` from `trades.parquet` (R-DLL,
+R-MAX10, R-3L30, R-5M, R-REENTRY, R-CLOSE) and, when present,
+`evidence.json` / `insights.session_events` (R-PLAYBOOK, R-DEFINED,
+R-3C-CT, R-ARRIVAL, R-SLTP, R-HOURLY, R-ZONE, R-BIAS, R-TILT). Absent
+speech is `unverifiable`, never `pass`. An evidence-backed `pass` always
+cites a segment. R-SLTP stays `unverifiable` until a venue adapter can
+see order modifications. Thresholds live in [`rules.yaml`](rules.yaml).
+`daily_loss_limit_usd` is null (D4 parked) so R-DLL is `unverifiable`
+until the desk sets it. PnL prefers `net_pnl_currency`, else
+`gross_pnl_currency` with a `fees_unknown` note. Deterministic fills
+rows never call a model; evidence-backed rows read already-written
+files. Not a bot `POST /run` stage.
 
 ASR and extraction default to **fake** providers (`TVA_ASR_PROVIDER=fake`,
 `TVA_EXTRACT_PROVIDER=fake`) so CI and first-run never call a paid API.

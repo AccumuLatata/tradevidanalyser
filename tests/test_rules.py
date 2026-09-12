@@ -14,6 +14,7 @@ from tradevidanalyser.ingest import ingest
 from tradevidanalyser.pipeline import extract_session, fills_session, transcribe_session
 from tradevidanalyser.rules import (
     ENV_RULES,
+    EVIDENCE_BACKED_RULE_IDS,
     RULE_IDS,
     ReentryConfig,
     RuleTrade,
@@ -355,7 +356,9 @@ def test_catalog_order_and_no_model() -> None:
     text = src.read_text(encoding="utf-8")
     assert "providers" not in text
     assert "extract" not in text
-    assert "evidence.json" not in text
+    backed = [item for item in checks if item.rule in EVIDENCE_BACKED_RULE_IDS]
+    assert [item.rule for item in backed] == list(EVIDENCE_BACKED_RULE_IDS)
+    assert all(item.status == "unverifiable" for item in backed)
 
 
 def _session(root: Path, session_id: str = "2026-09-11_143000") -> SessionRecord:
@@ -412,6 +415,9 @@ def test_cli_rules_writes_facts_and_omits_until_run(tva_root: Path, capsys) -> N
     assert by_id["R-DLL"]["status"] == "unverifiable"
     assert by_id["R-MAX10"]["status"] == "pass"
     assert by_id["R-CLOSE"]["status"] == "unverifiable"
+    assert by_id["R-PLAYBOOK"]["status"] == "unverifiable"
+    assert by_id["R-SLTP"]["status"] == "unverifiable"
+    assert set(by_id) >= set(RULE_IDS)
     assert store.compute_status(tva_root, record.id).stages["rules"] == "ok"
     first = store.rules_path(tva_root, record.id).read_text(encoding="utf-8")
     assert main(["--root", str(tva_root), "rules", record.id]) == 0

@@ -1,12 +1,13 @@
-"""Deterministic rule scorecard from ``trades.parquet`` only (PR-20)."""
+"""Rule scorecard: deterministic fills rules plus evidence-backed speech rules."""
 
 from __future__ import annotations
 
 import math
 import os
 import re
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -14,11 +15,37 @@ import pyarrow.parquet as pq
 
 from tradevidanalyser import store
 from tradevidanalyser.fills_mirror import JOURNAL_EXCHANGE_TZ, JOURNAL_TICK_SIZE
-from tradevidanalyser.schema import RuleCheck, RuleStatus, RulesReport, SessionRecord
+from tradevidanalyser.schema import (
+    Alignment,
+    Evidence,
+    EvidenceTrade,
+    RuleCheck,
+    RuleStatus,
+    RulesReport,
+    SessionEvent,
+    SessionRecord,
+)
 
 SCHEMA_VERSION = "1"
 ENV_RULES = "TVA_RULES"
-RULE_IDS = ("R-DLL", "R-MAX10", "R-3L30", "R-5M", "R-REENTRY", "R-CLOSE")
+RULE_IDS = (
+    "R-DLL",
+    "R-MAX10",
+    "R-3L30",
+    "R-5M",
+    "R-REENTRY",
+    "R-CLOSE",
+    "R-PLAYBOOK",
+    "R-DEFINED",
+    "R-3C-CT",
+    "R-ARRIVAL",
+    "R-SLTP",
+    "R-HOURLY",
+    "R-ZONE",
+    "R-BIAS",
+    "R-TILT",
+)
+EVIDENCE_BACKED_RULE_IDS = RULE_IDS[6:]
 STOP_ON_ENTRY_HOLD_S = 60.0
 SAME_LEVEL_TICKS = 2
 DEFAULT_MAX_TRADES = 10
@@ -28,6 +55,20 @@ DEFAULT_POST_LOSS_MINUTES = 5
 DEFAULT_REENTRY_WINDOW_S = 120.0
 DEFAULT_REENTRY_MAX = 1
 DEFAULT_REENTRY_BLOCK_MINUTES = 5
+# Matches evidence.DEFAULT_PRE_S. Do not import that module (it loads a model adapter).
+EVIDENCE_PRE_S = 180.0
+TILT_COOLDOWN_S = 300.0
+HOURLY_MINUTE_LO = 45
+HOURLY_MINUTE_HI = 55
+ALIGNMENT_LOW = 0.8
+SLTP_REASON = "order modifications not in TradesViz; needs a venue adapter"
+STATED_FIELD_NAMES = ("setup", "bias", "stop_raw", "target_raw", "playbook")
+_ARRIVAL_RE = re.compile(
+    r"arrival|ankunft|kerzenschluss|candle\s*close|close\s+(?:the\s+)?candle",
+    re.I,
+)
+_3C_RE = re.compile(r"\b3c\b", re.I)
+_CT_RE = re.compile(r"gegen\s+den\s+trend|counter[- ]?trend|gegen\s+die\s+bewegung", re.I)
 
 
 @dataclass(frozen=True)
@@ -579,15 +620,404 @@ def _eval_close(trades: list[RuleTrade], config: RulesConfig, session_date: date
     return _check("R-CLOSE", "pass", evidence)
 
 
+@dataclass(frozen=True)
+class EvidenceCtx:
+    evidence: Evidence | None
+    events: tuple[SessionEvent, ...]
+    session_start: datetime | None
+    alignment: Alignment | None
+
+
+def _uniq(items: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in items:
+        if item and item not in seen:
+            seen.add(item)
+            out.append(item)
+    return out
+
+
+def _stated_cite(trade: EvidenceTrade, name: str):
+    return getattr(trade.stated, name)
+
+
+def _stated_segs(trade: EvidenceTrade, *names: str) -> list[str]:
+    segs: list[str] = []
+    for name in names or STATED_FIELD_NAMES:
+        cite = _stated_cite(trade, name)
+        if cite is not None and cite.seg:
+            segs.append(cite.seg)
+    return _uniq(segs)
+
+
+def _trade_has_speech(trade: EvidenceTrade) -> bool:
+    if any((seg or "").strip() for seg in trade.commentary):
+        return True
+    return bool(_stated_segs(trade, *STATED_FIELD_NAMES))
+
+
+def _session_has_speech(ctx: EvidenceCtx) -> bool:
+    if ctx.events:
+        return True
+    if ctx.evidence is None:
+        return False
+    return any(_trade_has_speech(trade) for trade in ctx.evidence.trades)
+
+
+def _spoken_trades(ctx: EvidenceCtx) -> list[EvidenceTrade]:
+    if ctx.evidence is None:
+        return []
+    return [trade for trade in ctx.evidence.trades if _trade_has_speech(trade)]
+
+
+def _trade_speech_text(trade: EvidenceTrade, events: Sequence[SessionEvent]) -> str:
+    parts: list[str] = []
+    for name in STATED_FIELD_NAMES:
+        cite = _stated_cite(trade, name)
+        if cite is not None and cite.value:
+            parts.append(cite.value)
+    for event in events:
+        if trade.window.t0 <= event.t <= trade.window.t1 and event.text:
+            parts.append(event.text)
+    return " ".join(parts)
+
+
+def _event_segs(
+    events: Sequence[SessionEvent],
+    *,
+    kind: str | None = None,
+    pattern: re.Pattern[str] | None = None,
+    t0: float | None = None,
+    t1: float | None = None,
+) -> list[str]:
+    segs: list[str] = []
+    for event in events:
+        if kind is not None and event.kind != kind:
+            continue
+        if t0 is not None and event.t < t0:
+            continue
+        if t1 is not None and event.t > t1:
+            continue
+        if pattern is not None and not pattern.search(event.text or ""):
+            continue
+        if event.seg:
+            segs.append(event.seg)
+    return _uniq(segs)
+
+
+def _alignment_too_low(ctx: EvidenceCtx) -> bool:
+    if ctx.alignment is not None and ctx.alignment.confidence < ALIGNMENT_LOW:
+        return True
+    if ctx.evidence is not None and ctx.evidence.trades:
+        if all(trade.alignment == "low" for trade in ctx.evidence.trades):
+            return True
+    return False
+
+
+def _video_to_wall(
+    session_start: datetime,
+    video_t: float,
+    alignment: Alignment | None,
+) -> datetime:
+    offset = alignment.offset_s if alignment is not None else 0.0
+    drift = alignment.drift_s_per_h if alignment is not None else 0.0
+    delta = video_t + offset + drift * (video_t / 3600.0)
+    return session_start + timedelta(seconds=delta)
+
+
+def _event_minute(event: SessionEvent, ctx: EvidenceCtx) -> int:
+    if ctx.session_start is not None:
+        return _video_to_wall(ctx.session_start, event.t, ctx.alignment).minute
+    return int(event.t % 3600) // 60
+
+
+def _pass_cited(rule: str, evidence: dict, reason: str | None = None) -> RuleCheck:
+    if not evidence.get("segs"):
+        return _check(rule, "unverifiable", evidence, reason or "no cited segment")
+    return _check(rule, "pass", evidence, reason)
+
+
+def _absent_speech(rule: str) -> RuleCheck:
+    return _check(rule, "unverifiable", {"segs": []}, "absent speech")
+
+
+def _eval_playbook(ctx: EvidenceCtx) -> RuleCheck:
+    spoken = _spoken_trades(ctx)
+    if not spoken:
+        return _absent_speech("R-PLAYBOOK")
+    violated: list[str] = []
+    segs: list[str] = []
+    for trade in spoken:
+        cited = _stated_segs(trade, "playbook", "setup")
+        if cited:
+            segs.extend(cited)
+        else:
+            violated.append(trade.tva_trade_id)
+    evidence = {"segs": _uniq(segs), "trade_ids": violated}
+    if violated:
+        return _check(
+            "R-PLAYBOOK",
+            "violated",
+            evidence,
+            "playbook not spoken before entry",
+        )
+    return _pass_cited("R-PLAYBOOK", evidence)
+
+
+def _eval_defined(ctx: EvidenceCtx) -> RuleCheck:
+    spoken = _spoken_trades(ctx)
+    if not spoken:
+        return _absent_speech("R-DEFINED")
+    violated: list[str] = []
+    segs: list[str] = []
+    for trade in spoken:
+        cited = _stated_segs(trade, "stop_raw", "target_raw")
+        stop = _stated_cite(trade, "stop_raw")
+        target = _stated_cite(trade, "target_raw")
+        if stop is not None and stop.seg and target is not None and target.seg:
+            segs.extend(cited)
+        else:
+            violated.append(trade.tva_trade_id)
+            segs.extend(cited)
+    evidence = {"segs": _uniq(segs), "trade_ids": violated}
+    if violated:
+        return _check(
+            "R-DEFINED",
+            "violated",
+            evidence,
+            "stop or target missing from pre-entry window",
+        )
+    return _pass_cited("R-DEFINED", evidence)
+
+
+def _eval_3c_ct(ctx: EvidenceCtx) -> RuleCheck:
+    spoken = _spoken_trades(ctx)
+    if not spoken:
+        return _absent_speech("R-3C-CT")
+    violated: list[str] = []
+    passed: list[str] = []
+    segs: list[str] = []
+    for trade in spoken:
+        text = _trade_speech_text(trade, ctx.events)
+        cited = _event_segs(
+            ctx.events,
+            pattern=_3C_RE,
+            t0=trade.window.t0,
+            t1=trade.window.t1,
+        )
+        for name in STATED_FIELD_NAMES:
+            cite = _stated_cite(trade, name)
+            if cite is not None and cite.seg and _3C_RE.search(cite.value or ""):
+                cited.append(cite.seg)
+        cited = _uniq(cited)
+        if _3C_RE.search(text):
+            if cited:
+                segs.extend(cited)
+                passed.append(trade.tva_trade_id)
+            continue
+        if _CT_RE.search(text):
+            violated.append(trade.tva_trade_id)
+            segs.extend(
+                _event_segs(
+                    ctx.events,
+                    pattern=_CT_RE,
+                    t0=trade.window.t0,
+                    t1=trade.window.t1,
+                )
+            )
+    evidence = {"segs": _uniq(segs), "trade_ids": violated, "passed": passed}
+    if violated:
+        return _check(
+            "R-3C-CT",
+            "violated",
+            evidence,
+            "counter-trend speech without 3c",
+        )
+    if passed:
+        return _pass_cited("R-3C-CT", evidence)
+    return _check(
+        "R-3C-CT",
+        "unverifiable",
+        evidence,
+        "no 3c or counter-trend speech; journal triggers later",
+    )
+
+
+def _eval_arrival(ctx: EvidenceCtx) -> RuleCheck:
+    spoken = _spoken_trades(ctx)
+    if not spoken:
+        return _absent_speech("R-ARRIVAL")
+    violated: list[str] = []
+    passed: list[str] = []
+    segs: list[str] = []
+    for trade in spoken:
+        text = _trade_speech_text(trade, ctx.events)
+        cited = _event_segs(
+            ctx.events,
+            pattern=_ARRIVAL_RE,
+            t0=trade.window.t0,
+            t1=trade.window.t1,
+        )
+        for name in STATED_FIELD_NAMES:
+            cite = _stated_cite(trade, name)
+            if cite is not None and cite.seg and _ARRIVAL_RE.search(cite.value or ""):
+                cited.append(cite.seg)
+        cited = _uniq(cited)
+        if _ARRIVAL_RE.search(text):
+            if cited:
+                segs.extend(cited)
+                passed.append(trade.tva_trade_id)
+            continue
+        violated.append(trade.tva_trade_id)
+    evidence = {"segs": _uniq(segs), "trade_ids": violated, "passed": passed}
+    if violated:
+        return _check(
+            "R-ARRIVAL",
+            "violated",
+            evidence,
+            "no arrival-candle close cue",
+        )
+    return _pass_cited("R-ARRIVAL", evidence)
+
+
+def _eval_sltp(_ctx: EvidenceCtx) -> RuleCheck:
+    return _check("R-SLTP", "unverifiable", {"segs": []}, SLTP_REASON)
+
+
+def _eval_hourly(ctx: EvidenceCtx) -> RuleCheck:
+    if not _session_has_speech(ctx):
+        return _absent_speech("R-HOURLY")
+    if _alignment_too_low(ctx):
+        return _check(
+            "R-HOURLY",
+            "unverifiable",
+            {"segs": []},
+            "alignment confidence below threshold",
+        )
+    checkins = [event for event in ctx.events if event.kind == "hourly_checkin"]
+    if not checkins:
+        return _check(
+            "R-HOURLY",
+            "violated",
+            {"segs": []},
+            "no hourly check-in language",
+        )
+    near: list[str] = []
+    far: list[str] = []
+    for event in checkins:
+        bucket = near if HOURLY_MINUTE_LO <= _event_minute(event, ctx) <= HOURLY_MINUTE_HI else far
+        if event.seg:
+            bucket.append(event.seg)
+    evidence = {"segs": _uniq([*near, *far]), "near": near, "far": far}
+    if far:
+        return _check("R-HOURLY", "violated", evidence, "check-in not near xx:50")
+    return _pass_cited("R-HOURLY", evidence)
+
+
+def _eval_zone(ctx: EvidenceCtx) -> RuleCheck:
+    if not _session_has_speech(ctx):
+        return _absent_speech("R-ZONE")
+    if _alignment_too_low(ctx):
+        return _check(
+            "R-ZONE",
+            "unverifiable",
+            {"segs": []},
+            "alignment confidence below threshold",
+        )
+    zones = [event for event in ctx.events if event.kind == "no_trade_zone"]
+    if not zones:
+        return _check(
+            "R-ZONE",
+            "unverifiable",
+            {"segs": []},
+            "no no-trade zone declared",
+        )
+    overlaps: list[dict] = []
+    trades = ctx.evidence.trades if ctx.evidence is not None else []
+    for event in zones:
+        for trade in trades:
+            if trade.window.t0 <= event.t <= trade.window.t1:
+                overlaps.append(
+                    {"tva_trade_id": trade.tva_trade_id, "seg": event.seg, "t": event.t}
+                )
+    segs = _uniq(event.seg for event in zones if event.seg)
+    evidence = {"segs": segs, "overlaps": overlaps}
+    if overlaps:
+        return _check("R-ZONE", "violated", evidence, "entry during a no-trade zone")
+    return _pass_cited("R-ZONE", evidence)
+
+
+def _eval_bias(ctx: EvidenceCtx) -> RuleCheck:
+    if not _session_has_speech(ctx):
+        return _absent_speech("R-BIAS")
+    segs = _event_segs(ctx.events, kind="bias_statement")
+    if ctx.evidence is not None:
+        for trade in ctx.evidence.trades:
+            segs.extend(_stated_segs(trade, "bias"))
+    segs = _uniq(segs)
+    evidence = {"segs": segs}
+    if segs:
+        return _pass_cited("R-BIAS", evidence)
+    return _check("R-BIAS", "violated", evidence, "bias not re-evaluated")
+
+
+def _entry_video_t(trade: EvidenceTrade) -> float:
+    return trade.window.t0 + EVIDENCE_PRE_S
+
+
+def _eval_tilt(ctx: EvidenceCtx) -> RuleCheck:
+    tilts = [event for event in ctx.events if event.kind == "tilt"]
+    if not tilts:
+        return _check("R-TILT", "unverifiable", {"segs": []}, "no tilt language")
+    if _alignment_too_low(ctx):
+        return _check(
+            "R-TILT",
+            "unverifiable",
+            {"segs": _uniq(event.seg for event in tilts if event.seg)},
+            "alignment confidence below threshold",
+        )
+    breaches: list[dict] = []
+    trades = ctx.evidence.trades if ctx.evidence is not None else []
+    for event in tilts:
+        for trade in trades:
+            entry_t = _entry_video_t(trade)
+            if event.t < entry_t <= event.t + TILT_COOLDOWN_S:
+                breaches.append(
+                    {
+                        "tva_trade_id": trade.tva_trade_id,
+                        "seg": event.seg,
+                        "gap_s": _r(entry_t - event.t, 3),
+                    }
+                )
+    segs = _uniq(event.seg for event in tilts if event.seg)
+    evidence = {"segs": segs, "breaches": breaches, "cooldown_s": TILT_COOLDOWN_S}
+    if breaches:
+        return _check("R-TILT", "violated", evidence, "entry during tilt cool-down")
+    return _pass_cited("R-TILT", evidence)
+
+
 def evaluate_rules(
     trades: list[RuleTrade],
     config: RulesConfig | None = None,
     *,
     session_date: date | None = None,
+    evidence: Evidence | None = None,
+    session_events: Sequence[SessionEvent] | None = None,
+    session_start: datetime | None = None,
+    alignment: Alignment | None = None,
 ) -> list[RuleCheck]:
-    """Score the deterministic catalog. Never reads transcript, evidence, or a model."""
+    """Score the catalog. Deterministic rows use fills only; evidence-backed
+    rows read already-written evidence.json and session_events. Never calls a model.
+    """
     cfg = config or RulesConfig()
     ordered = sorted(trades, key=lambda trade: (trade.entry_timestamp, trade.tva_trade_id))
+    ctx = EvidenceCtx(
+        evidence=evidence,
+        events=tuple(session_events or ()),
+        session_start=session_start,
+        alignment=alignment,
+    )
     return [
         _eval_dll(ordered, cfg),
         _eval_max10(ordered, cfg),
@@ -595,6 +1025,15 @@ def evaluate_rules(
         _eval_5m(ordered, cfg),
         _eval_reentry(ordered, cfg),
         _eval_close(ordered, cfg, session_date),
+        _eval_playbook(ctx),
+        _eval_defined(ctx),
+        _eval_3c_ct(ctx),
+        _eval_arrival(ctx),
+        _eval_sltp(ctx),
+        _eval_hourly(ctx),
+        _eval_zone(ctx),
+        _eval_bias(ctx),
+        _eval_tilt(ctx),
     ]
 
 
@@ -695,11 +1134,35 @@ def build_rules_report(
         return None
     trades = read_rule_trades(trades_file)
     cfg = config or load_rules_config(config_path)
+    evidence = _load_evidence(root, session_id)
+    events = _load_session_events(root, session_id)
     return RulesReport(
         schema_version=SCHEMA_VERSION,
         session_id=session_id,
-        rules=evaluate_rules(trades, cfg, session_date=_record_session_date(record)),
+        rules=evaluate_rules(
+            trades,
+            cfg,
+            session_date=_record_session_date(record),
+            evidence=evidence,
+            session_events=events,
+            session_start=_as_dt(record.recording.start_wallclock_vienna),
+            alignment=record.alignment,
+        ),
     )
+
+
+def _load_evidence(root: Path, session_id: str) -> Evidence | None:
+    path = store.evidence_path(root, session_id)
+    if not path.is_file():
+        return None
+    return Evidence.model_validate(store.read_json(path))
+
+
+def _load_session_events(root: Path, session_id: str) -> list[SessionEvent]:
+    path = store.insights_path(root, session_id)
+    if not path.is_file():
+        return []
+    return list(store.load_insights(root, session_id).session_events)
 
 
 def rules_session(
