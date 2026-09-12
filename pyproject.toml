@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tradevidanalyser"
+version = "0.1.0"
+description = "Headless session-tape analyser: German OBS recordings → cited insights for Grok."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Accumu" }]
+keywords = ["trading", "asr", "session-review", "futures"]
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.32,<1",
+    "pydantic>=2.9,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+    "ruff>=0.16,<0.17",
+    "httpx>=0.27,<1",
+]
+
+[project.scripts]
+tva = "tradevidanalyser.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "W"]

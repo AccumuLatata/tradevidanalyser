@@ -23,11 +23,12 @@ The commentary is the richest signal in the recordings, so ASR quality and
 A 4-hour session ≈ 4 audio-hours ≈ $1–2 hosted, or free on a local GPU.
 
 **Decision:** provider-pluggable ASR interface with **WhisperX as the default
-local provider** (jargon `initial_prompt`, German+English), and **one hosted
-fallback** (ElevenLabs Scribe v2 or Deepgram) for hosts without a GPU. Skip
-diarization by recording the mic on its own OBS track. Keep a 20-minute
-hand-corrected reference clip in the repo (redacted) to measure WER whenever
-the model changes.
+local provider** on the trading PC GPU (jargon `initial_prompt`, **German
+primary**, English level tokens), and **one hosted fallback** (ElevenLabs
+Scribe v2 or Deepgram) for the Mac if it has no GPU. Skip diarization: mic
+on its own OBS track; Grok is not on the tape today. Keep a 20-minute
+hand-corrected German excerpt on the NAS (not in git) to measure WER
+whenever the model changes.
 
 ---
 

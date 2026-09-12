@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv
+
+# Local store (NAS equivalent on a single machine)
+.tva_store/
+
+# Tool scratch
+agent-tools/
