@@ -2,21 +2,25 @@ from __future__ import annotations
 
 import json
 import os
+import unicodedata
 from pathlib import Path
 
 import httpx
 import pytest
 
 from tradevidanalyser import config
+from tradevidanalyser.doctor import run_doctor
 from tradevidanalyser.ingest import ingest
 from tradevidanalyser.pipeline import extract_session, transcribe_session
 from tradevidanalyser.providers.extract import (
     DEFAULT_GROK_MODEL,
+    HTTP_TIMEOUT,
     XAI_CHAT_URL,
     ExtractError,
     FakeExtractProvider,
     GrokExtractProvider,
     apply_citation_guard,
+    default_prompt_path,
     get_extract_provider,
     insights_from_chat_payload,
     insights_json_schema,
@@ -108,6 +112,31 @@ def test_merge_is_order_independent() -> None:
     assert ab.playbooks_mentioned[0].text == "play-a"
 
 
+def test_merge_prefers_longer_quote() -> None:
+    short = Insights(
+        provider="grok",
+        model="m",
+        bias_statements=[CitedSpan(seg="seg_001", text="Bias")],
+    )
+    long = Insights(
+        provider="grok",
+        model="m",
+        bias_statements=[CitedSpan(seg="seg_001", text="Bias ist long")],
+    )
+    kwargs = {"provider": "grok", "model": "m", "prompt_version": "v"}
+    assert merge_partial_insights([short, long], **kwargs).bias_statements[0].text == "Bias ist long"
+    assert merge_partial_insights([long, short], **kwargs).bias_statements[0].text == "Bias ist long"
+
+
+def test_default_prompt_path_finds_repo_file_when_cwd_elsewhere(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    path = default_prompt_path()
+    assert path.is_file()
+    assert path.name == "insights_v1.de.md"
+
+
 def test_grok_valid_mock_keeps_citations(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: list[httpx.Request] = []
 
@@ -125,6 +154,11 @@ def test_grok_valid_mock_keeps_citations(monkeypatch: pytest.MonkeyPatch) -> Non
     assert body["response_format"]["type"] == "json_schema"
     assert body["response_format"]["json_schema"]["schema"] == insights_json_schema()
     assert "seg_001" in body["messages"][1]["content"]
+    timeout = request.extensions.get("timeout")
+    if isinstance(timeout, dict):
+        assert timeout.get("read") == HTTP_TIMEOUT
+    elif timeout is not None:
+        assert getattr(timeout, "read", None) == HTTP_TIMEOUT
     assert insights.bias_statements[0].seg == "seg_001"
     assert insights.playbooks_mentioned[0].seg == "seg_002"
     assert insights.checkins[0].text == "Check-in zur vollen Stunde"
@@ -178,6 +212,22 @@ def test_grok_three_windows_valid_fabricated_unknown(monkeypatch: pytest.MonkeyP
     assert any("seg_999" in gap for gap in insights.gaps)
 
 
+def test_grok_out_of_window_seg_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
+    empty = Insights(provider="grok", model=DEFAULT_GROK_MODEL).model_dump(mode="json")
+    replies = [_chat_response(_payload(VALID)), _chat_response(empty)]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=replies.pop(0))
+
+    # Two segs, one per window. VALID cites seg_002, which is on the tape but
+    # not in the first window — that citation must not be laundered.
+    two = _transcript(PLANTED_TEXTS[:2])
+    insights = _provider(handler, monkeypatch, window_size=1, overlap=0).extract(two)
+    assert insights.bias_statements[0].seg == "seg_001"
+    assert insights.playbooks_mentioned == []
+    assert any("seg_002" in gap for gap in insights.gaps)
+
+
 def test_extract_http_never_called_when_provider_is_fake(
     monkeypatch: pytest.MonkeyPatch, tva_root: Path, sample_video: Path
 ) -> None:
@@ -205,12 +255,71 @@ def test_insights_from_chat_payload_roundtrip() -> None:
     assert parsed.bias_statements[0].seg == "seg_001"
 
 
+def test_insights_from_chat_payload_accepts_object_content() -> None:
+    body = {"bias_statements": [{"seg": "seg_001", "text": "Bias ist long"}]}
+    parsed = insights_from_chat_payload({"choices": [{"message": {"content": body}}]})
+    assert parsed.provider == "grok"
+    assert parsed.bias_statements[0].seg == "seg_001"
+
+
+def test_insights_from_chat_payload_reports_refusal() -> None:
+    with pytest.raises(ExtractError, match="refused"):
+        insights_from_chat_payload(
+            {"choices": [{"message": {"content": "", "refusal": "filtered"}}]}
+        )
+
+
 def test_apply_citation_guard_keeps_valid() -> None:
     transcript = _transcript()
     raw = Insights.model_validate(_payload(VALID))
     cleaned = apply_citation_guard(transcript, raw)
     assert cleaned.bias_statements
     assert cleaned.checkins
+
+
+def test_apply_citation_guard_drops_fabricated_raw_text() -> None:
+    transcript = _transcript(("Bias ist long.",))
+    raw = Insights(
+        provider="grok",
+        model="m",
+        bias_statements=[CitedSpan(seg="seg_001", text="Bias ist long")],
+        stated_stops_targets=[CitedSpan(seg="seg_001", text="", raw_text="Stop bei 18500")],
+    )
+    cleaned = apply_citation_guard(transcript, raw)
+    assert cleaned.bias_statements
+    assert cleaned.stated_stops_targets == []
+    assert any("raw_text not found" in gap for gap in cleaned.gaps)
+
+
+def test_apply_citation_guard_accepts_nfc_equivalent_quote() -> None:
+    nfc = unicodedata.normalize("NFC", "Prüfung bestanden")
+    nfd = unicodedata.normalize("NFD", "Prüfung")
+    transcript = Transcript(
+        provider="fake",
+        model="fake-v1",
+        language="de",
+        segments=[
+            TranscriptSegment(id="seg_001", t0=0.0, t1=1.0, lang="de", text=nfc),
+        ],
+    )
+    raw = Insights(
+        provider="grok",
+        model="m",
+        bias_statements=[CitedSpan(seg="seg_001", text=nfd)],
+    )
+    cleaned = apply_citation_guard(transcript, raw)
+    assert cleaned.bias_statements
+    assert not any(item.startswith("dropped ") for item in cleaned.gaps)
+
+
+def test_doctor_grok_without_key_fails(tva_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TVA_EXTRACT_PROVIDER", "grok")
+    monkeypatch.setenv("XAI_API_KEY", "   ")
+    report = run_doctor(tva_root)
+    ids = {c.id: c for c in report.checks}
+    assert ids["xai_key"].status == "warn"
+    assert ids["extract_provider"].status == "fail"
+    assert not report.ok
 
 
 @pytest.mark.golden

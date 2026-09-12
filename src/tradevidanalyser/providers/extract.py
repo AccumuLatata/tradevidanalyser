@@ -6,13 +6,14 @@ import hashlib
 import json
 import os
 import re
+import unicodedata
 from pathlib import Path
 from typing import Any, Protocol
 
 import httpx
 
 from tradevidanalyser.glossary import load_glossary
-from tradevidanalyser.schema import CitedSpan, Insights, Transcript
+from tradevidanalyser.schema import CitedSpan, Insights, Transcript, TranscriptSegment
 from tradevidanalyser.wer import contains_token
 
 _BIAS = re.compile(r"\b(bias|richtung|long|short|bullish|bearish)\b", re.IGNORECASE)
@@ -28,6 +29,8 @@ DEFAULT_GROK_MODEL = "grok-4.6"
 ENV_XAI_KEY = "XAI_API_KEY"
 ENV_EXTRACT_MODEL = "TVA_EXTRACT_MODEL"
 XAI_CHAT_URL = "https://api.x.ai/v1/chat/completions"
+# grok-4.6 is a reasoning model; xAI documents a 3600s client timeout.
+HTTP_TIMEOUT = 3600.0
 PROMPT_FILENAME = "insights_v1.de.md"
 INSIGHT_SPAN_FIELDS = (
     "bias_statements",
@@ -101,18 +104,29 @@ class FakeExtractProvider:
         )
 
 
-def default_prompt_path() -> Path:
-    here = Path(__file__).resolve()
-    candidates = [
-        here.parents[2] / "prompts" / PROMPT_FILENAME,
-        Path.cwd() / "prompts" / PROMPT_FILENAME,
-    ]
-    current = Path.cwd()
-    for _ in range(6):
-        candidates.append(current / "prompts" / PROMPT_FILENAME)
+def _walk_prompt_candidates(start: Path, *, levels: int) -> list[Path]:
+    """Walk *start* and its parents for prompts/insights_v1.de.md."""
+    found: list[Path] = []
+    current = start
+    for _ in range(levels):
+        found.append(current / "prompts" / PROMPT_FILENAME)
         if current.parent == current:
             break
         current = current.parent
+    return found
+
+
+def default_prompt_path() -> Path:
+    """Resolve the repo prompt from this file, then cwd.
+
+    ``extract.py`` lives one directory deeper than ``glossary.py``, so
+    ``Path(__file__).parents[2]`` is ``src/`` and misses ``prompts/``.
+    Walk parents of ``__file__`` first so ``tva extract`` works when cwd
+    is TVA_ROOT on the NAS.
+    """
+    here = Path(__file__).resolve()
+    candidates = _walk_prompt_candidates(here.parent, levels=8)
+    candidates.extend(_walk_prompt_candidates(Path.cwd(), levels=6))
     seen: set[Path] = set()
     for path in candidates:
         resolved = path.resolve() if path.exists() else path
@@ -156,8 +170,13 @@ def window_segments(
     return windows
 
 
-def _span_key(span: CitedSpan) -> tuple[str, str, str, str]:
-    return (span.text, span.name or "", span.token or "", span.raw_text or "")
+def _span_rank(span: CitedSpan) -> tuple[int, int, int, int, str, str, str, str]:
+    """Order-independent pick: longer (more complete) quote, then lexicographic."""
+    text = span.text or ""
+    name = span.name or ""
+    token = span.token or ""
+    raw = span.raw_text or ""
+    return (-len(text), -len(name), -len(token), -len(raw), text, name, token, raw)
 
 
 def merge_partial_insights(
@@ -175,7 +194,7 @@ def merge_partial_insights(
             bucket = chosen[field]
             for span in getattr(part, field):
                 existing = bucket.get(span.seg)
-                if existing is None or _span_key(span) < _span_key(existing):
+                if existing is None or _span_rank(span) < _span_rank(existing):
                     bucket[span.seg] = span
         gaps.extend(part.gaps)
     merged: dict[str, list[CitedSpan]] = {}
@@ -191,6 +210,17 @@ def merge_partial_insights(
     )
 
 
+def _nfc(text: str) -> str:
+    return unicodedata.normalize("NFC", text)
+
+
+def _quote_in_segment(segment_text: str, quote: str) -> bool:
+    """Verbatim substring after NFC so German umlauts (ä vs a + combining) match."""
+    if not quote:
+        return True
+    return _nfc(quote) in _nfc(segment_text)
+
+
 def citation_problems(transcript: Transcript, insights: Insights) -> list[tuple[str, CitedSpan, str]]:
     """Shared citation guard. pipeline._assert_citations raises; Grok drops into gaps."""
     known = {seg.id: seg.text for seg in transcript.segments}
@@ -199,8 +229,17 @@ def citation_problems(transcript: Transcript, insights: Insights) -> list[tuple[
         for span in getattr(insights, field):
             if span.seg not in known:
                 problems.append((field, span, f"citation {span.seg} is not in the transcript"))
-            elif span.text and span.text not in known[span.seg]:
+                continue
+            segment_text = known[span.seg]
+            if span.text and not _quote_in_segment(segment_text, span.text):
                 problems.append((field, span, f"quote not found in {span.seg}"))
+            elif span.raw_text and not _quote_in_segment(segment_text, span.raw_text):
+                problems.append((field, span, f"raw_text not found in {span.seg}"))
+            elif span.token and not (
+                contains_token(segment_text, span.token)
+                or _quote_in_segment(segment_text, span.token)
+            ):
+                problems.append((field, span, f"token not found in {span.seg}"))
     return problems
 
 
@@ -209,7 +248,7 @@ def apply_citation_guard(transcript: Transcript, insights: Insights) -> Insights
     problems = citation_problems(transcript, insights)
     if not problems:
         return insights
-    drop: dict[str, set[str]] = {field: set() for field in INSIGHT_SPAN_FIELDS}
+    drop: dict[str, set[int]] = {field: set() for field in INSIGHT_SPAN_FIELDS}
     gaps = list(insights.gaps)
     for field, span, reason in problems:
         drop[field].add(id(span))
@@ -220,6 +259,18 @@ def apply_citation_guard(transcript: Transcript, insights: Insights) -> Insights
         cleaned[field] = [span for span in getattr(insights, field) if id(span) not in marked]
     unique_gaps = sorted(set(gaps))
     return insights.model_copy(update={**cleaned, "gaps": unique_gaps})
+
+
+def _window_transcript(transcript: Transcript, window: list[Any]) -> Transcript:
+    """Citation-check a window reply against only the segments that window saw."""
+    segments = [seg for seg in window if isinstance(seg, TranscriptSegment)]
+    return Transcript(
+        provider=transcript.provider,
+        model=transcript.model,
+        language=transcript.language,
+        prompt_version=transcript.prompt_version,
+        segments=segments,
+    )
 
 
 def _format_window(segments: list[Any]) -> str:
@@ -261,15 +312,24 @@ def insights_from_chat_payload(payload: dict[str, Any]) -> Insights:
     message = first.get("message")
     if not isinstance(message, dict):
         raise ExtractError("Grok choice has no message")
-    raw = _message_content(message).strip()
-    if not raw:
-        raise ExtractError("Grok message content is empty")
-    try:
-        body = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ExtractError("Grok message content is not JSON") from exc
+    content = message.get("content")
+    if isinstance(content, dict):
+        body: Any = content
+    else:
+        raw = _message_content(message).strip()
+        if not raw:
+            refusal = message.get("refusal")
+            if refusal:
+                raise ExtractError(f"Grok refused: {refusal}")
+            raise ExtractError("Grok message content is empty")
+        try:
+            body = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ExtractError("Grok message content is not JSON") from exc
     if not isinstance(body, dict):
         raise ExtractError("Grok JSON content is not an object")
+    body.setdefault("provider", "grok")
+    body.setdefault("model", "unknown")
     try:
         return Insights.model_validate(body)
     except (TypeError, ValueError) as exc:
@@ -319,14 +379,22 @@ class GrokExtractProvider:
             )
         schema = insights_json_schema()
         parts: list[Insights] = []
-        for window in windows:
-            payload = self._complete(
-                key=key,
-                system_prompt=system_prompt,
-                user_prompt=_format_window(window),
-                schema=schema,
-            )
-            parts.append(insights_from_chat_payload(payload))
+        owns_client = self._client is None
+        client = self._client or httpx.Client(timeout=HTTP_TIMEOUT)
+        try:
+            for window in windows:
+                payload = self._complete(
+                    client,
+                    key=key,
+                    system_prompt=system_prompt,
+                    user_prompt=_format_window(window),
+                    schema=schema,
+                )
+                part = insights_from_chat_payload(payload)
+                parts.append(apply_citation_guard(_window_transcript(transcript, window), part))
+        finally:
+            if owns_client:
+                client.close()
         merged = merge_partial_insights(
             parts,
             provider=self.name,
@@ -337,6 +405,7 @@ class GrokExtractProvider:
 
     def _complete(
         self,
+        client: httpx.Client,
         *,
         key: str,
         system_prompt: str,
@@ -363,11 +432,9 @@ class GrokExtractProvider:
             "Content-Type": "application/json",
         }
         try:
-            if self._client is not None:
-                response = self._client.post(XAI_CHAT_URL, json=body, headers=headers)
-            else:
-                with httpx.Client(timeout=120.0) as client:
-                    response = client.post(XAI_CHAT_URL, json=body, headers=headers)
+            response = client.post(
+                XAI_CHAT_URL, json=body, headers=headers, timeout=HTTP_TIMEOUT
+            )
         except httpx.HTTPError as exc:
             raise ExtractError(f"Grok request failed: {exc}") from exc
         if response.status_code >= 400:

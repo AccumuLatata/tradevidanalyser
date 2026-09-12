@@ -67,12 +67,12 @@ def run_doctor(root: Path) -> DoctorReport:
         )
     )
 
-    xai = bool(os.environ.get("XAI_API_KEY"))
+    xai = bool((os.environ.get("XAI_API_KEY") or "").strip())
     checks.append(
         DoctorCheck(
             id="xai_key",
             status="ok" if xai else "warn",
-            detail="XAI_API_KEY set" if xai else "XAI_API_KEY unset (extraction uses fake unless set)",
+            detail="XAI_API_KEY set" if xai else "XAI_API_KEY unset (needed for TVA_EXTRACT_PROVIDER=grok)",
         )
     )
 
