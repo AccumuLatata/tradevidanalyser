@@ -67,9 +67,11 @@ def _assert_citations(transcript: Transcript, insights: Insights) -> None:
                 raise ValueError(f"quote not found in {span.seg}")
 
 
-def run_latest(root: Path, *, video: Path | None = None) -> SessionRecord:
+def run_latest(
+    root: Path, *, video: Path | None = None, desktop_track: bool = False
+) -> SessionRecord:
     if video is not None:
-        record = ingest(video, root=root)
+        record = ingest(video, root=root, desktop_track=desktop_track)
     else:
         latest = store.latest_session_id(root)
         if latest is None:

@@ -39,3 +39,12 @@ def parse_obs_filename(path: Path | str) -> tuple[str, datetime]:
     start = naive.replace(tzinfo=VIENNA)
     session_id = f"{date}_{h}{m}{s}"
     return session_id, start
+
+
+def obs_name_prefix(path: Path | str) -> str | None:
+    """Text before the OBS timestamp. Same prefix = auto-split siblings."""
+    name = Path(path).stem
+    match = _OBS_NAME.search(name)
+    if not match:
+        return None
+    return name[: match.start()]

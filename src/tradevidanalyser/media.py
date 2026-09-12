@@ -91,7 +91,10 @@ def chapters_from_probe(probe: dict[str, Any]) -> list[Chapter]:
     return out
 
 
-def extract_mic_opus(src: Path, dest: Path) -> None:
+def extract_track(src: Path, index: int, dest: Path) -> None:
+    """Extract audio stream ``0:a:{index}`` as mono Opus."""
+    if index < 0:
+        raise MediaError(f"audio track index must be >= 0, got {index}")
     binary = which("ffmpeg")
     if not binary:
         raise MediaError("ffmpeg not on PATH")
@@ -103,7 +106,7 @@ def extract_mic_opus(src: Path, dest: Path) -> None:
             "-i",
             str(src),
             "-map",
-            "0:a:0",
+            f"0:a:{index}",
             "-c:a",
             "libopus",
             "-b:a",
@@ -117,4 +120,45 @@ def extract_mic_opus(src: Path, dest: Path) -> None:
         text=True,
     )
     if result.returncode != 0:
-        raise MediaError(result.stderr.strip() or "ffmpeg audio extract failed")
+        raise MediaError(result.stderr.strip() or f"ffmpeg extract 0:a:{index} failed")
+
+
+def extract_mic_opus(src: Path, dest: Path) -> None:
+    extract_track(src, 0, dest)
+
+
+def concat_audio(sources: list[Path], dest: Path) -> None:
+    """Concatenate audio files in order into one Opus file."""
+    if not sources:
+        raise MediaError("concat_audio requires at least one source")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if len(sources) == 1:
+        if sources[0].resolve() != dest.resolve():
+            dest.write_bytes(sources[0].read_bytes())
+        return
+    binary = which("ffmpeg")
+    if not binary:
+        raise MediaError("ffmpeg not on PATH")
+    cmd: list[str] = [binary, "-y"]
+    for src in sources:
+        cmd.extend(["-i", str(src)])
+    n = len(sources)
+    labels = "".join(f"[{i}:a:0]" for i in range(n))
+    cmd.extend(
+        [
+            "-filter_complex",
+            f"{labels}concat=n={n}:v=0:a=1[out]",
+            "-map",
+            "[out]",
+            "-c:a",
+            "libopus",
+            "-b:a",
+            "32k",
+            "-ac",
+            "1",
+            str(dest),
+        ]
+    )
+    result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise MediaError(result.stderr.strip() or "ffmpeg concat audio failed")

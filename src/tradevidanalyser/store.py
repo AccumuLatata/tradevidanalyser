@@ -39,6 +39,10 @@ def audio_path(root: Path, session_id: str) -> Path:
     return config.session_dir(root, session_id) / "audio" / "mic.opus"
 
 
+def desktop_audio_path(root: Path, session_id: str) -> Path:
+    return config.session_dir(root, session_id) / "audio" / "desktop.opus"
+
+
 def load_session(root: Path, session_id: str) -> SessionRecord:
     return SessionRecord.model_validate(read_json(session_json_path(root, session_id)))
 
