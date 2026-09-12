@@ -18,6 +18,7 @@ from tradevidanalyser.providers.vlm import (
     DEFAULT_GROK_MODEL,
     ENV_VLM_PROVIDER,
     GEMINI_FILES_URL,
+    GEMINI_FILE_URL,
     GEMINI_GENERATE_URL,
     XAI_CHAT_URL,
     FakeVlmProvider,
@@ -27,6 +28,7 @@ from tradevidanalyser.providers.vlm import (
     VlmError,
     apply_visual_note_guard,
     get_vlm_provider,
+    notes_json_schema,
 )
 from tradevidanalyser.schema import SessionRecord, VisualNote
 from tradevidanalyser.serve import ALLOWED_RUN_STAGES, create_app
@@ -257,6 +259,7 @@ def test_gemini_mocked_frames_inline(
         clips=[],
         ocr_rows=[],
         recording_path=record.recording.path,
+        root=tva_root,
     )
     result = provider.annotate(ctx)
     assert GEMINI_GENERATE_URL.split("{")[0] in captured["url"]
@@ -276,16 +279,36 @@ def test_gemini_mocked_clip_uses_file_api(
     clip = clips / "5.000.mp4"
     clip.write_bytes(b"\x00\x00fake-mp4")
     seen: list[str] = []
+    upload_url = GEMINI_FILES_URL + "?upload_id=test"
+    file_uri = "https://generativelanguage.googleapis.com/v1beta/files/abc"
 
     def handler(request: httpx.Request) -> httpx.Response:
-        seen.append(str(request.url))
-        if str(request.url).startswith(GEMINI_FILES_URL):
+        seen.append(f"{request.method} {request.url}")
+        url = str(request.url)
+        if request.method == "POST" and url.split("?")[0] == GEMINI_FILES_URL:
+            if "upload_id=" in url:
+                assert request.headers.get("x-goog-upload-command") == "upload, finalize"
+                return httpx.Response(
+                    200,
+                    json={
+                        "file": {
+                            "name": "files/abc",
+                            "uri": file_uri,
+                            "state": "PROCESSING",
+                        }
+                    },
+                )
+            assert request.headers.get("x-goog-upload-protocol") == "resumable"
+            assert request.headers.get("x-goog-upload-command") == "start"
+            return httpx.Response(200, headers={"X-Goog-Upload-URL": upload_url})
+        if request.method == "GET" and url.startswith(GEMINI_FILE_URL.format(name="files/abc")):
             return httpx.Response(
                 200,
-                json={"file": {"uri": "https://generativelanguage.googleapis.com/v1beta/files/abc"}},
+                json={"name": "files/abc", "uri": file_uri, "state": "ACTIVE"},
             )
         body = json.loads(request.content)
         assert "file_data" in json.dumps(body)
+        assert file_uri in json.dumps(body)
         assert Path(record.recording.path).name not in json.dumps(body)
         return httpx.Response(
             200,
@@ -321,9 +344,11 @@ def test_gemini_mocked_clip_uses_file_api(
         clips=[clip],
         ocr_rows=[],
         recording_path=record.recording.path,
+        root=tva_root,
     )
     result = provider.annotate(ctx)
-    assert any(url.startswith(GEMINI_FILES_URL) for url in seen)
+    assert any(item.startswith(f"POST {GEMINI_FILES_URL}") for item in seen)
+    assert any("GET " in item and "files/abc" in item for item in seen)
     assert result.clip == "5.000.mp4"
     assert result.notes[0].clip == "5.000.mp4"
 
@@ -410,3 +435,135 @@ def test_doctor_vlm_off_is_ok(tva_root: Path, monkeypatch: pytest.MonkeyPatch) -
     ids = {c.id: c for c in run_doctor(tva_root).checks}
     assert ids["vlm_provider"].status == "ok"
     assert ids["gemini_key"].status == "warn"
+
+
+def test_notes_json_schema_is_xai_strict() -> None:
+    schema = notes_json_schema()
+    blob = json.dumps(schema)
+    assert schema["additionalProperties"] is False
+    assert schema["required"] == ["notes"]
+    item = schema["properties"]["notes"]["items"]
+    assert item["additionalProperties"] is False
+    assert set(item["required"]) == set(item["properties"])
+    assert "$ref" not in blob
+    assert "default" not in blob
+    assert "$defs" not in blob
+
+
+def test_extract_restores_visual_notes_from_artifact(
+    tva_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ENV_VLM_PROVIDER, "fake")
+    record = _session_with_frames(tva_root)
+    transcribe_session(record.id, root=tva_root)
+    vlm_session(record.id, root=tva_root)
+    assert store.visual_notes_path(tva_root, record.id).is_file()
+    assert not store.insights_path(tva_root, record.id).is_file()
+    extract_session(record.id, root=tva_root)
+    notes = store.load_insights(tva_root, record.id).visual_notes
+    assert notes
+    assert notes[0].frames_cited == ["5.000"]
+
+
+def test_extract_drops_stale_visual_notes_instead_of_failing(
+    tva_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = _session_with_frames(tva_root)
+    transcribe_session(record.id, root=tva_root)
+    extract_session(record.id, root=tva_root)
+    _write_ocr(tva_root, record.id, "21500")
+    planted = [VisualNote(text="print is 21500 on the DOM", frames_cited=["5.000"])]
+    monkeypatch.setattr(
+        "tradevidanalyser.pipeline.get_vlm_provider",
+        lambda name=None: FakeVlmProvider(notes=planted),
+    )
+    vlm_session(record.id, root=tva_root, provider_name="fake")
+    assert store.load_insights(tva_root, record.id).visual_notes
+    store.ocr_path(tva_root, record.id).unlink()
+    insights = extract_session(record.id, root=tva_root)
+    assert insights.visual_notes == []
+    assert any("21500" in gap for gap in insights.gaps)
+    assert store.compute_status(tva_root, record.id).stages["extract"] == "ok"
+
+
+def test_vlm_rerun_replaces_cost_instead_of_stacking(
+    tva_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = _session_with_frames(tva_root)
+    transcribe_session(record.id, root=tva_root)
+    extract_session(record.id, root=tva_root)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        notes = [
+            {
+                "text": "DOM is visible in the left pane.",
+                "t": 5.0,
+                "frames_cited": ["5.000"],
+                "clip": None,
+            }
+        ]
+        return httpx.Response(
+            200,
+            json=_vlm_response(
+                notes,
+                usage={"prompt_tokens": 800_000, "completion_tokens": 400},
+            ),
+        )
+
+    monkeypatch.setenv("XAI_API_KEY", "xai-test-key")
+    provider = GrokVlmProvider(client=httpx.Client(transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(
+        "tradevidanalyser.pipeline.get_vlm_provider", lambda name=None: provider
+    )
+    first = vlm_session(record.id, root=tva_root, provider_name="grok")
+    cost_once = store.compute_status(tva_root, record.id).cost_usd
+    second = vlm_session(record.id, root=tva_root, provider_name="grok")
+    cost_twice = store.compute_status(tva_root, record.id).cost_usd
+    assert first["cost_usd"] == second["cost_usd"]
+    assert cost_once == cost_twice
+    assert cost_once == pytest.approx(first["cost_usd"])
+
+
+MASK_LAYOUT = """
+schema_version: "1"
+layouts:
+  quantower_default:
+    description: "masks that must be re-applied before a Gemini clip upload"
+    rois:
+      clock:        {x: 0.00, y: 0.00, w: 0.00, h: 0.00}
+      position:     {x: 0.00, y: 0.00, w: 0.00, h: 0.00}
+      pnl:          {x: 0.00, y: 0.00, w: 0.00, h: 0.00}
+      instrument:   {x: 0.00, y: 0.00, w: 0.00, h: 0.00}
+      account_mask: {x: 0.00, y: 0.00, w: 0.35, h: 0.35}
+      balance_mask: {x: 0.65, y: 0.65, w: 0.35, h: 0.35}
+"""
+
+
+def test_gemini_refuses_unredactable_clip_when_root_has_masks(
+    tva_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tva_root / "layout.yaml").write_text(MASK_LAYOUT.strip() + "\n", encoding="utf-8")
+    record = _session_with_frames(tva_root)
+    clips = store.clips_dir(tva_root, record.id)
+    clips.mkdir(parents=True, exist_ok=True)
+    clip = clips / "5.000.mp4"
+    clip.write_bytes(b"\x00\x00fake-mp4")
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(500, text="should not upload")
+
+    monkeypatch.setenv("GEMINI_API_KEY", "gem-test-key")
+    provider = GeminiVlmProvider(client=httpx.Client(transport=httpx.MockTransport(handler)))
+    ctx = VlmContext(
+        session_id=record.id,
+        frames=[],
+        clips=[clip],
+        ocr_rows=[],
+        recording_path=record.recording.path,
+        root=tva_root,
+    )
+    with pytest.raises(VlmError, match="Invalid data|moov|re-redact|ffmpeg"):
+        provider.annotate(ctx)
+    assert seen == []

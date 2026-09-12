@@ -22,10 +22,10 @@ from tradevidanalyser.providers.vlm import (
     VlmContext,
     apply_visual_note_guard,
     get_vlm_provider,
-    visual_note_problems,
+    merge_visual_note_gaps,
     vlm_artifact,
 )
-from tradevidanalyser.schema import Insights, SessionRecord, Transcript
+from tradevidanalyser.schema import Insights, SessionRecord, Transcript, VisualNote
 
 
 def transcribe_session(
@@ -56,53 +56,76 @@ def extract_session(
     provider_name: str | None = None,
 ) -> Insights:
     transcript = store.load_transcript(root, session_id)
-    previous_notes = []
-    insights_file = store.insights_path(root, session_id)
-    if insights_file.is_file():
-        try:
-            previous_notes = store.load_insights(root, session_id).visual_notes
-        except (ValueError, OSError):
-            previous_notes = []
+    previous_notes = _visual_notes_to_preserve(root, session_id)
     provider = get_extract_provider(provider_name)
     insights = provider.extract(transcript)
     if previous_notes:
         insights = insights.model_copy(update={"visual_notes": previous_notes})
-    _assert_citations(transcript, insights, root=root, session_id=session_id)
+    _assert_citations(transcript, insights)
+    if insights.visual_notes:
+        ocr_rows = []
+        ocr_path = store.ocr_path(root, session_id)
+        if ocr_path.is_file():
+            ocr_rows = read_ocr_parquet(ocr_path)
+        kept, gaps = apply_visual_note_guard(
+            insights.visual_notes,
+            ocr_rows=ocr_rows,
+            frame_stems={path.stem for path in store.list_frame_jpgs(root, session_id)},
+            clip_names={path.name for path in store.list_clips(root, session_id)},
+        )
+        insights = insights.model_copy(
+            update={
+                "visual_notes": kept,
+                "gaps": merge_visual_note_gaps(insights.gaps, gaps),
+            }
+        )
     store.save_insights(root, session_id, insights)
     store.compute_status(root, session_id)
     return insights
 
 
-def _assert_citations(
-    transcript: Transcript,
-    insights: Insights,
-    *,
-    root: Path | None = None,
-    session_id: str | None = None,
-) -> None:
+def _previous_vlm_cost(root: Path, session_id: str) -> float:
+    path = store.visual_notes_path(root, session_id)
+    if not path.is_file():
+        return 0.0
+    try:
+        return float(store.read_json(path).get("cost_usd") or 0.0)
+    except (TypeError, ValueError, OSError):
+        return 0.0
+
+
+def _visual_notes_to_preserve(root: Path, session_id: str) -> list[VisualNote]:
+    insights_file = store.insights_path(root, session_id)
+    if insights_file.is_file():
+        try:
+            notes = store.load_insights(root, session_id).visual_notes
+            if notes:
+                return list(notes)
+        except (ValueError, OSError):
+            pass
+    artifact = store.visual_notes_path(root, session_id)
+    if not artifact.is_file():
+        return []
+    try:
+        raw = store.read_json(artifact).get("notes") or []
+    except (ValueError, OSError):
+        return []
+    notes: list[VisualNote] = []
+    if not isinstance(raw, list):
+        return []
+    for item in raw:
+        try:
+            notes.append(VisualNote.model_validate(item))
+        except (TypeError, ValueError):
+            continue
+    return notes
+
+
+def _assert_citations(transcript: Transcript, insights: Insights) -> None:
     problems = citation_problems(transcript, insights)
     if problems:
         _field, _span, reason = problems[0]
         raise ValueError(reason)
-    if not insights.visual_notes:
-        return
-    ocr_rows = []
-    stems: set[str] = set()
-    clip_names: set[str] = set()
-    if root is not None and session_id is not None:
-        stems = {path.stem for path in store.list_frame_jpgs(root, session_id)}
-        clip_names = {path.name for path in store.list_clips(root, session_id)}
-        ocr_path = store.ocr_path(root, session_id)
-        if ocr_path.is_file():
-            ocr_rows = read_ocr_parquet(ocr_path)
-    extra = visual_note_problems(
-        insights.visual_notes,
-        ocr_rows=ocr_rows,
-        frame_stems=stems,
-        clip_names=clip_names,
-    )
-    if extra:
-        raise ValueError(extra[0][1])
 
 
 def frames_session(
@@ -199,7 +222,9 @@ def vlm_session(
         clips=clips,
         ocr_rows=ocr_rows,
         recording_path=record.recording.path,
+        root=root,
     )
+    previous_vlm_cost = _previous_vlm_cost(root, session_id)
     result = provider.annotate(ctx)
     stems = {path.stem for path in frames}
     clip_names = {path.name for path in clips}
@@ -221,14 +246,15 @@ def vlm_session(
         insights = insights.model_copy(
             update={
                 "visual_notes": kept,
-                "gaps": sorted(set(insights.gaps) | set(gaps)),
+                "gaps": merge_visual_note_gaps(insights.gaps, gaps),
             }
         )
         store.save_insights(root, session_id, insights)
     # Fake reports 0; only bump status.cost_usd when the provider priced the call.
+    # Re-runs replace the previous VLM slice instead of stacking it.
     cost: float | None = None
     priced = result.cost_usd or 0.0
-    if priced:
+    if priced or previous_vlm_cost:
         previous = None
         status_file = store.status_path(root, session_id)
         if status_file.is_file():
@@ -236,7 +262,7 @@ def vlm_session(
                 previous = store.read_json(status_file).get("cost_usd")
             except (ValueError, OSError):
                 previous = None
-        cost = float(previous or 0.0) + priced
+        cost = max(0.0, float(previous or 0.0) - previous_vlm_cost + priced)
     store.compute_status(root, session_id, cost_usd=cost)
     payload = {
         "status": "ok",

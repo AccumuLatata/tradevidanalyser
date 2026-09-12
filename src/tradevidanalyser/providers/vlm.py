@@ -6,8 +6,10 @@ import base64
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -31,9 +33,13 @@ PROMPT_FILENAME = "vlm_v1.md"
 XAI_CHAT_URL = "https://api.x.ai/v1/chat/completions"
 GEMINI_GENERATE_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 GEMINI_FILES_URL = "https://generativelanguage.googleapis.com/upload/v1beta/files"
+GEMINI_FILE_URL = "https://generativelanguage.googleapis.com/v1beta/{name}"
 HTTP_TIMEOUT = 3600.0
 MAX_FRAMES = 8
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
+GEMINI_FILE_POLL_S = 0.25
+GEMINI_FILE_POLL_ATTEMPTS = 40
+VISUAL_NOTE_GAP_PREFIX = "dropped visual_notes:"
 
 _DIGIT_RUN = re.compile(r"\d+")
 _OFF = frozenset({"", "off", "none", "disabled"})
@@ -50,6 +56,7 @@ class VlmContext:
     clips: list[Path]
     ocr_rows: list[OcrRow]
     recording_path: str | None = None
+    root: Path | None = None
 
 
 @dataclass
@@ -127,19 +134,31 @@ def apply_visual_note_guard(
     return kept, gaps
 
 
+def merge_visual_note_gaps(existing: list[str], gaps: list[str]) -> list[str]:
+    """Replace prior visual-note drop reasons so retries do not stack forever."""
+    kept = [item for item in existing if not item.startswith(VISUAL_NOTE_GAP_PREFIX)]
+    return sorted(set(kept) | set(gaps))
+
+
 def notes_json_schema() -> dict[str, Any]:
-    schema = {
+    """xAI strict json_schema: every object is closed and every key is required."""
+    note = {
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "notes": {
-                "type": "array",
-                "items": VisualNote.model_json_schema(),
-            }
+            "text": {"type": "string"},
+            "t": {"type": ["number", "null"]},
+            "frames_cited": {"type": "array", "items": {"type": "string"}},
+            "clip": {"type": ["string", "null"]},
         },
+        "required": ["text", "t", "frames_cited", "clip"],
+    }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {"notes": {"type": "array", "items": note}},
         "required": ["notes"],
     }
-    return schema
 
 
 def _load_ocr_rows(root: Path, session_id: str) -> list[OcrRow]:
@@ -507,7 +526,7 @@ class GeminiVlmProvider:
         ]
         owns = self._client is None
         client = self._client or httpx.Client(timeout=HTTP_TIMEOUT)
-        uploaded: str | None = None
+        scratch: Path | None = None
         try:
             if frames:
                 for frame in frames:
@@ -522,7 +541,11 @@ class GeminiVlmProvider:
                         }
                     )
             elif clip_path is not None:
-                safe_clip = _redacted_clip_copy(clip_path, ctx.recording_path)
+                safe_clip = _redacted_clip_copy(
+                    clip_path, ctx.recording_path, root=ctx.root
+                )
+                if safe_clip.resolve() != clip_path.resolve():
+                    scratch = safe_clip
                 uploaded = self._upload_clip(client, key, safe_clip)
                 parts.append(
                     {
@@ -546,6 +569,7 @@ class GeminiVlmProvider:
             except httpx.HTTPError as exc:
                 raise VlmError(f"Gemini request failed: {exc}") from exc
         finally:
+            _cleanup_vlm_scratch(scratch)
             if owns:
                 client.close()
         if response.status_code >= 400:
@@ -569,59 +593,163 @@ class GeminiVlmProvider:
         )
 
     def _upload_clip(self, client: httpx.Client, key: str, clip: Path) -> str:
+        data = clip.read_bytes()
         try:
-            response = client.post(
+            start = client.post(
                 GEMINI_FILES_URL,
                 params={"key": key},
-                files={
-                    "metadata": (
-                        None,
-                        json.dumps({"file": {"display_name": clip.name}}),
-                        "application/json",
-                    ),
-                    "file": (clip.name, clip.read_bytes(), "video/mp4"),
+                headers={
+                    "X-Goog-Upload-Protocol": "resumable",
+                    "X-Goog-Upload-Command": "start",
+                    "X-Goog-Upload-Header-Content-Length": str(len(data)),
+                    "X-Goog-Upload-Header-Content-Type": "video/mp4",
+                    "Content-Type": "application/json",
                 },
+                json={"file": {"display_name": clip.name}},
                 timeout=HTTP_TIMEOUT,
             )
         except httpx.HTTPError as exc:
             raise VlmError(f"Gemini file upload failed: {exc}") from exc
-        if response.status_code >= 400:
-            raise VlmError(f"Gemini upload HTTP {response.status_code}: {response.text[:300]}")
-        try:
-            body = response.json()
-        except ValueError as exc:
-            raise VlmError("Gemini upload returned non-JSON") from exc
-        file_obj = body.get("file") if isinstance(body, dict) else None
-        uri = None
-        if isinstance(file_obj, dict):
-            uri = file_obj.get("uri") or file_obj.get("name")
-        elif isinstance(body, dict):
-            uri = body.get("uri") or body.get("name")
-        if not isinstance(uri, str) or not uri:
+        if start.status_code >= 400:
+            raise VlmError(f"Gemini upload HTTP {start.status_code}: {start.text[:300]}")
+        upload_url = start.headers.get("x-goog-upload-url")
+        if upload_url:
+            try:
+                uploaded = client.post(
+                    upload_url,
+                    headers={
+                        "Content-Length": str(len(data)),
+                        "X-Goog-Upload-Offset": "0",
+                        "X-Goog-Upload-Command": "upload, finalize",
+                    },
+                    content=data,
+                    timeout=HTTP_TIMEOUT,
+                )
+            except httpx.HTTPError as exc:
+                raise VlmError(f"Gemini file upload failed: {exc}") from exc
+            if uploaded.status_code >= 400:
+                raise VlmError(
+                    f"Gemini upload HTTP {uploaded.status_code}: {uploaded.text[:300]}"
+                )
+            body = _response_object(uploaded, "Gemini upload")
+        else:
+            body = _response_object(start, "Gemini upload")
+        uri, name, state = _gemini_file_ref(body)
+        if state == "FAILED":
+            raise VlmError("Gemini file processing failed")
+        if state == "ACTIVE" and uri:
+            return uri
+        return self._wait_file_active(client, key, uri=uri, name=name)
+
+    def _wait_file_active(
+        self,
+        client: httpx.Client,
+        key: str,
+        *,
+        uri: str | None,
+        name: str | None,
+    ) -> str:
+        file_name = _gemini_file_name(name=name, uri=uri)
+        if not file_name:
+            if uri:
+                return uri
             raise VlmError("Gemini upload response has no file uri")
+        url = GEMINI_FILE_URL.format(name=file_name)
+        last_uri = uri
+        for _ in range(GEMINI_FILE_POLL_ATTEMPTS):
+            try:
+                response = client.get(url, params={"key": key}, timeout=HTTP_TIMEOUT)
+            except httpx.HTTPError as exc:
+                raise VlmError(f"Gemini file status failed: {exc}") from exc
+            if response.status_code >= 400:
+                raise VlmError(f"Gemini file HTTP {response.status_code}: {response.text[:300]}")
+            payload = _response_object(response, "Gemini file")
+            got_uri, _name, state = _gemini_file_ref(payload)
+            if got_uri:
+                last_uri = got_uri
+            if state == "FAILED":
+                raise VlmError("Gemini file processing failed")
+            if state == "ACTIVE":
+                if not last_uri:
+                    last_uri = f"https://generativelanguage.googleapis.com/v1beta/{file_name}"
+                return last_uri
+            time.sleep(GEMINI_FILE_POLL_S)
+        raise VlmError("Gemini file did not become ACTIVE")
+
+
+def _response_object(response: httpx.Response, label: str) -> dict[str, Any]:
+    try:
+        body = response.json()
+    except ValueError as exc:
+        raise VlmError(f"{label} returned non-JSON") from exc
+    if not isinstance(body, dict):
+        raise VlmError(f"{label} returned a non-object JSON body")
+    return body
+
+
+def _gemini_file_ref(body: dict[str, Any]) -> tuple[str | None, str | None, str | None]:
+    file_obj = body.get("file") if isinstance(body.get("file"), dict) else body
+    if not isinstance(file_obj, dict):
+        return None, None, None
+    uri = file_obj.get("uri")
+    name = file_obj.get("name")
+    state = file_obj.get("state")
+    return (
+        uri if isinstance(uri, str) and uri else None,
+        name if isinstance(name, str) and name else None,
+        state.upper() if isinstance(state, str) and state else None,
+    )
+
+
+def _gemini_file_name(*, name: str | None, uri: str | None) -> str | None:
+    if name:
+        if name.startswith("files/"):
+            return name
+        if "/" not in name:
+            return f"files/{name}"
+        return name
+    if not uri:
+        return None
+    marker = "/files/"
+    if marker in uri:
+        return "files/" + uri.split(marker, 1)[1].split("?", 1)[0]
+    if uri.startswith("files/"):
         return uri
+    return None
 
 
-def _redacted_clip_copy(clip: Path, recording_path: str | None) -> Path:
-    """Re-apply layout masks before a clip leaves the box. Frames are already redacted."""
+def _cleanup_vlm_scratch(path: Path | None) -> None:
+    if path is None:
+        return
+    parent = path.parent
+    path.unlink(missing_ok=True)
+    if parent.name.startswith("tva-vlm-"):
+        shutil.rmtree(parent, ignore_errors=True)
+
+
+def _redacted_clip_copy(
+    clip: Path, recording_path: str | None, *, root: Path | None = None
+) -> Path:
+    """Re-apply TVA_ROOT layout masks before a clip leaves the box."""
     _assert_no_raw_tape([str(clip.resolve())], recording_path)
     try:
         from tradevidanalyser.frames import get_layout
         from tradevidanalyser.redact import drawbox_filter
         from tradevidanalyser import media
-    except Exception:
-        return clip
+    except Exception as exc:
+        raise VlmError(f"cannot load redaction tools for Gemini clip: {exc}") from exc
     try:
-        layout = get_layout()
-    except (ValueError, OSError):
-        return clip
+        layout = get_layout(root=root)
+    except (ValueError, OSError) as exc:
+        raise VlmError(f"cannot load layout for clip redaction: {exc}") from exc
     vf = drawbox_filter(layout)
     if not vf:
         return clip
     binary = media.which("ffmpeg")
     if not binary:
         raise VlmError("ffmpeg not on PATH (needed to re-redact a clip for Gemini)")
-    tmp = Path(tempfile.mkdtemp(prefix="tva-vlm-")) / clip.name
+    tmp_dir = Path(tempfile.mkdtemp(prefix="tva-vlm-"))
+    tmp = tmp_dir / clip.name
     result = subprocess.run(
         [
             binary,
@@ -645,7 +773,7 @@ def _redacted_clip_copy(clip: Path, recording_path: str | None) -> Path:
         text=True,
     )
     if result.returncode != 0 or not tmp.is_file() or tmp.stat().st_size == 0:
-        tmp.unlink(missing_ok=True)
+        _cleanup_vlm_scratch(tmp)
         raise VlmError(result.stderr.strip() or "ffmpeg re-redact clip failed")
     return tmp
 
