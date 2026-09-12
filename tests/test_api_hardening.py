@@ -107,6 +107,40 @@ def test_compute_status_preserves_failed_until_retry(
     running = store.compute_status(tva_root, record.id, running=["transcribe"])
     assert running.stages["transcribe"] == "running"
     assert running.error is None
+    durable = store.compute_status(tva_root, record.id)
+    assert durable.stages["transcribe"] == "failed"
+    assert durable.error == "asr exploded"
+    on_disk = store.read_json(store.status_path(tva_root, record.id))
+    assert on_disk["stages"]["transcribe"] == "failed"
+    assert on_disk["error"] == "asr exploded"
+
+
+def test_compute_status_failed_survives_concurrent_running_overlay(
+    tva_root: Path, sample_video: Path
+) -> None:
+    record = ingest(sample_video, root=tva_root)
+    store.compute_status(tva_root, record.id, error="asr exploded", failed="transcribe")
+    seen: list[str] = []
+
+    def overlay() -> None:
+        for _ in range(40):
+            store.compute_status(tva_root, record.id, running=["transcribe"])
+
+    def reread() -> None:
+        for _ in range(40):
+            status = store.compute_status(tva_root, record.id)
+            seen.append(status.stages["transcribe"])
+
+    workers = [threading.Thread(target=overlay), threading.Thread(target=reread)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join()
+    assert seen
+    assert set(seen) == {"failed"}
+    final = store.compute_status(tva_root, record.id)
+    assert final.stages["transcribe"] == "failed"
+    assert final.error == "asr exploded"
 
 
 def test_days_window_is_n_calendar_days() -> None:
@@ -199,7 +233,7 @@ def test_background_run_persists_failed_and_error(
     deadline = time.time() + 8
     while time.time() < deadline:
         body = client.get(f"/sessions/{record.id}/status").json()
-        if body["stages"].get("transcribe") == "failed":
+        if body["stages"].get("transcribe") in {"failed", "missing"}:
             break
         time.sleep(0.05)
     assert body["stages"]["transcribe"] == "failed"

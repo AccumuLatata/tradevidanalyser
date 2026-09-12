@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 from tradevidanalyser import config
 from tradevidanalyser.schema import Insights, SessionRecord, SessionStatus, Transcript
+
+_STATUS_LOCK = threading.Lock()
 
 
 def write_json(path: Path, payload: dict) -> None:
@@ -96,6 +99,26 @@ def compute_status(
     running: list[str] | None = None,
     failed: str | None = None,
 ) -> SessionStatus:
+    with _STATUS_LOCK:
+        return _compute_status_locked(
+            root,
+            session_id,
+            error=error,
+            cost_usd=cost_usd,
+            running=running,
+            failed=failed,
+        )
+
+
+def _compute_status_locked(
+    root: Path,
+    session_id: str,
+    *,
+    error: str | None,
+    cost_usd: float | None,
+    running: list[str] | None,
+    failed: str | None,
+) -> SessionStatus:
     stages: dict[str, str] = {}
     stages["ingest"] = "ok" if session_json_path(root, session_id).is_file() else "missing"
     stages["transcribe"] = "ok" if transcript_path(root, session_id).is_file() else "missing"
@@ -109,23 +132,26 @@ def compute_status(
             previous = None
     if cost_usd is None and previous is not None:
         cost_usd = previous.cost_usd
-    running_set = set(running or [])
     if previous is not None:
         for name, state in previous.stages.items():
-            if state == "failed" and stages.get(name) == "missing" and name not in running_set:
+            if state == "failed" and stages.get(name) == "missing":
                 stages[name] = "failed"
-    if failed and stages.get(failed) != "ok" and failed not in running_set:
+    if failed and stages.get(failed) != "ok":
         stages[failed] = "failed"
-    for name in running or []:
-        if stages.get(name) != "ok":
-            stages[name] = "running"
     if error is None and previous is not None:
         error = previous.error
     if not any(state == "failed" for state in stages.values()):
         error = None
-    status = SessionStatus(session_id=session_id, stages=stages, error=error, cost_usd=cost_usd)  # type: ignore[arg-type]
-    write_json(path, status.model_dump(mode="json"))
-    return status
+    durable = SessionStatus(session_id=session_id, stages=stages, error=error, cost_usd=cost_usd)  # type: ignore[arg-type]
+    write_json(path, durable.model_dump(mode="json"))
+    if not running:
+        return durable
+    view = dict(stages)
+    for name in running:
+        if view.get(name) != "ok":
+            view[name] = "running"
+    view_error = None if not any(state == "failed" for state in view.values()) else error
+    return SessionStatus(session_id=session_id, stages=view, error=view_error, cost_usd=cost_usd)  # type: ignore[arg-type]
 
 
 def list_session_ids(root: Path) -> list[str]:
