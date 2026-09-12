@@ -188,6 +188,11 @@ v1 has no fill ingest. When TVA4 opens:
 **Decision:** no fill client in v1. Next fill source is TradesViz, not a
 broker API.
 
+**PR-16:** `tva fills` is that TradesViz loader. Import ThesisTester when
+the `[journal]` extra is present; otherwise `fills_mirror` (CI). Window
+the CSV to the session, write `venue` + `tva_trade_id`, discard
+`commission` / `fees`. AMP recon and a TopstepX venue adapter stay later.
+
 ---
 
 ## 6. OBS and clock alignment

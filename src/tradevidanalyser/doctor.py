@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from tradevidanalyser import __version__, media
+from tradevidanalyser.fills import thesistester_available
 from tradevidanalyser.ocr import paddleocr_importable
 from tradevidanalyser.providers.asr import cuda_available, whisperx_importable
 from tradevidanalyser.schema import DoctorCheck, DoctorReport
@@ -175,6 +176,16 @@ def run_doctor(root: Path) -> DoctorReport:
     else:
         gem_status, gem_detail = "warn", "GEMINI_API_KEY unset (VLM gemini is opt-in)"
     checks.append(DoctorCheck(id="gemini_key", status=gem_status, detail=gem_detail))
+
+    if thesistester_available():
+        journal_status, journal_detail = "ok", "thesistester importable (fills import path)"
+    else:
+        journal_status, journal_detail = (
+            "warn",
+            "thesistester not installed; tva fills uses fills_mirror "
+            "(pip install 'tradevidanalyser[journal]')",
+        )
+    checks.append(DoctorCheck(id="journal", status=journal_status, detail=journal_detail))
 
     el_key = bool((os.environ.get("ELEVENLABS_API_KEY") or "").strip())
     checks.append(

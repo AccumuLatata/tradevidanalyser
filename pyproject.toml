@@ -33,6 +33,9 @@ whisperx = [
 ocr = [
     "paddleocr>=2.7,<4",
 ]
+journal = [
+    "thesistester @ git+https://github.com/AccumuLatata/ThesisTester.git",
+]
 
 [project.scripts]
 tva = "tradevidanalyser.cli:main"

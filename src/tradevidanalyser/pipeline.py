@@ -6,6 +6,7 @@ from pathlib import Path
 
 from tradevidanalyser import store
 from tradevidanalyser.clips import ClipResult, extract_clips
+from tradevidanalyser.fills import FillsResult, ingest_fills
 from tradevidanalyser.frames import FramesResult, extract_frames
 from tradevidanalyser.ingest import ingest
 from tradevidanalyser.ocr import (
@@ -278,6 +279,28 @@ def vlm_session(
         "path": "visual_notes.json",
     }
     return payload
+
+
+def fills_session(
+    session_id: str,
+    *,
+    root: Path,
+    executions: Path,
+    venue: str | None = None,
+    include_manual: bool = False,
+    prefer_import: bool | None = None,
+) -> FillsResult:
+    if not store.is_safe_path_name(session_id):
+        raise ValueError(f"unsafe session id {session_id!r}")
+    record = store.load_session(root, session_id)
+    return ingest_fills(
+        record,
+        executions,
+        root=root,
+        venue=venue,
+        include_manual=include_manual,
+        prefer_import=prefer_import,
+    )
 
 
 def run_latest(
