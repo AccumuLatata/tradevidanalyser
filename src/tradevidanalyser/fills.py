@@ -677,6 +677,7 @@ def ingest_fills(
         fills_file.unlink(missing_ok=True)
         trades_file.unlink(missing_ok=True)
         store.evidence_path(root, record.id).unlink(missing_ok=True)
+        store.rules_path(root, record.id).unlink(missing_ok=True)
         store.compute_status(root, record.id)
         return FillsResult(
             session_id=record.id,
@@ -710,9 +711,10 @@ def ingest_fills(
     assert_no_cost_columns(trade_table)
     write_table(fills_file, fill_table)
     write_table(trades_file, trade_table)
-    # tva_trade_id is reassigned T01… on each ingest; stale evidence would
-    # attach stated fields to the wrong trade.
+    # tva_trade_id is reassigned T01… on each ingest; stale evidence/rules
+    # would attach to the wrong trades.
     store.evidence_path(root, record.id).unlink(missing_ok=True)
+    store.rules_path(root, record.id).unlink(missing_ok=True)
     store.compute_status(root, record.id)
     return FillsResult(
         session_id=record.id,

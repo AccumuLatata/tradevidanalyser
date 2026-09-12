@@ -1,0 +1,18 @@
+# Deterministic rule thresholds (PR-20). Facts file: rules.json is derived
+# from trades.parquet + this config. Never consults the model.
+#
+# daily_loss_limit_usd is unset on purpose (D4 parked). R-DLL is
+# unverifiable until the desk sets $100 or $200 here.
+# flat_by is HH:MM in America/New_York; null → R-CLOSE unverifiable.
+
+daily_loss_limit_usd: null
+max_trades_per_day: 10
+consecutive_loss_timeout:
+  n: 3
+  minutes: 30
+post_loss_block_minutes: 5
+reentry:
+  window_s: 120
+  max: 1
+  block_minutes: 5
+flat_by: null

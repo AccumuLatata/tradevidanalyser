@@ -204,6 +204,22 @@ class SessionStatus(BaseModel):
     cost_usd: float | None = None
 
 
+RuleStatus = Literal["pass", "violated", "unverifiable"]
+
+
+class RuleCheck(BaseModel):
+    rule: str
+    status: RuleStatus
+    evidence: dict = Field(default_factory=dict)
+    reason: str | None = None
+
+
+class RulesReport(BaseModel):
+    schema_version: str = SCHEMA_VERSION
+    session_id: str
+    rules: list[RuleCheck] = Field(default_factory=list)
+
+
 class DoctorCheck(BaseModel):
     id: str
     status: Literal["ok", "warn", "fail"]

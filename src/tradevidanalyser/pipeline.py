@@ -19,6 +19,7 @@ from tradevidanalyser.ocr import (
     write_ocr_parquet,
 )
 from tradevidanalyser.evidence import EvidenceResult, evidence_session as run_evidence
+from tradevidanalyser.rules import RulesResult, rules_session as run_rules
 from tradevidanalyser.providers.asr import AsrError, get_asr_provider
 from tradevidanalyser.providers.extract import (
     citation_problems,
@@ -351,6 +352,17 @@ def evidence_session(
                 store.compute_status(root, session_id)
                 raise
     return result
+
+
+def rules_session(
+    session_id: str,
+    *,
+    root: Path,
+    config_path: Path | None = None,
+) -> RulesResult:
+    if not store.is_safe_path_name(session_id):
+        raise ValueError(f"unsafe session id {session_id!r}")
+    return run_rules(session_id, root=root, config_path=config_path)
 
 
 def align_session(
