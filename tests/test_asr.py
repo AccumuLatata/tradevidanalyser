@@ -16,6 +16,9 @@ from tradevidanalyser.providers.asr import (
     AsrError,
     WhisperXAsrProvider,
     get_asr_provider,
+    resolve_batch_size,
+    resolve_compute_type,
+    resolve_device,
     transcript_from_whisperx,
     transcripts_close,
     whisperx_importable,
@@ -25,9 +28,9 @@ from tradevidanalyser.wer import score_session
 
 
 class _StubModel:
-    def transcribe(self, audio, batch_size=16):
+    def transcribe(self, audio, batch_size=16, language=None, **kwargs):
         return {
-            "language": "de",
+            "language": language or "de",
             "segments": [
                 {"start": 0.0, "end": 2.1, "text": "Bias long am ONH.", "language": "de"},
                 {"start": 2.1, "end": 4.0, "text": "Playbook 3c.", "language": "en"},
@@ -59,6 +62,7 @@ class _WhisperXStub:
                 "language": language,
                 "asr_options": asr_options or {},
                 "vad_method": kwargs.get("vad_method"),
+                "device_index": kwargs.get("device_index", 0),
             }
         )
         return _StubModel()
@@ -97,9 +101,12 @@ def _install_stub(monkeypatch: pytest.MonkeyPatch) -> _WhisperXStub:
     return stub
 
 
-def test_default_asr_provider_is_fake() -> None:
+def test_default_asr_provider_is_fake(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TVA_ASR_PROVIDER", raising=False)
     assert get_asr_provider().name == "fake"
     assert get_asr_provider("whisperx").name == "whisperx"
+    monkeypatch.setenv("TVA_ASR_PROVIDER", "  ")
+    assert get_asr_provider().name == "fake"
 
 
 def test_whisperx_maps_aligned_result() -> None:
@@ -125,6 +132,38 @@ def test_whisperx_maps_aligned_result() -> None:
     assert transcript.segments[0].lang == "de"
     assert transcript.segments[0].words[1].w == "ONH"
     assert transcript.language == "de"
+
+
+def test_whisperx_maps_batched_list_text_and_nan_times() -> None:
+    result = {
+        "language": "de",
+        "segments": [
+            {
+                "start": float("nan"),
+                "end": float("nan"),
+                "text": ["Hallo ONH"],
+                "words": [
+                    {"word": "Hallo", "start": 0.0, "end": 0.4, "score": 0.9},
+                    {"word": "ONH", "start": 0.4, "end": 0.8, "score": float("nan")},
+                ],
+            },
+            {
+                "start": 1.5,
+                "end": 2.0,
+                "text": "",
+                "words": [{"word": "Playbook", "start": 1.5, "end": 2.0, "score": 0.7}],
+            },
+        ],
+    }
+    transcript = transcript_from_whisperx(
+        result, language="de", model="large-v3", prompt_version="jargon-v1+test"
+    )
+    assert transcript.segments[0].text == "Hallo ONH"
+    assert transcript.segments[0].t0 == 0.0
+    assert transcript.segments[0].t1 == 0.8
+    assert transcript.segments[0].words[1].p == 1.0
+    assert transcript.segments[1].id == "seg_002"
+    assert transcript.segments[1].text == "Playbook"
 
 
 def test_whisperx_stub_transcribe(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -164,6 +203,33 @@ def test_whisperx_cuda_compute_type(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     WhisperXAsrProvider().transcribe(audio, language="de")
     assert stub.load_calls[0]["compute_type"] == "float16"
     assert stub.load_calls[0]["device"] == "cuda"
+    assert stub.load_calls[0]["device_index"] == 0
+
+
+def test_whisperx_cuda_index_is_not_treated_as_cpu(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    stub = _install_stub(monkeypatch)
+    monkeypatch.setenv("TVA_ASR_DEVICE", "cuda:1")
+    audio = tmp_path / "mic.opus"
+    audio.write_bytes(b"x")
+    WhisperXAsrProvider().transcribe(audio, language="de")
+    assert stub.load_calls[0]["device"] == "cuda"
+    assert stub.load_calls[0]["device_index"] == 1
+    assert stub.load_calls[0]["compute_type"] == "float16"
+    assert resolve_device() == ("cuda", 1)
+    assert resolve_compute_type("cuda") == "float16"
+    assert resolve_batch_size("cuda") == 16
+
+
+def test_invalid_batch_size_is_asr_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TVA_ASR_BATCH_SIZE", "nope")
+    with pytest.raises(AsrError, match="TVA_ASR_BATCH_SIZE"):
+        resolve_batch_size("cpu")
+    monkeypatch.setenv("TVA_ASR_BATCH_SIZE", "0")
+    with pytest.raises(AsrError, match="TVA_ASR_BATCH_SIZE"):
+        resolve_batch_size("cpu")
+    monkeypatch.setenv("TVA_ASR_DEVICE", "cuda:x")
+    with pytest.raises(AsrError, match="TVA_ASR_DEVICE"):
+        resolve_device()
 
 
 def test_whisperx_rerun_within_20ms(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -234,6 +300,20 @@ def test_doctor_reports_whisperx_and_cuda(tva_root: Path) -> None:
     assert ids["whisperx"].status in {"ok", "warn"}
     assert ids["cuda"].status in {"ok", "warn"}
     assert report.ok
+
+
+def test_doctor_normalizes_provider_and_fails_if_selected(
+    tva_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if whisperx_importable():
+        pytest.skip("whisperx is installed in this environment")
+    monkeypatch.setenv("TVA_ASR_PROVIDER", " WhisperX ")
+    report = run_doctor(tva_root)
+    ids = {c.id: c for c in report.checks}
+    assert ids["asr_provider"].status == "ok"
+    assert ids["asr_provider"].detail == "TVA_ASR_PROVIDER=whisperx"
+    assert ids["whisperx"].status == "fail"
+    assert not report.ok
 
 
 @pytest.mark.golden

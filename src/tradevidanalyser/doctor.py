@@ -76,11 +76,11 @@ def run_doctor(root: Path) -> DoctorReport:
         )
     )
 
-    provider = os.environ.get("TVA_ASR_PROVIDER", "fake")
+    provider = (os.environ.get("TVA_ASR_PROVIDER") or "fake").strip().lower() or "fake"
     checks.append(
         DoctorCheck(
             id="asr_provider",
-            status="ok" if provider in {"fake", "whisperx"} else "warn",
+            status="ok" if provider in {"fake", "whisperx", "whisper"} else "warn",
             detail=f"TVA_ASR_PROVIDER={provider}",
         )
     )
