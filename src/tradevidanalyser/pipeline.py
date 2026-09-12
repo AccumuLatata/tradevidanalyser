@@ -24,7 +24,11 @@ def transcribe_session(
     provider = get_asr_provider(provider_name)
     transcript = provider.transcribe(audio, language=record.language)
     store.save_transcript(root, session_id, transcript)
-    store.compute_status(root, session_id)
+    store.compute_status(
+        root,
+        session_id,
+        cost_usd=getattr(provider, "last_cost_usd", None),
+    )
     return transcript
 
 

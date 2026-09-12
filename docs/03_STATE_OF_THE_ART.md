@@ -37,6 +37,12 @@ the pinned model; `prompt_version` records `jargon-v1+<model>+whisperx-<ver>`.
 Fake remains the CLI/CI default. Hosted fallback is unchanged and lands in
 PR-05.
 
+**Decision check (PR-05):** Hosted pick is **Deepgram Nova-3** (not Scribe v2)
+because `keyterm` boosts the glossary list the Mac path needs. The adapter
+uploads `audio/mic.opus` only; cost is estimated at the SOTA $0.29/audio-hour
+and written to `status.json.cost_usd`. `ScribeAsrProvider` keeps the same
+`AsrProvider` interface but is not wired. Fake remains the CLI/CI default.
+
 ---
 
 ## 2. Video understanding (multimodal LLMs)

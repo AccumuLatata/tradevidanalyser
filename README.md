@@ -19,7 +19,7 @@ Python 3.11+, `ffmpeg` / `ffprobe` on PATH.
 | CI / first-run | `pip install -e ".[dev]"` | `fake` (default) | No GPU, no model download, no API key |
 | Trading PC (CUDA) | `pip install -e ".[dev,whisperx]"` | `whisperx` | `compute_type=float16`; install a CUDA torch wheel from pytorch.org if pip gave you CPU-only |
 | Mac (CPU) | `pip install -e ".[dev,whisperx]"` | `whisperx` | `compute_type=int8` + a warning; slow. Prefer the PC GPU or hosted ASR |
-| Mac hosted fallback | extra lands in PR-05 | `deepgram` / `scribe` | Audio only; not in this PR |
+| Mac hosted fallback | `pip install -e ".[dev]"` | `deepgram` | `DEEPGRAM_API_KEY`; uploads `audio/mic.opus` only. Scribe is reserved, not the PR-05 pick |
 
 ```bash
 python -m venv .venv
@@ -29,9 +29,10 @@ pip install -e ".[dev]"            # fake ASR (default)
 tva doctor
 ```
 
-WhisperX is **opt-in**. Leave `TVA_ASR_PROVIDER` unset (or `fake`) unless you
-have the extra installed. Optional knobs: `TVA_ASR_MODEL` (default
-`large-v3`), `TVA_ASR_BATCH_SIZE`, `TVA_ASR_DEVICE`, `TVA_ASR_COMPUTE_TYPE`.
+WhisperX and Deepgram are **opt-in**. Leave `TVA_ASR_PROVIDER` unset (or
+`fake`) unless you have the extra / key. Optional knobs: `TVA_ASR_MODEL`
+(WhisperX `large-v3`, Deepgram `nova-3`), `TVA_ASR_BATCH_SIZE`,
+`TVA_ASR_DEVICE`, `TVA_ASR_COMPUTE_TYPE`, `DEEPGRAM_API_KEY`.
 
 Set `TVA_ROOT` to the shared store (Synology mount, or a local folder):
 
@@ -66,8 +67,9 @@ hand-corrected reference (the golden excerpt on the NAS). It uses
 
 ASR and extraction default to **fake** providers (`TVA_ASR_PROVIDER=fake`,
 `TVA_EXTRACT_PROVIDER=fake`) so CI and first-run never call a paid API.
-WhisperX is the local adapter (`TVA_ASR_PROVIDER=whisperx`); Grok extract
-stays a stub until TVA2. Hosted ASR is PR-05.
+WhisperX is the local adapter (`TVA_ASR_PROVIDER=whisperx`). Hosted fallback
+is Deepgram (`TVA_ASR_PROVIDER=deepgram`, audio only). Grok extract stays a
+stub until TVA2.
 
 ## API (Grok)
 
