@@ -121,6 +121,7 @@ Every stage is a CLI subcommand, idempotent, writing into
 | Doctor | `tva doctor` | `GET /health` | ffmpeg / GPU / keys / NAS mount | yes |
 | Fills | `tva fills <session> --executions <csv> --venue topstepx\|amp` | CLI (not a bot run stage) | `fills.parquet` / `trades.parquet` | yes, optional |
 | Align | `tva align <session> [--manual-offset s]` | CLI (not a bot run stage) | `session.alignment` (offset/drift/confidence/method/samples) | yes, optional |
+| Evidence | `tva evidence <session>` | CLI (not a bot run stage) | `evidence.json` per-trade windows + cited stated fields | yes, optional |
 | Rules | `tva rules <session>` | — | scorecard | **later** |
 | Context | `tva context <session>` | — | briefs + ThesisTester attribution | **later** |
 
@@ -170,6 +171,13 @@ insights:                        # model-derived, every field cited or null
   # PR-09: events from a second pass (ids + first-pass citation ids, no
   # transcript text; event text re-hydrated); summaries drop if they contain
   # a digit run that is not an exact digit run in any *valid* cited segment
+
+evidence:                        # PR-19; omit until `tva evidence`
+  provider / model / prompt_version
+  trades: [{tva_trade_id, window{t0,t1}, commentary[],
+            stated{setup,bias,stop_raw,target_raw,playbook} each {value,seg}|null,
+            markers[], frames[], ocr[], clip, alignment_confidence,
+            alignment: low|null, gaps[]}]
 
 fills: null                      # later
 trades: null                     # later

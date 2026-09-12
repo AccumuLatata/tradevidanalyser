@@ -51,6 +51,54 @@ class Alignment(BaseModel):
     samples: list[AlignmentSample] = Field(default_factory=list)
 
 
+class StatedCite(BaseModel):
+    value: str
+    seg: str
+
+
+class StatedFields(BaseModel):
+    setup: StatedCite | None = None
+    bias: StatedCite | None = None
+    stop_raw: StatedCite | None = None
+    target_raw: StatedCite | None = None
+    playbook: StatedCite | None = None
+
+
+class EvidenceWindow(BaseModel):
+    t0: float
+    t1: float
+
+
+class EvidenceOcrRef(BaseModel):
+    t: float
+    roi: str
+    text: str
+    parsed: str | None = None
+
+
+class EvidenceTrade(BaseModel):
+    tva_trade_id: str
+    window: EvidenceWindow
+    commentary: list[str] = Field(default_factory=list)
+    stated: StatedFields = Field(default_factory=StatedFields)
+    markers: list[Chapter] = Field(default_factory=list)
+    frames: list[str] = Field(default_factory=list)
+    ocr: list[EvidenceOcrRef] = Field(default_factory=list)
+    clip: str | None = None
+    alignment_confidence: float
+    alignment: Literal["low"] | None = None
+    gaps: list[str] = Field(default_factory=list)
+
+
+class Evidence(BaseModel):
+    schema_version: str = SCHEMA_VERSION
+    provider: str
+    model: str
+    prompt_version: str
+    session_id: str
+    trades: list[EvidenceTrade] = Field(default_factory=list)
+
+
 class SessionRecord(BaseModel):
     schema_version: str = SCHEMA_VERSION
     id: str

@@ -18,8 +18,11 @@ from tradevidanalyser.glossary import load_glossary
 from tradevidanalyser.schema import (
     EVENT_KINDS,
     CitedSpan,
+    Evidence,
     Insights,
     SessionEvent,
+    StatedCite,
+    StatedFields,
     Transcript,
     TranscriptSegment,
 )
@@ -42,6 +45,10 @@ XAI_CHAT_URL = "https://api.x.ai/v1/chat/completions"
 HTTP_TIMEOUT = 3600.0
 PROMPT_FILENAME = "insights_v1.de.md"
 EVENTS_PROMPT_FILENAME = "events_v1.de.md"
+STATED_PROMPT_FILENAME = "stated_v1.de.md"
+STATED_PROMPT_VERSION_FAKE = "stated-keyword-v1"
+STATED_FIELD_NAMES = ("setup", "bias", "stop_raw", "target_raw", "playbook")
+NO_SPEECH_GAP = "no speech in window"
 SUMMARY_WORD_LIMIT = 120
 _DIGIT_RUN = re.compile(r"\d+")
 _WINDOW_EXCLUDE = frozenset(
@@ -63,11 +70,24 @@ class ExtractError(RuntimeError):
     pass
 
 
+class StatedFieldsPass(BaseModel):
+    """Per-window stated fields. Gaps stay on the pass, not on StatedFields."""
+
+    setup: StatedCite | None = None
+    bias: StatedCite | None = None
+    stop_raw: StatedCite | None = None
+    target_raw: StatedCite | None = None
+    playbook: StatedCite | None = None
+    gaps: list[str] = Field(default_factory=list)
+
+
 class ExtractProvider(Protocol):
     name: str
     model: str
 
     def extract(self, transcript: Transcript) -> Insights: ...
+
+    def stated_fields(self, transcript: Transcript) -> StatedFieldsPass: ...
 
 
 def _hits(pattern: re.Pattern[str], transcript: Transcript) -> list[CitedSpan]:
@@ -142,6 +162,9 @@ class FakeExtractProvider:
             gaps=gaps,
             session_events=events,
         )
+
+    def stated_fields(self, transcript: Transcript) -> StatedFieldsPass:
+        return _fake_stated_fields(transcript)
 
 
 def _walk_prompt_candidates(start: Path, filename: str, *, levels: int) -> list[Path]:
@@ -410,6 +433,128 @@ def apply_citation_guard(transcript: Transcript, insights: Insights) -> Insights
     return insights.model_copy(update=cleaned)
 
 
+_SETUP_PHRASE = re.compile(r"\b(ONH Touch Scalp|ONH Touch|setup|skalp|scalp|swing)\b", re.IGNORECASE)
+_BIAS_PHRASE = re.compile(
+    r"\b(bias ist long|bias ist short|bias long|bias short|kein trade|long|short|bullish|bearish)\b",
+    re.IGNORECASE,
+)
+_STOP_PHRASE = re.compile(r"\b(stop unter[^.]{0,40}|stop [^.]{0,40}|invalid[^.]{0,20})\b", re.IGNORECASE)
+_TARGET_PHRASE = re.compile(r"\b(ziel am [^.]{0,40}|ziel [^.]{0,40}|target [^.]{0,40})\b", re.IGNORECASE)
+_PLAYBOOK_PHRASE = re.compile(
+    r"\b(ONH Touch Scalp|ONH Touch|playbook [^.]+|playbook)\b",
+    re.IGNORECASE,
+)
+
+
+def _first_stated(pattern: re.Pattern[str], transcript: Transcript) -> StatedCite | None:
+    for seg in transcript.segments:
+        match = pattern.search(seg.text or "")
+        if not match:
+            continue
+        value = match.group(0).strip()
+        if value and _quote_in_segment(seg.text, value):
+            return StatedCite(value=value, seg=seg.id)
+    return None
+
+
+def _has_speech(transcript: Transcript) -> bool:
+    return any((seg.text or "").strip() for seg in transcript.segments)
+
+
+def _fake_stated_fields(transcript: Transcript) -> StatedFieldsPass:
+    if not _has_speech(transcript):
+        return StatedFieldsPass(gaps=[NO_SPEECH_GAP])
+    return StatedFieldsPass(
+        setup=_first_stated(_SETUP_PHRASE, transcript),
+        bias=_first_stated(_BIAS_PHRASE, transcript),
+        stop_raw=_first_stated(_STOP_PHRASE, transcript),
+        target_raw=_first_stated(_TARGET_PHRASE, transcript),
+        playbook=_first_stated(_PLAYBOOK_PHRASE, transcript),
+    )
+
+
+def _stated_cite_problem(cite: StatedCite, known: dict[str, str]) -> str | None:
+    if cite.seg not in known:
+        return f"citation {cite.seg} is not in the transcript"
+    if not cite.value or not _quote_in_segment(known[cite.seg], cite.value):
+        return f"quote not found in {cite.seg}"
+    return None
+
+
+def evidence_citation_problems(
+    transcript: Transcript, evidence: Evidence
+) -> list[tuple[str, StatedCite | str, str]]:
+    """Citation guard for evidence.json. pipeline._assert_citations raises."""
+    known = {seg.id: seg.text for seg in transcript.segments}
+    problems: list[tuple[str, StatedCite | str, str]] = []
+    for trade in evidence.trades:
+        prefix = trade.tva_trade_id
+        for seg_id in trade.commentary:
+            if seg_id not in known:
+                problems.append(
+                    (f"{prefix}.commentary", seg_id, f"citation {seg_id} is not in the transcript")
+                )
+        for field in STATED_FIELD_NAMES:
+            cite = getattr(trade.stated, field)
+            if cite is None:
+                continue
+            reason = _stated_cite_problem(cite, known)
+            if reason:
+                problems.append((f"{prefix}.stated.{field}", cite, reason))
+    return problems
+
+
+def apply_stated_citation_guard(
+    transcript: Transcript, stated: StatedFieldsPass
+) -> StatedFieldsPass:
+    """Null fabricated stated fields and leak them into gaps[]."""
+    known = {seg.id: seg.text for seg in transcript.segments}
+    gaps = list(stated.gaps)
+    cleaned: dict[str, StatedCite | None] = {}
+    for field in STATED_FIELD_NAMES:
+        cite = getattr(stated, field)
+        if cite is None:
+            cleaned[field] = None
+            continue
+        reason = _stated_cite_problem(cite, known)
+        if reason:
+            cleaned[field] = None
+            gaps.append(f"dropped {field} {cite.seg}: {reason}")
+        else:
+            cleaned[field] = cite
+    cleaned["gaps"] = sorted(set(gaps))
+    return stated.model_copy(update=cleaned)
+
+
+def stated_fields_of(stated: StatedFieldsPass) -> StatedFields:
+    return StatedFields(
+        setup=stated.setup,
+        bias=stated.bias,
+        stop_raw=stated.stop_raw,
+        target_raw=stated.target_raw,
+        playbook=stated.playbook,
+    )
+
+
+def stated_fields_json_schema() -> dict[str, Any]:
+    schema = StatedFieldsPass.model_json_schema()
+    schema["additionalProperties"] = False
+    defs = schema.get("$defs")
+    if isinstance(defs, dict):
+        cite = defs.get("StatedCite")
+        if isinstance(cite, dict):
+            cite["additionalProperties"] = False
+    return schema
+
+
+def stated_from_chat_payload(payload: dict[str, Any]) -> StatedFieldsPass:
+    body = _payload_body(payload)
+    try:
+        return StatedFieldsPass.model_validate(body)
+    except (TypeError, ValueError) as exc:
+        raise ExtractError(f"Grok JSON did not match StatedFieldsPass: {exc}") from exc
+
+
 def _window_transcript(transcript: Transcript, window: list[Any]) -> Transcript:
     """Citation-check a window reply against only the segments that window saw."""
     segments = [seg for seg in window if isinstance(seg, TranscriptSegment)]
@@ -639,6 +784,29 @@ class GrokExtractProvider:
             if owns_client:
                 client.close()
         return apply_citation_guard(transcript, merged)
+
+    def stated_fields(self, transcript: Transcript) -> StatedFieldsPass:
+        key = (os.environ.get(ENV_XAI_KEY) or "").strip()
+        if not key:
+            raise ExtractError("XAI_API_KEY is unset. Set it or use TVA_EXTRACT_PROVIDER=fake.")
+        path = default_prompt_path(STATED_PROMPT_FILENAME)
+        if not _has_speech(transcript):
+            return StatedFieldsPass(gaps=[NO_SPEECH_GAP])
+        owns_client = self._client is None
+        client = self._client or httpx.Client(timeout=HTTP_TIMEOUT)
+        try:
+            payload = self._complete(
+                client,
+                key=key,
+                system_prompt=path.read_text(encoding="utf-8"),
+                user_prompt=_format_window(list(transcript.segments)),
+                schema=stated_fields_json_schema(),
+                schema_name="stated_fields",
+            )
+        finally:
+            if owns_client:
+                client.close()
+        return apply_stated_citation_guard(transcript, stated_from_chat_payload(payload))
 
     def _complete(
         self,

@@ -65,6 +65,7 @@ tva fills 2026-09-11_143000 --executions executions.csv --venue topstepx
 tva fills 2026-09-11_143000 --executions executions.csv --venue amp --reconcile-dir /path/to/journal
 tva align 2026-09-11_143000
 tva align 2026-09-11_143000 --manual-offset 1.8
+tva evidence 2026-09-11_143000
 tva serve --host 127.0.0.1 --port 8764
 ```
 
@@ -120,6 +121,15 @@ and adds `recon_status` on `trades.parquet` (no AMP PDF parsing).
 Theil–Sen fits offset and drift; no usable clocks fall back to
 `method=filename` at `confidence=0.6`. `--manual-offset s` records
 `method=manual`. Not a bot `POST /run` stage.
+
+`tva evidence <id>` maps each `trades.parquet` row to video time via
+alignment and writes `evidence.json`: window (entry −180 s … exit +120 s,
+`TVA_EVIDENCE_PRE_S` / `TVA_EVIDENCE_POST_S`), commentary seg ids, cited
+`stated` fields (`setup`, `bias`, `stop_raw`, `target_raw`, `playbook`),
+nearest frames/ocr/clip, and `alignment_confidence`. Confidence below 0.8
+sets `alignment: low`. A trade with no speech keeps `stated` all null and
+records a gap. Fake extract is the default; citations are required or
+dropped. Not a bot `POST /run` stage.
 
 ASR and extraction default to **fake** providers (`TVA_ASR_PROVIDER=fake`,
 `TVA_EXTRACT_PROVIDER=fake`) so CI and first-run never call a paid API.

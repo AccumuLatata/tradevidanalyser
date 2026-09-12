@@ -15,6 +15,7 @@ from tradevidanalyser.align import alignment_result_dict
 from tradevidanalyser.pipeline import (
     align_session,
     clips_session,
+    evidence_session,
     extract_session,
     fills_session,
     frames_session,
@@ -148,6 +149,13 @@ def main(argv: list[str] | None = None) -> int:
         help="override offset_s (method=manual, drift=0)",
     )
 
+    p_ev = sub.add_parser(
+        "evidence",
+        help="per-trade windows + cited stated fields → evidence.json",
+    )
+    p_ev.add_argument("session")
+    p_ev.add_argument("--provider", default=None, help="fake (default) or grok")
+
     p_serve = sub.add_parser("serve", help="HTTP API over TVA_ROOT")
     p_serve.add_argument("--host", default="127.0.0.1")
     p_serve.add_argument("--port", type=int, default=8764)
@@ -257,6 +265,14 @@ def main(argv: list[str] | None = None) -> int:
                 manual_offset=args.manual_offset,
             )
             _emit(alignment_result_dict(args.session, alignment), as_json=True)
+            return 0
+        if args.cmd == "evidence":
+            result = evidence_session(
+                args.session,
+                root=root,
+                provider_name=args.provider,
+            )
+            _emit(result.as_dict(), as_json=True)
             return 0
         if args.cmd == "serve":
             import uvicorn

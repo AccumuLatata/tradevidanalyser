@@ -83,8 +83,10 @@ They wait until v1 is boring and reliable.
 8. **Clock alignment + per-trade evidence windows** — `tva align` (PR-18)
    writes `session.alignment` from the filename prior + OCR clock
    Theil–Sen fit (filename fallback `confidence=0.6`; `--manual-offset`
-   recorded as `method=manual`). Per-trade evidence windows are still
-   later (PR-19).
+   recorded as `method=manual`). `tva evidence` (PR-19) maps each
+   `tva_trade_id` to a video window, cited `stated` fields, and nearest
+   frames/ocr/clip. `alignment.confidence < 0.8` flags `alignment: low`.
+   Rule scorecard is still later.
 9. **Rule scorecard** — the catalog in §6, including the $100 vs $200 daily
    loss question. Needs fills. Parked (see D4).
 10. **ThesisTester join** — `journal attribute` / `zones` / `triggers` next
