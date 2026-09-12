@@ -9,7 +9,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tradevidanalyser import media, store
-from tradevidanalyser.frames import Layout, get_layout, media_for_time, quantize_time
+from tradevidanalyser.frames import (
+    Layout,
+    _media_src,
+    _under_root,
+    get_layout,
+    media_for_time,
+    quantize_time,
+)
 from tradevidanalyser.media import MediaError
 from tradevidanalyser.redact import drawbox_filter
 from tradevidanalyser.schema import SessionRecord
@@ -27,10 +34,8 @@ class ClipResult:
 
     def as_dict(self, root: Path) -> dict:
         def rel(path: Path) -> str:
-            try:
-                return str(path.resolve().relative_to(root.resolve()))
-            except ValueError:
-                return str(path)
+            resolved = _under_root(path, root)
+            return str(resolved.relative_to(root.expanduser().resolve()))
 
         return {
             "session_id": self.session_id,
@@ -77,7 +82,7 @@ def extract_clips(
         raise ValueError(f"unsafe session id {session.id!r}")
     layout = get_layout(layout_id, root=root)
     duration = float(session.recording.duration_s)
-    dest_dir = store.clips_dir(root, session.id)
+    dest_dir = _under_root(store.clips_dir(root, session.id), root)
     dest_dir.mkdir(parents=True, exist_ok=True)
     clips: list[Path] = []
     times: list[float] = []
@@ -88,9 +93,16 @@ def extract_clips(
         dest = dest_dir / clip_filename(chapter.t, chapter.name)
         if not store.is_safe_path_name(dest.name):
             raise ValueError(f"unsafe clip name {dest.name!r}")
+        _under_root(dest, dest_dir)
         _cut_window(session, root, start, end, dest, redact=redact, layout=layout)
         clips.append(dest)
         times.append(quantize_time(chapter.t))
+    keep = {path.name for path in clips}
+    for old in dest_dir.iterdir():
+        if not old.is_file():
+            continue
+        if old.name.endswith(".tmp") or (old.suffix.lower() == ".mp4" and old.name not in keep):
+            old.unlink(missing_ok=True)
     return ClipResult(session_id=session.id, clips=clips, times=times, redacted=redact)
 
 
@@ -125,7 +137,9 @@ def _cut_window(
         if vf:
             _ffmpeg_cut(joined, 0.0, end - start, dest, vf=vf, copy=False)
         else:
-            dest.write_bytes(joined.read_bytes())
+            tmp_dest = dest.with_name(dest.name + ".tmp")
+            tmp_dest.write_bytes(joined.read_bytes())
+            tmp_dest.replace(dest)
 
 
 def _window_slices(
@@ -143,7 +157,7 @@ def _window_slices(
         overlap_end = min(end, part_end)
         if overlap_end <= overlap_start:
             continue
-        src = root / part.path
+        src = _media_src(root, part.path)
         slices.append((src, overlap_start - part.offset_s, overlap_end - part.offset_s))
     return slices
 
@@ -187,10 +201,13 @@ def _ffmpeg_cut(
         cmd.extend(["-c", "copy"])
     else:
         cmd.extend(["-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-ac", "1"])
-    cmd.append(str(dest))
+    tmp = dest.with_name(dest.name + ".tmp")
+    cmd.extend(["-f", "mp4", str(tmp)])
     result = subprocess.run(cmd, check=False, capture_output=True, text=True)
-    if result.returncode != 0 or not dest.is_file() or dest.stat().st_size == 0:
+    if result.returncode != 0 or not tmp.is_file() or tmp.stat().st_size == 0:
+        tmp.unlink(missing_ok=True)
         raise MediaError(result.stderr.strip() or f"ffmpeg clip failed [{start}, {end}]")
+    tmp.replace(dest)
 
 
 def _concat_copy(sources: list[Path], dest: Path) -> None:
@@ -199,8 +216,9 @@ def _concat_copy(sources: list[Path], dest: Path) -> None:
         raise MediaError("ffmpeg not on PATH")
     dest.parent.mkdir(parents=True, exist_ok=True)
     list_path = dest.with_suffix(".concat.txt")
-    lines = [f"file '{src.resolve().as_posix()}'" for src in sources]
+    lines = [_concat_file_line(src) for src in sources]
     list_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    tmp = dest.with_name(dest.name + ".tmp")
     result = subprocess.run(
         [
             binary,
@@ -216,12 +234,21 @@ def _concat_copy(sources: list[Path], dest: Path) -> None:
             str(list_path),
             "-c",
             "copy",
-            str(dest),
+            "-f",
+            "mp4",
+            str(tmp),
         ],
         check=False,
         capture_output=True,
         text=True,
     )
     list_path.unlink(missing_ok=True)
-    if result.returncode != 0 or not dest.is_file():
+    if result.returncode != 0 or not tmp.is_file() or tmp.stat().st_size == 0:
+        tmp.unlink(missing_ok=True)
         raise MediaError(result.stderr.strip() or "ffmpeg concat clips failed")
+    tmp.replace(dest)
+
+
+def _concat_file_line(src: Path) -> str:
+    posix = src.resolve().as_posix().replace("'", r"'\''")
+    return f"file '{posix}'"

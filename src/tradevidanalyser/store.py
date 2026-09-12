@@ -73,7 +73,10 @@ def list_clips(root: Path, session_id: str) -> list[Path]:
     return sorted(
         path
         for path in folder.iterdir()
-        if path.is_file() and path.suffix.lower() == ".mp4" and is_safe_path_name(path.name)
+        if path.is_file()
+        and path.suffix.lower() == ".mp4"
+        and is_safe_path_name(path.name)
+        and path.stat().st_size > 0
     )
 
 
@@ -115,7 +118,7 @@ def list_frame_jpgs(root: Path, session_id: str) -> list[Path]:
 
 
 def invalidate_downstream(root: Path, session_id: str) -> None:
-    """Drop transcript/insights/frames so a changed recording is not left looking complete."""
+    """Drop transcript/insights/frames/clips so a changed recording is not left looking complete."""
     transcript_path(root, session_id).unlink(missing_ok=True)
     insights_path(root, session_id).unlink(missing_ok=True)
     ocr_path(root, session_id).unlink(missing_ok=True)
