@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
 from tradevidanalyser import config, store
 from tradevidanalyser.cli import main
@@ -17,6 +19,7 @@ from tradevidanalyser.ocr import (
     FakeOcrProvider,
     MIN_PARSE_CONFIDENCE,
     OcrRow,
+    _flatten_paddle,
     get_ocr_provider,
     paddleocr_importable,
     parse_clock,
@@ -28,6 +31,7 @@ from tradevidanalyser.ocr import (
 )
 from tradevidanalyser.pipeline import ocr_session
 from tradevidanalyser.schema import Chapter, RecordingInfo, SessionRecord
+from tradevidanalyser.serve import create_app
 
 
 CLOCK_TEXT = "09:31:05"
@@ -151,11 +155,75 @@ def test_parse_known_drawtext_strings() -> None:
     assert parse_position("-1") == "-1"
 
 
+def test_parse_clock_skips_dates_and_wraps_from_frame_time() -> None:
+    prior = datetime(2026, 9, 11, 14, 30, tzinfo=VIENNA)
+    assert parse_clock("11.09.2026 14:30:05", prior=prior) == "2026-09-11T14:30:05+02:00"
+    assert parse_clock("2026-09-11 14:30:05", prior=prior) == "2026-09-11T14:30:05+02:00"
+    assert parse_clock("2026-09-11T14:30:05+02:00", prior=prior) == "2026-09-11T14:30:05+02:00"
+    assert parse_clock("14.30.05", prior=prior) == "2026-09-11T14:30:05+02:00"
+    assert parse_clock("１４：３０：０５", prior=prior) == "2026-09-11T14:30:05+02:00"
+    assert parse_clock("14:30", prior=prior) == "2026-09-11T14:30:00+02:00"
+
+    overnight = datetime(2026, 9, 11, 10, 0, tzinfo=VIENNA)
+    assert (
+        parse_clock("02:00:00", prior=overnight, at_s=16 * 3600)
+        == "2026-09-12T02:00:00+02:00"
+    )
+    after_midnight = datetime(2026, 9, 11, 0, 30, tzinfo=VIENNA)
+    assert (
+        parse_clock("23:00:00", prior=after_midnight, at_s=22.5 * 3600)
+        == "2026-09-11T23:00:00+02:00"
+    )
+
+
+def test_parse_pnl_keeps_sign_with_currency_and_parens() -> None:
+    assert parse_pnl("-$42.50") == "-42.5"
+    assert parse_pnl("($42.50)") == "-42.5"
+    assert parse_pnl("+$1,234.56") == "1234.56"
+    assert parse_pnl("€ -42,50") == "-42.5"
+    assert parse_pnl("USD 150.25") == "150.25"
+
+
+def test_parse_position_flat_is_zero() -> None:
+    assert parse_position("FLAT") == "0"
+    assert parse_position("flat") == "0"
+
+
 def test_low_confidence_keeps_text_and_nulls_parsed() -> None:
     prior = datetime(2026, 9, 11, 14, 30, tzinfo=VIENNA)
     assert parse_roi("clock", CLOCK_TEXT, prior=prior, confidence=0.99) == "2026-09-11T09:31:05+02:00"
     assert parse_roi("clock", CLOCK_TEXT, prior=prior, confidence=0.2) is None
+    assert parse_roi("clock", CLOCK_TEXT, prior=prior, confidence=math.nan) is None
     assert 0.2 < MIN_PARSE_CONFIDENCE
+
+
+def test_fake_sidecar_accepts_string_values(tmp_path: Path) -> None:
+    crop = tmp_path / "5.000_clock.jpg"
+    crop.write_bytes(b"x")
+    (tmp_path / "5.000.ocr.json").write_text(
+        json.dumps({"clock": CLOCK_TEXT, "pnl": {"text": PNL_TEXT, "confidence": 0.9}}),
+        encoding="utf-8",
+    )
+    provider = FakeOcrProvider()
+    clock = provider.read(crop, roi="clock")
+    assert clock.text == CLOCK_TEXT
+    assert clock.confidence == 1.0
+    pnl = provider.read(tmp_path / "5.000_pnl.jpg", roi="pnl")
+    assert pnl.text == PNL_TEXT
+    assert pnl.confidence == 0.9
+
+
+def test_flatten_paddle_tolerates_none_scores_and_result_objects() -> None:
+    classic = [[[[0, 0], [1, 0], [1, 1], [0, 1]], ("09:31:05", None)]]
+    assert _flatten_paddle(classic) == [("09:31:05", 0.0)]
+    assert _flatten_paddle([None]) == []
+
+    class _Result:
+        rec_texts = ["-42.50"]
+        rec_scores = [0.91]
+
+    assert _flatten_paddle(_Result()) == [("-42.50", 0.91)]
+    assert _flatten_paddle({"rec_texts": ["2"], "rec_scores": [None]}) == [("2", 0.0)]
 
 
 def test_fake_is_default_provider() -> None:
@@ -236,6 +304,30 @@ def test_ocr_missing_does_not_trip_status_filter(
     assert status.stages["extract"] == "ok"
     assert "ocr" not in status.stages
     assert "frames" not in status.stages
+    client = TestClient(create_app(tva_root))
+    missing = client.get("/sessions", params={"status": "missing"}).json()["sessions"]
+    assert record.id not in missing
+    failed = client.get("/sessions", params={"status": "failed"}).json()["sessions"]
+    assert record.id not in failed
+
+
+def test_stale_ocr_failed_is_omitted_without_parquet(
+    tva_root: Path, sample_video: Path
+) -> None:
+    record = ingest(sample_video, root=tva_root)
+    from tradevidanalyser.pipeline import extract_session, transcribe_session
+
+    transcribe_session(record.id, root=tva_root)
+    extract_session(record.id, root=tva_root)
+    store.compute_status(tva_root, record.id, failed="ocr", error="ocr exploded")
+    status = store.compute_status(tva_root, record.id)
+    assert "ocr" not in status.stages
+    assert status.error is None
+    client = TestClient(create_app(tva_root))
+    failed = client.get("/sessions", params={"status": "failed"}).json()["sessions"]
+    assert record.id not in failed
+    missing = client.get("/sessions", params={"status": "missing"}).json()["sessions"]
+    assert record.id not in missing
 
 
 def test_ocr_refuses_path_escape(tva_root: Path) -> None:

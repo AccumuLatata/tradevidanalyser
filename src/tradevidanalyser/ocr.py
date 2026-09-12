@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import subprocess
 import tempfile
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -23,13 +25,23 @@ MIN_PARSE_CONFIDENCE = 0.50
 ENV_OCR_PROVIDER = "TVA_OCR_PROVIDER"
 DEFAULT_PROVIDER = "fake"
 
-_CLOCK = re.compile(
+# Dates must be stripped before time search: "11.09.2026 14:30:05" would otherwise
+# parse as 11:09:20. Prefer colon clocks (platform UI) over dotted/dashed times.
+_DATE = re.compile(r"\d{4}[-./]\d{1,2}[-./]\d{1,2}|\d{1,2}[-./]\d{1,2}[-./]\d{4}")
+_CLOCK_COLON = re.compile(
+    r"(?P<h>\d{1,2}):(?P<m>\d{2}):(?P<s>\d{2})(?:[.,](?P<frac>\d{1,6}))?"
+)
+_CLOCK_ANY = re.compile(
     r"(?P<h>\d{1,2})[:.\-](?P<m>\d{2})[:.\-](?P<s>\d{2})(?:[.,](?P<frac>\d{1,6}))?"
 )
+_CLOCK_HM = re.compile(r"(?P<h>\d{1,2}):(?P<m>\d{2})(?![:.\-\d])")
 _INT = re.compile(r"(?P<sign>[+\-−–])?(?P<digits>\d+)")
 _PNL = re.compile(
     r"(?P<sign>[+\-−–])?\s*(?P<num>\d{1,3}(?:[.,]\d{3})+(?:[.,]\d+)?|\d+[.,]\d+|\d+)"
 )
+_CURRENCY = re.compile(r"(?<![A-Za-z])(?:USD|EUR|GBP|CHF|JPY)(?![A-Za-z])|[$€£¥]")
+_FLAT = re.compile(r"\bflat\b", re.IGNORECASE)
+_PAREN_NUM = re.compile(r"\(([^)]+)\)")
 
 
 class OcrError(RuntimeError):
@@ -79,8 +91,7 @@ class FakeOcrProvider:
                 return hit
         payload = _load_sidecar(image, frame_stem)
         if roi in payload:
-            raw = payload[roi]
-            return OcrRead(text=str(raw.get("text") or ""), confidence=float(raw.get("confidence") or 0.0))
+            return _ocr_read_from_payload(payload[roi])
         return OcrRead(text="", confidence=0.0)
 
 
@@ -128,48 +139,65 @@ def get_ocr_provider(name: str | None = None) -> OcrProvider:
     raise OcrError(f"unknown OCR provider {chosen!r}")
 
 
-def parse_clock(text: str, *, prior: datetime) -> str | None:
-    match = _CLOCK.search(text.replace(" ", ""))
+def parse_clock(text: str, *, prior: datetime, at_s: float = 0.0) -> str | None:
+    """Parse a platform clock onto the calendar day of ``prior + at_s``.
+
+    ``at_s`` is the frame's session time. Wrapping against session start alone
+    mis-dates post-midnight frames and can rewind a late-evening clock when the
+    filename prior is shortly after midnight.
+    """
+    match = _first_clock_match(_DATE.sub(" ", _normalize_ocr(text)))
     if not match:
         return None
-    hour, minute, second = int(match["h"]), int(match["m"]), int(match["s"])
+    hour, minute = int(match["h"]), int(match["m"])
+    second = int(match.groupdict().get("s") or 0)
     if not (0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59):
         return None
-    frac = match["frac"] or ""
+    frac = match.groupdict().get("frac") or ""
     micro = int(frac.ljust(6, "0")[:6]) if frac else 0
+    expected = prior + timedelta(seconds=float(at_s or 0.0))
     parsed = datetime(
-        prior.year,
-        prior.month,
-        prior.day,
+        expected.year,
+        expected.month,
+        expected.day,
         hour,
         minute,
         second,
         micro,
-        tzinfo=prior.tzinfo,
+        tzinfo=expected.tzinfo,
     )
-    delta = (parsed - prior).total_seconds()
+    delta = (parsed - expected).total_seconds()
     if delta < -12 * 3600:
         parsed = parsed + timedelta(days=1)
-    elif delta > 20 * 3600:
+    elif delta > 12 * 3600:
         parsed = parsed - timedelta(days=1)
     return parsed.isoformat()
 
 
 def parse_pnl(text: str) -> str | None:
-    match = _PNL.search(text.replace(" ", "").replace("'", ""))
+    compact = _CURRENCY.sub("", _normalize_ocr(text).replace(" ", "").replace("'", ""))
+    negative = False
+    paren = _PAREN_NUM.search(compact)
+    if paren:
+        compact = paren.group(1)
+        negative = True
+    match = _PNL.search(compact)
     if not match:
         return None
     number = _parse_decimal(match["num"])
     if number is None:
         return None
     sign = match["sign"]
-    if sign in {"-", "−", "–"}:
+    if negative or sign in {"-", "−", "–"}:
         number = -abs(number)
     return _format_float(number)
 
 
 def parse_position(text: str) -> str | None:
-    match = _INT.search(text.replace(" ", ""))
+    cleaned = _normalize_ocr(text)
+    if _FLAT.search(cleaned):
+        return "0"
+    match = _INT.search(cleaned.replace(" ", ""))
     if not match:
         return None
     digits = match["digits"]
@@ -179,11 +207,18 @@ def parse_position(text: str) -> str | None:
     return str(value)
 
 
-def parse_roi(roi: str, text: str, *, prior: datetime, confidence: float) -> str | None:
-    if confidence < MIN_PARSE_CONFIDENCE:
+def parse_roi(
+    roi: str,
+    text: str,
+    *,
+    prior: datetime,
+    confidence: float,
+    at_s: float = 0.0,
+) -> str | None:
+    if not math.isfinite(confidence) or confidence < MIN_PARSE_CONFIDENCE:
         return None
     if roi == "clock":
-        return parse_clock(text, prior=prior)
+        return parse_clock(text, prior=prior, at_s=at_s)
     if roi == "pnl":
         return parse_pnl(text)
     if roi == "position":
@@ -275,6 +310,7 @@ def ocr_frames(
                             read.text,
                             prior=prior,
                             confidence=float(read.confidence),
+                            at_s=t,
                         ),
                     )
                 )
@@ -287,7 +323,9 @@ def write_ocr_parquet(path: Path, rows: list[OcrRow]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     import pyarrow.parquet as pq
 
-    pq.write_table(table, path, compression="none", coerce_timestamps=None)
+    tmp = path.with_name(path.name + ".tmp")
+    pq.write_table(table, tmp, compression="none", coerce_timestamps=None)
+    tmp.replace(path)
     return path
 
 
@@ -374,6 +412,48 @@ def _load_sidecar(image: Path, frame_stem: str) -> dict:
     return {}
 
 
+def _normalize_ocr(text: str) -> str:
+    """Fold fullwidth digits/colons that PaddleOCR often emits from UI fonts."""
+    return unicodedata.normalize("NFKC", text or "")
+
+
+def _finite_float(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return number
+
+
+def _ocr_read_from_payload(raw: object) -> OcrRead:
+    if isinstance(raw, OcrRead):
+        return raw
+    if isinstance(raw, str):
+        return OcrRead(text=raw, confidence=1.0)
+    if not isinstance(raw, dict):
+        return OcrRead(text="", confidence=0.0)
+    text = raw.get("text")
+    if text is None:
+        text = raw.get("raw") or ""
+    confidence = _finite_float(raw.get("confidence"))
+    return OcrRead(text=str(text or ""), confidence=0.0 if confidence is None else confidence)
+
+
+def _first_clock_match(text: str) -> re.Match[str] | None:
+    for pattern in (_CLOCK_COLON, _CLOCK_ANY, _CLOCK_HM):
+        for match in pattern.finditer(text):
+            hour = int(match["h"])
+            minute = int(match["m"])
+            second = int(match.groupdict().get("s") or 0)
+            if 0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59:
+                return match
+    return None
+
+
 def _parse_decimal(raw: str) -> float | None:
     if "," in raw and "." in raw:
         if raw.rfind(",") > raw.rfind("."):
@@ -415,35 +495,85 @@ def _paddle_lines(engine: object, image: Path) -> tuple[list[str], list[float]]:
         try:
             raw = engine.ocr(str(image), cls=True)  # type: ignore[attr-defined]
         except TypeError:
-            raw = engine.ocr(str(image))  # type: ignore[attr-defined]
+            try:
+                raw = engine.ocr(str(image))  # type: ignore[attr-defined]
+            except Exception:
+                raw = None
+        except Exception:
+            raw = None
     if raw is None and hasattr(engine, "predict"):
-        raw = engine.predict(str(image))  # type: ignore[attr-defined]
+        try:
+            raw = engine.predict(str(image))  # type: ignore[attr-defined]
+        except Exception:
+            raw = None
     for item in _flatten_paddle(raw):
         texts.append(item[0])
         confs.append(item[1])
     return texts, confs
 
 
+def _as_seq(value: object) -> list:
+    if value is None:
+        return []
+    if isinstance(value, (str, bytes)):
+        return [value]
+    if isinstance(value, (int, float)):
+        return [value]
+    try:
+        return list(value)
+    except TypeError:
+        return [value]
+
+
+def _paddle_score(value: object) -> float:
+    number = _finite_float(value)
+    return 0.0 if number is None else number
+
+
 def _flatten_paddle(raw: object) -> list[tuple[str, float]]:
     out: list[tuple[str, float]] = []
     if raw is None:
         return out
-    if isinstance(raw, dict):
-        rec = raw.get("rec_texts") or raw.get("text") or []
-        scores = raw.get("rec_scores") or raw.get("confidence") or []
-        if isinstance(rec, str):
-            rec = [rec]
-        if isinstance(scores, (int, float)):
-            scores = [float(scores)]
-        for text, score in zip(list(rec), list(scores) or [1.0] * len(list(rec)), strict=False):
-            out.append((str(text), float(score)))
+    rec, scores = _paddle_rec_fields(raw)
+    if rec is not None:
+        rec_list = _as_seq(rec)
+        score_list = _as_seq(scores)
+        if not score_list:
+            score_list = [1.0] * len(rec_list)
+        for text, score in zip(rec_list, score_list, strict=False):
+            out.append((str(text), _paddle_score(score)))
         return out
     if isinstance(raw, list):
         for item in raw:
             if isinstance(item, (list, tuple)) and len(item) >= 2 and isinstance(item[1], (list, tuple)):
-                out.append((str(item[1][0]), float(item[1][1])))
+                score = item[1][1] if len(item[1]) > 1 else 0.0
+                out.append((str(item[1][0]), _paddle_score(score)))
             elif isinstance(item, (list, tuple)) and len(item) == 2 and isinstance(item[0], str):
-                out.append((str(item[0]), float(item[1])))
+                out.append((str(item[0]), _paddle_score(item[1])))
             else:
                 out.extend(_flatten_paddle(item))
     return out
+
+
+def _paddle_rec_fields(raw: object) -> tuple[object | None, object]:
+    if isinstance(raw, dict):
+        rec = raw.get("rec_texts")
+        if rec is None:
+            rec = raw.get("text")
+        if rec is None:
+            return None, []
+        scores = raw.get("rec_scores")
+        if scores is None:
+            scores = raw.get("confidence")
+        return rec, scores
+    rec = getattr(raw, "rec_texts", None)
+    if rec is None:
+        maybe = getattr(raw, "text", None)
+        rec = None if callable(maybe) else maybe
+    if rec is None:
+        return None, []
+    scores = getattr(raw, "rec_scores", None)
+    if scores is None:
+        maybe_score = getattr(raw, "confidence", None)
+        scores = None if callable(maybe_score) else maybe_score
+    return rec, scores

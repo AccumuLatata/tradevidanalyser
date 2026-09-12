@@ -13,6 +13,9 @@ from tradevidanalyser.schema import Insights, SessionRecord, SessionStatus, Tran
 
 _FRAME_JPG = re.compile(r"^\d+\.\d{3}\.jpg$")
 CONTACT_SHEET_NAME = "contact_sheet.jpg"
+# Optional CLI stages. Never emit "missing"; do not resurrect a stale
+# "failed" when the artifact is gone (PR-11 bot pack: ?status=missing,failed).
+OPTIONAL_STAGES = frozenset({"frames", "ocr"})
 
 _STATUS_LOCK = threading.Lock()
 
@@ -194,6 +197,8 @@ def _compute_status_locked(
     if previous is not None:
         for name, state in previous.stages.items():
             if state == "failed" and stages.get(name) != "ok":
+                if name in OPTIONAL_STAGES and name != (failed or ""):
+                    continue
                 stages[name] = "failed"
     if failed and stages.get(failed) != "ok":
         stages[failed] = "failed"
