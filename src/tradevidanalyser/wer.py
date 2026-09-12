@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Sequence
 from pathlib import Path
 from typing import TypedDict
@@ -33,7 +34,13 @@ class WerReport(TypedDict):
 
 
 def normalize_german(text: str, *, fold_umlauts: bool = False) -> str:
-    """Lowercase and strip punctuation. Umlaut folding is off by default."""
+    """Lowercase and strip punctuation. Umlaut folding is off by default.
+
+    NFC first so NFD umlauts (``u`` + combining diaeresis) stay one letter.
+    Combining marks are not ``\\w`` and would otherwise become spaces, which
+    splits *prüfen* into ``pru`` / ``fen`` and inflates WER.
+    """
+    text = unicodedata.normalize("NFC", text)
     if fold_umlauts:
         text = text.translate(_UMLAUT_FOLD)
     text = text.casefold()
@@ -80,7 +87,8 @@ def word_error_rate(ref: str, hyp: str, *, fold_umlauts: bool = False) -> float:
     return (subst + dele + ins) / len(r_words)
 
 
-def _contains_token(text: str, token: str, *, fold_umlauts: bool = False) -> bool:
+def contains_token(text: str, token: str, *, fold_umlauts: bool = False) -> bool:
+    """Whole-token match after German normalisation (case- and punct-insensitive)."""
     hay = normalize_german(text, fold_umlauts=fold_umlauts)
     needle = normalize_german(token, fold_umlauts=fold_umlauts)
     if not needle:
@@ -97,10 +105,10 @@ def jargon_recall(
     fold_umlauts: bool = False,
 ) -> float:
     """Fraction of jargon tokens present in *ref* that also appear in *hyp*."""
-    present = [tok for tok in tokens if _contains_token(ref, tok, fold_umlauts=fold_umlauts)]
+    present = [tok for tok in tokens if contains_token(ref, tok, fold_umlauts=fold_umlauts)]
     if not present:
         return 1.0
-    hits = sum(1 for tok in present if _contains_token(hyp, tok, fold_umlauts=fold_umlauts))
+    hits = sum(1 for tok in present if contains_token(hyp, tok, fold_umlauts=fold_umlauts))
     return hits / len(present)
 
 

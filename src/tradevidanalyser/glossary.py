@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 
 MAX_INITIAL_PROMPT_TOKENS = 220
@@ -13,6 +12,9 @@ _HEADING = re.compile(r"^##\s+(.+?)\s*$")
 _LEVELS_HEADING = re.compile(r"levels?\s*/\s*locations?", re.IGNORECASE)
 _PLAYBOOK_HEADING = re.compile(r"playbooks?\s*/\s*rules?", re.IGNORECASE)
 _PLATFORM_HEADING = re.compile(r"^platform\b", re.IGNORECASE)
+_LIST_MARK = re.compile(r"^[-*+]\s+")
+# Sentence / markdown wrapping around a list item — not part of the token.
+_EDGE_PUNCT = ".,;:!?\"'“”„‚«»()[]{}"
 
 
 @dataclass(frozen=True)
@@ -38,7 +40,18 @@ def default_glossary_path() -> Path:
         here.parents[2] / "docs" / "GLOSSARY.md",
         Path.cwd() / "docs" / "GLOSSARY.md",
     ]
+    current = Path.cwd()
+    for _ in range(6):
+        candidates.append(current / "docs" / "GLOSSARY.md")
+        if current.parent == current:
+            break
+        current = current.parent
+    seen: set[Path] = set()
     for path in candidates:
+        resolved = path.resolve() if path.exists() else path
+        if resolved in seen:
+            continue
+        seen.add(resolved)
         if path.is_file():
             return path
     raise FileNotFoundError("docs/GLOSSARY.md not found")
@@ -54,12 +67,25 @@ def _classify_heading(title: str) -> str | None:
     return None
 
 
+def _clean_token(raw: str) -> str:
+    token = raw.strip()
+    token = _LIST_MARK.sub("", token)
+    token = token.strip("*_`")
+    token = token.strip(_EDGE_PUNCT)
+    token = " ".join(token.split())
+    if not token or token.startswith("#"):
+        return ""
+    return token
+
+
 def _split_tokens(body: str) -> tuple[str, ...]:
     parts: list[str] = []
+    seen: set[str] = set()
     for raw in re.split(r"[\n,]", body):
-        token = raw.strip().strip("*_`")
-        if not token or token.startswith("#"):
+        token = _clean_token(raw)
+        if not token or token in seen:
             continue
+        seen.add(token)
         parts.append(token)
     return tuple(parts)
 
@@ -108,7 +134,8 @@ def parse_glossary(text: str) -> Glossary:
     )
 
 
-@lru_cache(maxsize=8)
-def load_glossary(path: str | None = None) -> Glossary:
+def load_glossary(path: str | Path | None = None) -> Glossary:
+    # No process-wide cache: tva serve would otherwise keep a stale parse after
+    # GLOSSARY.md is edited. The file is small enough to read on each call.
     resolved = Path(path) if path else default_glossary_path()
     return parse_glossary(resolved.read_text(encoding="utf-8"))

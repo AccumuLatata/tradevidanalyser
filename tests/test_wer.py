@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
-import os
+import unicodedata
 from pathlib import Path
 
 import pytest
 
+from tradevidanalyser import config
 from tradevidanalyser.cli import main
-from tradevidanalyser.config import golden_dir
 from tradevidanalyser.glossary import load_glossary
 from tradevidanalyser.wer import jargon_recall, n_words, word_error_rate
 
@@ -33,6 +33,17 @@ def test_wer_known_deletion() -> None:
     assert word_error_rate("eins zwei drei", "eins zwei") == pytest.approx(1 / 3)
 
 
+def test_wer_known_insertion() -> None:
+    assert word_error_rate("eins zwei drei", "eins zwei drei vier") == pytest.approx(1 / 3)
+
+
+def test_wer_nfc_matches_nfd_umlauts() -> None:
+    nfc = "prüfen Größe"
+    nfd = unicodedata.normalize("NFD", nfc)
+    assert nfc != nfd
+    assert word_error_rate(nfc, nfd) == 0.0
+
+
 def test_wer_umlaut_folding_off_by_default() -> None:
     ref = "Größe prüfen"
     hyp = "Groesse pruefen"
@@ -47,13 +58,14 @@ def test_jargon_recall_onh_dvwap_3c_in_german() -> None:
     assert jargon_recall(GERMAN_JARGON, dropped_onh, tokens) == pytest.approx(2 / 3)
     glossary = load_glossary()
     assert jargon_recall(GERMAN_JARGON, GERMAN_JARGON, glossary.tokens) == 1.0
+    # Full glossary must actually see ONH — vacuous 1.0 when nothing matches is not enough.
+    assert jargon_recall(GERMAN_JARGON, dropped_onh, glossary.tokens) < 1.0
 
 
 @pytest.mark.golden
 def test_golden_excerpt_identity_or_skip() -> None:
-    raw = os.environ.get("TVA_ROOT")
-    path = golden_dir(Path(raw)) if raw else None
-    if path is None or not path.is_dir():
+    path = config.golden_dir(config.resolve_root())
+    if not path.is_dir():
         pytest.skip("golden excerpt absent")
     ref = path / "reference.txt"
     if not ref.is_file():
