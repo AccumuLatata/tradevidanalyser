@@ -6,7 +6,7 @@ import math
 import os
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timezone
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +14,7 @@ import pyarrow.parquet as pq
 
 from tradevidanalyser import store
 from tradevidanalyser.fills_mirror import JOURNAL_EXCHANGE_TZ, JOURNAL_TICK_SIZE
-from tradevidanalyser.schema import RuleCheck, RulesReport, SessionRecord
+from tradevidanalyser.schema import RuleCheck, RuleStatus, RulesReport, SessionRecord
 
 SCHEMA_VERSION = "1"
 ENV_RULES = "TVA_RULES"
@@ -115,9 +115,9 @@ def _require_safe_session_id(session_id: str) -> str:
 
 def _parse_scalar(raw: str) -> object:
     text = raw.split("#", 1)[0].strip().strip("\"'")
-    if text in {"", "null", "~", "Null"}:
-        return None
     lowered = text.lower()
+    if lowered in {"", "null", "~", "none"}:
+        return None
     if lowered == "true":
         return True
     if lowered == "false":
@@ -175,6 +175,29 @@ def _as_time(value: object) -> time | None:
     return time(hour, minute, second)
 
 
+def _require_int(value: object, name: str, *, minimum: int = 0) -> int:
+    if value is None or isinstance(value, bool):
+        raise ValueError(f"{name} must be an integer")
+    try:
+        number = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    if number < minimum:
+        raise ValueError(f"{name} must be >= {minimum}")
+    return number
+
+
+def _require_float(value: object, name: str, *, minimum: float = 0.0) -> float:
+    if value is None or isinstance(value, bool):
+        raise ValueError(f"{name} must be a number")
+    number = _finite(value)
+    if number is None:
+        raise ValueError(f"{name} must be a number")
+    if number < minimum:
+        raise ValueError(f"{name} must be >= {minimum}")
+    return number
+
+
 def _config_from_mapping(data: dict[str, Any]) -> RulesConfig:
     timeout_raw = data.get("consecutive_loss_timeout") or {}
     if not isinstance(timeout_raw, dict):
@@ -182,21 +205,44 @@ def _config_from_mapping(data: dict[str, Any]) -> RulesConfig:
     reentry_raw = data.get("reentry") or {}
     if not isinstance(reentry_raw, dict):
         raise ValueError("reentry must be a mapping")
-    limit = _finite(data.get("daily_loss_limit_usd"))
-    max_trades = data.get("max_trades_per_day", DEFAULT_MAX_TRADES)
-    post = data.get("post_loss_block_minutes", DEFAULT_POST_LOSS_MINUTES)
+    raw_limit = data.get("daily_loss_limit_usd")
+    if raw_limit is None:
+        limit = None
+    else:
+        if isinstance(raw_limit, bool):
+            raise ValueError("daily_loss_limit_usd must be a number or null")
+        limit = _finite(raw_limit)
+        if limit is None:
+            raise ValueError("daily_loss_limit_usd must be a number or null")
+        if limit < 0:
+            raise ValueError("daily_loss_limit_usd must be >= 0")
     return RulesConfig(
         daily_loss_limit_usd=limit,
-        max_trades_per_day=int(max_trades),
-        consecutive_loss_timeout=LossTimeout(
-            n=int(timeout_raw.get("n", DEFAULT_STREAK_N)),
-            minutes=int(timeout_raw.get("minutes", DEFAULT_STREAK_MINUTES)),
+        max_trades_per_day=_require_int(
+            data.get("max_trades_per_day", DEFAULT_MAX_TRADES), "max_trades_per_day"
         ),
-        post_loss_block_minutes=int(post),
+        consecutive_loss_timeout=LossTimeout(
+            n=_require_int(
+                timeout_raw.get("n", DEFAULT_STREAK_N), "consecutive_loss_timeout.n", minimum=1
+            ),
+            minutes=_require_int(
+                timeout_raw.get("minutes", DEFAULT_STREAK_MINUTES),
+                "consecutive_loss_timeout.minutes",
+            ),
+        ),
+        post_loss_block_minutes=_require_int(
+            data.get("post_loss_block_minutes", DEFAULT_POST_LOSS_MINUTES),
+            "post_loss_block_minutes",
+        ),
         reentry=ReentryConfig(
-            window_s=float(reentry_raw.get("window_s", DEFAULT_REENTRY_WINDOW_S)),
-            max=int(reentry_raw.get("max", DEFAULT_REENTRY_MAX)),
-            block_minutes=int(reentry_raw.get("block_minutes", DEFAULT_REENTRY_BLOCK_MINUTES)),
+            window_s=_require_float(
+                reentry_raw.get("window_s", DEFAULT_REENTRY_WINDOW_S), "reentry.window_s"
+            ),
+            max=_require_int(reentry_raw.get("max", DEFAULT_REENTRY_MAX), "reentry.max"),
+            block_minutes=_require_int(
+                reentry_raw.get("block_minutes", DEFAULT_REENTRY_BLOCK_MINUTES),
+                "reentry.block_minutes",
+            ),
         ),
         flat_by=_as_time(data.get("flat_by")),
     )
@@ -204,12 +250,14 @@ def _config_from_mapping(data: dict[str, Any]) -> RulesConfig:
 
 def default_rules_path() -> Path:
     env = (os.environ.get(ENV_RULES) or "").strip()
-    candidates: list[Path] = []
     if env:
-        candidates.append(Path(env))
+        path = Path(env).expanduser()
+        if not path.is_file():
+            raise FileNotFoundError(f"{ENV_RULES}={env!r} is not a file")
+        return path
     here = Path(__file__).resolve().parent
-    candidates.append(here / "rules.yaml")
-    if len(here.parents) >= 1:
+    candidates = [here / "rules.yaml"]
+    if len(here.parents) >= 2:
         candidates.append(here.parents[1] / "rules.yaml")
     candidates.append(Path.cwd() / "rules.yaml")
     seen: set[Path] = set()
@@ -251,20 +299,20 @@ def _is_loss(trade: RuleTrade) -> bool:
 def _is_stop_on_entry(trade: RuleTrade) -> bool:
     if not _is_closed(trade) or not _is_loss(trade):
         return False
-    if trade.hold_seconds is not None and trade.hold_seconds <= STOP_ON_ENTRY_HOLD_S:
-        return True
+    if trade.hold_seconds is not None:
+        return trade.hold_seconds <= STOP_ON_ENTRY_HOLD_S
     if trade.stop_price is not None and trade.exit_price is not None:
         return abs(trade.exit_price - trade.stop_price) <= JOURNAL_TICK_SIZE + 1e-9
     return False
 
 
 def _same_level(a: RuleTrade, b: RuleTrade) -> bool:
-    if a.instrument and b.instrument and a.instrument != b.instrument:
+    if (a.instrument or "") != (b.instrument or ""):
         return False
-    if a.direction and b.direction and a.direction != b.direction:
+    if (a.direction or "") != (b.direction or ""):
         return False
     if a.entry_price is None or b.entry_price is None:
-        return True
+        return False
     return abs(a.entry_price - b.entry_price) <= SAME_LEVEL_TICKS * JOURNAL_TICK_SIZE + 1e-9
 
 
@@ -272,13 +320,35 @@ def _gap_s(earlier_exit: datetime, later_entry: datetime) -> float:
     return (later_entry - earlier_exit).total_seconds()
 
 
-def _next_after(trades: list[RuleTrade], after: datetime) -> RuleTrade | None:
-    later = [trade for trade in trades if trade.entry_timestamp > after]
+def _next_after(
+    trades: list[RuleTrade],
+    after: datetime,
+    *,
+    exclude: str | None = None,
+) -> RuleTrade | None:
+    later = [
+        trade
+        for trade in trades
+        if trade.entry_timestamp >= after and trade.tva_trade_id != exclude
+    ]
     return later[0] if later else None
 
 
-def _check(rule: str, status: str, evidence: dict, reason: str | None = None) -> RuleCheck:
-    return RuleCheck(rule=rule, status=status, evidence=evidence, reason=reason)  # type: ignore[arg-type]
+def _next_same_level_after(trades: list[RuleTrade], prev: RuleTrade) -> RuleTrade | None:
+    if prev.exit_timestamp is None:
+        return None
+    for trade in trades:
+        if trade.tva_trade_id == prev.tva_trade_id:
+            continue
+        if trade.entry_timestamp < prev.exit_timestamp:
+            continue
+        if _same_level(prev, trade):
+            return trade
+    return None
+
+
+def _check(rule: str, status: RuleStatus, evidence: dict, reason: str | None = None) -> RuleCheck:
+    return RuleCheck(rule=rule, status=status, evidence=evidence, reason=reason)
 
 
 def _eval_dll(trades: list[RuleTrade], config: RulesConfig) -> RuleCheck:
@@ -335,15 +405,20 @@ def _eval_max10(trades: list[RuleTrade], config: RulesConfig) -> RuleCheck:
 
 def _eval_3l30(trades: list[RuleTrade], config: RulesConfig) -> RuleCheck:
     n = config.consecutive_loss_timeout.n
-    need = config.consecutive_loss_timeout.minutes * 60
-    closed = [trade for trade in trades if _is_closed(trade) and realized_pnl(trade)[0] is not None]
+    minutes = config.consecutive_loss_timeout.minutes
+    need = minutes * 60
+    closed = [trade for trade in trades if _is_closed(trade)]
     streak: list[str] = []
     breaches: list[dict] = []
     for trade in closed:
-        if _is_loss(trade):
+        pnl, _note = realized_pnl(trade)
+        if pnl is None:
+            streak = []
+            continue
+        if pnl < 0:
             streak.append(trade.tva_trade_id)
             if len(streak) >= n and trade.exit_timestamp is not None:
-                nxt = _next_after(trades, trade.exit_timestamp)
+                nxt = _next_after(trades, trade.exit_timestamp, exclude=trade.tva_trade_id)
                 if nxt is not None:
                     gap = _gap_s(trade.exit_timestamp, nxt.entry_timestamp)
                     if gap < need:
@@ -357,14 +432,20 @@ def _eval_3l30(trades: list[RuleTrade], config: RulesConfig) -> RuleCheck:
                         )
         else:
             streak = []
-    evidence = {"n": n, "minutes": config.consecutive_loss_timeout.minutes, "breaches": breaches}
+    evidence = {"n": n, "minutes": minutes, "breaches": breaches}
     if breaches:
-        return _check("R-3L30", "violated", evidence, "entry before 30 min timeout after 3 consecutive losses")
+        return _check(
+            "R-3L30",
+            "violated",
+            evidence,
+            f"entry before {minutes} min timeout after {n} consecutive losses",
+        )
     return _check("R-3L30", "pass", evidence)
 
 
 def _eval_5m(trades: list[RuleTrade], config: RulesConfig) -> RuleCheck:
-    need = config.post_loss_block_minutes * 60
+    minutes = config.post_loss_block_minutes
+    need = minutes * 60
     window_s = config.reentry.window_s
     breaches: list[dict] = []
     closed_losses = [
@@ -373,10 +454,10 @@ def _eval_5m(trades: list[RuleTrade], config: RulesConfig) -> RuleCheck:
         if _is_closed(trade) and _is_loss(trade) and trade.exit_timestamp is not None
     ]
     for trade in closed_losses:
-        nxt = _next_after(trades, trade.exit_timestamp)  # type: ignore[arg-type]
+        nxt = _next_after(trades, trade.exit_timestamp, exclude=trade.tva_trade_id)
         if nxt is None:
             continue
-        gap = _gap_s(trade.exit_timestamp, nxt.entry_timestamp)  # type: ignore[arg-type]
+        gap = _gap_s(trade.exit_timestamp, nxt.entry_timestamp)
         exempt = (
             _is_stop_on_entry(trade)
             and _same_level(trade, nxt)
@@ -393,32 +474,36 @@ def _eval_5m(trades: list[RuleTrade], config: RulesConfig) -> RuleCheck:
                     "required_s": need,
                 }
             )
-    evidence = {"minutes": config.post_loss_block_minutes, "breaches": breaches}
+    evidence = {"minutes": minutes, "breaches": breaches}
     if breaches:
-        return _check("R-5M", "violated", evidence, "entry before 5 min block after a loss")
+        return _check("R-5M", "violated", evidence, f"entry before {minutes} min block after a loss")
     return _check("R-5M", "pass", evidence)
 
 
 def _eval_reentry(trades: list[RuleTrade], config: RulesConfig) -> RuleCheck:
     window_s = config.reentry.window_s
     allowed = config.reentry.max
-    block_s = config.reentry.block_minutes * 60
+    block_minutes = config.reentry.block_minutes
+    block_s = block_minutes * 60
     breaches: list[dict] = []
-    i = 0
-    while i < len(trades):
-        cluster = [trades[i]]
-        j = i + 1
-        while j < len(trades):
+    consumed: set[str] = set()
+    for seed in trades:
+        if seed.tva_trade_id in consumed or not _is_stop_on_entry(seed):
+            continue
+        cluster = [seed]
+        while True:
             prev = cluster[-1]
-            nxt = trades[j]
-            if prev.exit_timestamp is None:
+            if prev.exit_timestamp is None or not _is_loss(prev):
+                break
+            nxt = _next_same_level_after(trades, prev)
+            if nxt is None:
                 break
             gap = _gap_s(prev.exit_timestamp, nxt.entry_timestamp)
-            if gap <= window_s + 1e-9 and _same_level(prev, nxt) and _is_loss(prev):
-                cluster.append(nxt)
-                j += 1
-                continue
-            break
+            if gap > window_s + 1e-9:
+                break
+            cluster.append(nxt)
+        for trade in cluster:
+            consumed.add(trade.tva_trade_id)
         extras = len(cluster) - 1
         if extras > allowed:
             breaches.append(
@@ -430,8 +515,8 @@ def _eval_reentry(trades: list[RuleTrade], config: RulesConfig) -> RuleCheck:
             )
         last = cluster[-1]
         if extras >= allowed and _is_loss(last) and last.exit_timestamp is not None:
-            nxt = _next_after(trades, last.exit_timestamp)
-            if nxt is not None and _same_level(last, nxt):
+            nxt = _next_same_level_after(trades, last)
+            if nxt is not None:
                 gap = _gap_s(last.exit_timestamp, nxt.entry_timestamp)
                 if gap < block_s:
                     breaches.append(
@@ -443,15 +528,19 @@ def _eval_reentry(trades: list[RuleTrade], config: RulesConfig) -> RuleCheck:
                             "required_s": block_s,
                         }
                     )
-        i = max(i + 1, j)
     evidence = {
         "window_s": window_s,
         "max": allowed,
-        "block_minutes": config.reentry.block_minutes,
+        "block_minutes": block_minutes,
         "breaches": breaches,
     }
     if breaches:
-        return _check("R-REENTRY", "violated", evidence, "re-entry cluster exceeded max or 5 min block")
+        return _check(
+            "R-REENTRY",
+            "violated",
+            evidence,
+            f"re-entry cluster exceeded max or {block_minutes} min block",
+        )
     return _check("R-REENTRY", "pass", evidence)
 
 
@@ -510,16 +599,33 @@ def evaluate_rules(
 
 
 def _as_dt(value: object) -> datetime | None:
+    """Parse a trades.parquet timestamp. Naive values are UTC (fills convention)."""
     if value is None:
         return None
-    if isinstance(value, datetime):
-        return value
-    if isinstance(value, str):
+    if hasattr(value, "to_pydatetime") and not isinstance(value, datetime):
         try:
-            return datetime.fromisoformat(value)
+            value = value.to_pydatetime()
+        except (TypeError, ValueError):
+            return None
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value)
         except ValueError:
             return None
-    return None
+    else:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _record_session_date(record: SessionRecord) -> date | None:
+    parsed = _as_dt(record.recording.start_wallclock_vienna)
+    if parsed is None:
+        return None
+    return parsed.astimezone(JOURNAL_EXCHANGE_TZ).date()
 
 
 def _as_str(value: object) -> str:
@@ -538,26 +644,38 @@ def read_rule_trades(path: Path) -> list[RuleTrade]:
 
     ids = col("tva_trade_id")
     fallback = col("trade_id")
+    entries = col("entry_timestamp")
+    exits = col("exit_timestamp")
+    instruments = col("instrument")
+    directions = col("direction")
+    entry_prices = col("entry_price")
+    exit_prices = col("exit_price")
+    stop_prices = col("stop_price")
+    holds = col("hold_seconds")
+    nets = col("net_pnl_currency")
+    grosses = col("gross_pnl_currency")
+    statuses = col("status")
     rows: list[RuleTrade] = []
     for index in range(n):
-        entry = _as_dt(col("entry_timestamp")[index])
+        entry = _as_dt(entries[index])
         if entry is None:
             continue
         tva_id = _as_str(ids[index]) or _as_str(fallback[index]) or f"T{index + 1:02d}"
+        exit_ts = _as_dt(exits[index])
         rows.append(
             RuleTrade(
                 tva_trade_id=tva_id,
-                instrument=_as_str(col("instrument")[index]),
-                direction=_as_str(col("direction")[index]),
+                instrument=_as_str(instruments[index]),
+                direction=_as_str(directions[index]),
                 entry_timestamp=entry,
-                exit_timestamp=_as_dt(col("exit_timestamp")[index]),
-                entry_price=_finite(col("entry_price")[index]),
-                exit_price=_finite(col("exit_price")[index]),
-                stop_price=_finite(col("stop_price")[index]),
-                hold_seconds=_finite(col("hold_seconds")[index]),
-                net_pnl_currency=_finite(col("net_pnl_currency")[index]),
-                gross_pnl_currency=_finite(col("gross_pnl_currency")[index]),
-                status=_as_str(col("status")[index]) or ("closed" if col("exit_timestamp")[index] else "open"),
+                exit_timestamp=exit_ts,
+                entry_price=_finite(entry_prices[index]),
+                exit_price=_finite(exit_prices[index]),
+                stop_price=_finite(stop_prices[index]),
+                hold_seconds=_finite(holds[index]),
+                net_pnl_currency=_finite(nets[index]),
+                gross_pnl_currency=_finite(grosses[index]),
+                status=_as_str(statuses[index]) or ("closed" if exit_ts is not None else "open"),
             )
         )
     rows.sort(key=lambda trade: (trade.entry_timestamp, trade.tva_trade_id))
@@ -580,7 +698,7 @@ def build_rules_report(
     return RulesReport(
         schema_version=SCHEMA_VERSION,
         session_id=session_id,
-        rules=evaluate_rules(trades, cfg),
+        rules=evaluate_rules(trades, cfg, session_date=_record_session_date(record)),
     )
 
 

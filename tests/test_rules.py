@@ -11,8 +11,9 @@ from fastapi.testclient import TestClient
 from tradevidanalyser import store
 from tradevidanalyser.cli import main
 from tradevidanalyser.ingest import ingest
-from tradevidanalyser.pipeline import extract_session, transcribe_session
+from tradevidanalyser.pipeline import extract_session, fills_session, transcribe_session
 from tradevidanalyser.rules import (
+    ENV_RULES,
     RULE_IDS,
     ReentryConfig,
     RuleTrade,
@@ -21,6 +22,7 @@ from tradevidanalyser.rules import (
     evaluate_rules,
     load_rules_config,
     parse_rules_yaml,
+    read_rule_trades,
     realized_pnl,
     rules_session,
 )
@@ -88,6 +90,31 @@ def test_parse_rules_yaml_comments_and_null() -> None:
     cfg = parse_rules_yaml(default_rules_path().read_text(encoding="utf-8"))
     assert cfg.daily_loss_limit_usd is None
     assert cfg.flat_by is None
+
+
+def test_repo_and_package_rules_yaml_match() -> None:
+    package = Path(__file__).resolve().parents[1] / "src" / "tradevidanalyser" / "rules.yaml"
+    root = Path(__file__).resolve().parents[1] / "rules.yaml"
+    assert package.read_text(encoding="utf-8") == root.read_text(encoding="utf-8")
+
+
+def test_parse_rules_yaml_null_aliases() -> None:
+    cfg = parse_rules_yaml("daily_loss_limit_usd: NULL\nflat_by: None\nmax_trades_per_day: 10\n")
+    assert cfg.daily_loss_limit_usd is None
+    assert cfg.flat_by is None
+
+
+def test_bad_rules_yaml_is_value_error() -> None:
+    with pytest.raises(ValueError, match="max_trades_per_day"):
+        parse_rules_yaml("max_trades_per_day: null\n")
+    with pytest.raises(ValueError, match="consecutive_loss_timeout.n"):
+        parse_rules_yaml("consecutive_loss_timeout:\n  n: 0\n")
+
+
+def test_tva_rules_missing_file_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(ENV_RULES, str(tmp_path / "missing.yaml"))
+    with pytest.raises(FileNotFoundError, match="TVA_RULES"):
+        default_rules_path()
 
 
 @pytest.mark.parametrize(
@@ -209,6 +236,30 @@ def test_r_5m_boundary(trades, expected) -> None:
     assert _status(trades, "R-5M") == expected
 
 
+def test_r_5m_long_hold_stop_hit_is_not_exempt() -> None:
+    trades = [
+        _trade(
+            1,
+            entry_s=0,
+            exit_s=600,
+            pnl=-10,
+            hold=600,
+            stop_price=20999.0,
+            exit_price=20999.0,
+        ),
+        _trade(2, entry_s=640, exit_s=700, pnl=5, hold=60),
+    ]
+    assert _status(trades, "R-5M") == "violated"
+
+
+def test_r_5m_missing_price_is_not_same_level_exempt() -> None:
+    trades = [
+        _trade(1, entry_s=0, exit_s=10, pnl=-10, hold=10),
+        _trade(2, entry_s=40, exit_s=80, pnl=5, hold=40, entry_price=None),
+    ]
+    assert _status(trades, "R-5M") == "violated"
+
+
 @pytest.mark.parametrize(
     "trades, expected",
     [
@@ -247,6 +298,36 @@ def test_r_5m_boundary(trades, expected) -> None:
 )
 def test_r_reentry_table(trades, expected) -> None:
     assert _status(trades, "R-REENTRY") == expected
+
+
+def test_r_reentry_ignores_non_soe_loss_cluster() -> None:
+    trades = [
+        _trade(1, entry_s=0, exit_s=600, pnl=-10, hold=600),
+        _trade(2, entry_s=640, exit_s=680, pnl=-10, hold=40),
+        _trade(3, entry_s=700, exit_s=740, pnl=-10, hold=40),
+    ]
+    assert _status(trades, "R-REENTRY") == "pass"
+
+
+def test_r_reentry_same_level_through_other_instrument() -> None:
+    trades = [
+        _trade(1, entry_s=0, exit_s=10, pnl=-10, hold=10),
+        _trade(2, entry_s=20, exit_s=40, pnl=5, hold=20, instrument="MES", entry_price=5000.0),
+        _trade(3, entry_s=50, exit_s=80, pnl=-10, hold=30),
+        _trade(4, entry_s=100, exit_s=140, pnl=-10, hold=40),
+    ]
+    assert _status(trades, "R-REENTRY") == "violated"
+
+
+def test_r_3l30_unknown_pnl_does_not_stitch_losses() -> None:
+    trades = [
+        _trade(1, entry_s=0, exit_s=60, pnl=-10),
+        _trade(2, entry_s=70, exit_s=130, pnl=None),
+        _trade(3, entry_s=140, exit_s=200, pnl=-10),
+        _trade(4, entry_s=210, exit_s=250, pnl=-10),
+        _trade(5, entry_s=260, exit_s=300, pnl=5),
+    ]
+    assert _status(trades, "R-3L30") == "pass"
 
 
 def test_r_close_unset_is_unverifiable() -> None:
@@ -381,5 +462,70 @@ def test_invalidate_downstream_drops_rules(tva_root: Path) -> None:
     rules_session(record.id, root=tva_root)
     assert store.rules_path(tva_root, record.id).is_file()
     store.invalidate_downstream(tva_root, record.id)
+    assert not store.rules_path(tva_root, record.id).is_file()
+    assert "rules" not in store.compute_status(tva_root, record.id).stages
+
+
+def test_naive_parquet_timestamps_are_utc(tmp_path: Path) -> None:
+    trade = _trade(1, entry_s=0, exit_s=60, pnl=5)
+    table = pa.table(
+        {
+            "tva_trade_id": [trade.tva_trade_id],
+            "instrument": [trade.instrument],
+            "direction": [trade.direction],
+            "entry_timestamp": pa.array(
+                [trade.entry_timestamp.replace(tzinfo=None)], type=pa.timestamp("us")
+            ),
+            "exit_timestamp": pa.array(
+                [trade.exit_timestamp.replace(tzinfo=None) if trade.exit_timestamp else None],
+                type=pa.timestamp("us"),
+            ),
+            "entry_price": [trade.entry_price],
+            "exit_price": [trade.exit_price],
+            "stop_price": [trade.stop_price],
+            "hold_seconds": [trade.hold_seconds],
+            "net_pnl_currency": [trade.net_pnl_currency],
+            "gross_pnl_currency": [trade.gross_pnl_currency],
+            "status": [trade.status],
+        }
+    )
+    path = tmp_path / "trades.parquet"
+    pq.write_table(table, path)
+    rows = read_rule_trades(path)
+    assert rows[0].entry_timestamp.tzinfo is not None
+    assert _status(rows, "R-CLOSE", RulesConfig(flat_by=time(16, 0))) == "pass"
+
+
+def test_fills_skip_drops_stale_rules(tva_root: Path) -> None:
+    record = _session(tva_root)
+    _write_trades(tva_root, record.id, [_trade(1, entry_s=0, exit_s=60, pnl=-10)])
+    rules_session(record.id, root=tva_root)
+    assert store.rules_path(tva_root, record.id).is_file()
+    csv = Path(__file__).parent / "fixtures" / "tradesviz_synthetic.csv"
+    result = fills_session(record.id, root=tva_root, executions=csv, venue="amp")
+    assert result.status == "skipped"
+    assert not store.rules_path(tva_root, record.id).is_file()
+    assert "rules" not in store.compute_status(tva_root, record.id).stages
+
+
+def test_fills_rewrite_drops_stale_rules(tva_root: Path) -> None:
+    record = SessionRecord(
+        id="2026-05-14_160000",
+        recording=RecordingInfo(
+            path="recordings/2026-05-14 16-00-00.mp4",
+            sha256="0" * 64,
+            start_wallclock_vienna="2026-05-14T16:00:00+02:00",
+            duration_s=3600.0,
+            filename="2026-05-14 16-00-00.mp4",
+        ),
+    )
+    store.save_session(tva_root, record)
+    store.write_json(
+        store.rules_path(tva_root, record.id),
+        {"schema_version": "1", "session_id": record.id, "rules": []},
+    )
+    csv = Path(__file__).parent / "fixtures" / "tradesviz_synthetic.csv"
+    result = fills_session(record.id, root=tva_root, executions=csv, venue="amp")
+    assert result.status == "ok"
     assert not store.rules_path(tva_root, record.id).is_file()
     assert "rules" not in store.compute_status(tva_root, record.id).stages
