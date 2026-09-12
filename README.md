@@ -14,12 +14,24 @@ Series code **TVA**. Locked decisions: [`docs/05_ROADMAP.md`](docs/05_ROADMAP.md
 
 Python 3.11+, `ffmpeg` / `ffprobe` on PATH.
 
+| Host | Install | `TVA_ASR_PROVIDER` | Notes |
+|---|---|---|---|
+| CI / first-run | `pip install -e ".[dev]"` | `fake` (default) | No GPU, no model download, no API key |
+| Trading PC (CUDA) | `pip install -e ".[dev,whisperx]"` | `whisperx` | `compute_type=float16`; install a CUDA torch wheel from pytorch.org if pip gave you CPU-only |
+| Mac (CPU) | `pip install -e ".[dev,whisperx]"` | `whisperx` | `compute_type=int8` + a warning; slow. Prefer the PC GPU or hosted ASR |
+| Mac hosted fallback | extra lands in PR-05 | `deepgram` / `scribe` | Audio only; not in this PR |
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -e ".[dev]"
+pip install -e ".[dev]"            # fake ASR (default)
+# pip install -e ".[dev,whisperx]" # local WhisperX (PC CUDA or Mac CPU)
 tva doctor
 ```
+
+WhisperX is **opt-in**. Leave `TVA_ASR_PROVIDER` unset (or `fake`) unless you
+have the extra installed. Optional knobs: `TVA_ASR_MODEL` (default
+`large-v3`), `TVA_ASR_BATCH_SIZE`, `TVA_ASR_DEVICE`, `TVA_ASR_COMPUTE_TYPE`.
 
 Set `TVA_ROOT` to the shared store (Synology mount, or a local folder):
 
@@ -54,7 +66,8 @@ hand-corrected reference (the golden excerpt on the NAS). It uses
 
 ASR and extraction default to **fake** providers (`TVA_ASR_PROVIDER=fake`,
 `TVA_EXTRACT_PROVIDER=fake`) so CI and first-run never call a paid API.
-WhisperX and Grok adapters are stubs until TVA1/TVA2.
+WhisperX is the local adapter (`TVA_ASR_PROVIDER=whisperx`); Grok extract
+stays a stub until TVA2. Hosted ASR is PR-05.
 
 ## API (Grok)
 

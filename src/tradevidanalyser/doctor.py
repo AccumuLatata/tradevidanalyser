@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from tradevidanalyser import __version__, media
+from tradevidanalyser.providers.asr import cuda_available, whisperx_importable
 from tradevidanalyser.schema import DoctorCheck, DoctorReport
 
 
@@ -75,12 +76,35 @@ def run_doctor(root: Path) -> DoctorReport:
         )
     )
 
-    provider = os.environ.get("TVA_ASR_PROVIDER", "fake")
+    provider = (os.environ.get("TVA_ASR_PROVIDER") or "fake").strip().lower() or "fake"
     checks.append(
         DoctorCheck(
             id="asr_provider",
-            status="ok" if provider in {"fake", "whisperx"} else "warn",
+            status="ok" if provider in {"fake", "whisperx", "whisper"} else "warn",
             detail=f"TVA_ASR_PROVIDER={provider}",
+        )
+    )
+
+    wx_ok = whisperx_importable()
+    if wx_ok:
+        wx_status, wx_detail = "ok", "whisperx importable"
+    elif provider in {"whisperx", "whisper"}:
+        wx_status = "fail"
+        wx_detail = "TVA_ASR_PROVIDER=whisperx but whisperx is not installed"
+    else:
+        wx_status, wx_detail = "warn", "whisperx not installed (pip install 'tradevidanalyser[whisperx]')"
+    checks.append(DoctorCheck(id="whisperx", status=wx_status, detail=wx_detail))
+
+    cuda_ok = cuda_available()
+    checks.append(
+        DoctorCheck(
+            id="cuda",
+            status="ok" if cuda_ok else "warn",
+            detail=(
+                "torch.cuda.is_available()"
+                if cuda_ok
+                else "no CUDA; WhisperX uses CPU int8 (slow on Mac — prefer PC GPU or hosted ASR)"
+            ),
         )
     )
 

@@ -30,6 +30,13 @@ on its own OBS track; Grok is not on the tape today. Keep a 20-minute
 hand-corrected German excerpt on the NAS (not in git) to measure WER
 whenever the model changes.
 
+**Decision check (PR-04):** Still the pick. `WhisperXAsrProvider` is wired
+(`language=de`, glossary `initial_prompt` via `asr_options`, word alignment
+on, silero VAD so no HuggingFace token, **no diarization**). `large-v3` is
+the pinned model; `prompt_version` records `jargon-v1+<model>+whisperx-<ver>`.
+Fake remains the CLI/CI default. Hosted fallback is unchanged and lands in
+PR-05.
+
 ---
 
 ## 2. Video understanding (multimodal LLMs)

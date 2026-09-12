@@ -15,6 +15,8 @@ def test_doctor_ok_when_ffmpeg_present(tva_root: Path) -> None:
     assert ids["ffprobe"].status == "ok"
     assert ids["ffmpeg"].status == "ok"
     assert ids["tva_root"].status == "ok"
+    assert ids["whisperx"].status in {"ok", "warn"}
+    assert ids["cuda"].status in {"ok", "warn"}
     assert report.ok
 
 
