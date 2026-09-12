@@ -15,7 +15,8 @@ _FRAME_JPG = re.compile(r"^\d+\.\d{3}\.jpg$")
 CONTACT_SHEET_NAME = "contact_sheet.jpg"
 # Optional CLI stages. Never emit "missing"; do not resurrect a stale
 # "failed" when the artifact is gone (PR-11 bot pack: ?status=missing,failed).
-OPTIONAL_STAGES = frozenset({"frames", "ocr", "clips"})
+OPTIONAL_STAGES = frozenset({"frames", "ocr", "clips", "vlm"})
+VISUAL_NOTES_NAME = "visual_notes.json"
 
 _STATUS_LOCK = threading.Lock()
 
@@ -44,6 +45,10 @@ def insights_path(root: Path, session_id: str) -> Path:
 
 def ocr_path(root: Path, session_id: str) -> Path:
     return config.session_dir(root, session_id) / "ocr.parquet"
+
+
+def visual_notes_path(root: Path, session_id: str) -> Path:
+    return config.session_dir(root, session_id) / VISUAL_NOTES_NAME
 
 
 def status_path(root: Path, session_id: str) -> Path:
@@ -122,6 +127,7 @@ def invalidate_downstream(root: Path, session_id: str) -> None:
     transcript_path(root, session_id).unlink(missing_ok=True)
     insights_path(root, session_id).unlink(missing_ok=True)
     ocr_path(root, session_id).unlink(missing_ok=True)
+    visual_notes_path(root, session_id).unlink(missing_ok=True)
     frames = frames_dir(root, session_id)
     if frames.is_dir():
         shutil.rmtree(frames)
@@ -204,6 +210,9 @@ def _compute_status_locked(
         stages["ocr"] = "ok"
     if list_clips(root, session_id):
         stages["clips"] = "ok"
+    # VLM is opt-in / optional. Same omit-when-missing rule as frames.
+    if visual_notes_path(root, session_id).is_file():
+        stages["vlm"] = "ok"
     path = status_path(root, session_id)
     previous: SessionStatus | None = None
     if path.is_file():

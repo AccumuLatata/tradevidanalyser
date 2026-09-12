@@ -98,6 +98,15 @@ class SessionEvent(BaseModel):
     text: str = ""
 
 
+class VisualNote(BaseModel):
+    """Qualitative VLM note. Numbers must already appear in ocr.parquet."""
+
+    text: str
+    t: float | None = None
+    frames_cited: list[str] = Field(default_factory=list)
+    clip: str | None = None
+
+
 class Insights(BaseModel):
     schema_version: str = SCHEMA_VERSION
     provider: str
@@ -115,6 +124,7 @@ class Insights(BaseModel):
     session_events: list[SessionEvent] = Field(default_factory=list)
     summary_de: str = ""
     summary_en: str = ""
+    visual_notes: list[VisualNote] = Field(default_factory=list)
 
 
 StageState = Literal["ok", "missing", "failed", "ingesting", "running"]

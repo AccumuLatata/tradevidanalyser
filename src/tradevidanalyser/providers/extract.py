@@ -44,7 +44,9 @@ PROMPT_FILENAME = "insights_v1.de.md"
 EVENTS_PROMPT_FILENAME = "events_v1.de.md"
 SUMMARY_WORD_LIMIT = 120
 _DIGIT_RUN = re.compile(r"\d+")
-_WINDOW_EXCLUDE = frozenset({"session_events", "summary_de", "summary_en"})
+_WINDOW_EXCLUDE = frozenset(
+    {"session_events", "summary_de", "summary_en", "visual_notes"}
+)
 INSIGHT_SPAN_FIELDS = (
     "bias_statements",
     "playbooks_mentioned",
@@ -194,6 +196,7 @@ def insights_json_schema() -> dict[str, Any]:
     defs = schema.get("$defs")
     if isinstance(defs, dict):
         defs.pop("SessionEvent", None)
+        defs.pop("VisualNote", None)
     return schema
 
 

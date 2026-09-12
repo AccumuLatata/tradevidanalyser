@@ -18,6 +18,7 @@ from tradevidanalyser.pipeline import (
     ocr_session,
     run_latest,
     transcribe_session,
+    vlm_session,
 )
 from tradevidanalyser.serve import create_app, token_required_for_host
 from tradevidanalyser.watch import watch
@@ -100,6 +101,14 @@ def main(argv: list[str] | None = None) -> int:
         "--redact",
         action="store_true",
         help="black-box layout.yaml *_mask ROIs (re-encodes video)",
+    )
+
+    p_vlm = sub.add_parser("vlm", help="opt-in VLM notes from redacted frames or clips")
+    p_vlm.add_argument("session")
+    p_vlm.add_argument(
+        "--provider",
+        default=None,
+        help="fake / grok / gemini; default is TVA_VLM_PROVIDER (off if unset)",
     )
 
     p_serve = sub.add_parser("serve", help="HTTP API over TVA_ROOT")
@@ -188,6 +197,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.cmd == "clips":
             result = clips_session(args.session, root=root, redact=args.redact)
             _emit(result.as_dict(root), as_json=True)
+            return 0
+        if args.cmd == "vlm":
+            payload = vlm_session(args.session, root=root, provider_name=args.provider)
+            _emit(payload, as_json=True)
             return 0
         if args.cmd == "serve":
             import uvicorn

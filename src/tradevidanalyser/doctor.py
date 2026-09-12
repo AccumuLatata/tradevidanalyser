@@ -73,7 +73,11 @@ def run_doctor(root: Path) -> DoctorReport:
         DoctorCheck(
             id="xai_key",
             status="ok" if xai else "warn",
-            detail="XAI_API_KEY set" if xai else "XAI_API_KEY unset (needed for TVA_EXTRACT_PROVIDER=grok)",
+            detail=(
+                "XAI_API_KEY set"
+                if xai
+                else "XAI_API_KEY unset (needed for TVA_EXTRACT_PROVIDER=grok / TVA_VLM_PROVIDER=grok)"
+            ),
         )
     )
 
@@ -141,6 +145,36 @@ def run_doctor(root: Path) -> DoctorReport:
     else:
         ocr_status, ocr_detail = "warn", "paddleocr not installed (pip install 'tradevidanalyser[ocr]')"
     checks.append(DoctorCheck(id="paddleocr", status=ocr_status, detail=ocr_detail))
+
+    vlm = (os.environ.get("TVA_VLM_PROVIDER") or "").strip().lower()
+    gemini_key = bool(
+        (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or "").strip()
+    )
+    if not vlm or vlm in {"off", "none", "disabled"}:
+        vlm_status, vlm_detail = "ok", "TVA_VLM_PROVIDER unset (VLM off)"
+    elif vlm in {"fake", "test"}:
+        vlm_status, vlm_detail = "ok", f"TVA_VLM_PROVIDER={vlm}"
+    elif vlm in {"grok", "xai"}:
+        if xai:
+            vlm_status, vlm_detail = "ok", f"TVA_VLM_PROVIDER={vlm}"
+        else:
+            vlm_status, vlm_detail = "fail", "TVA_VLM_PROVIDER=grok but XAI_API_KEY is unset"
+    elif vlm in {"gemini", "google"}:
+        if gemini_key:
+            vlm_status, vlm_detail = "ok", f"TVA_VLM_PROVIDER={vlm}"
+        else:
+            vlm_status, vlm_detail = "fail", "TVA_VLM_PROVIDER=gemini but GEMINI_API_KEY is unset"
+    else:
+        vlm_status, vlm_detail = "warn", f"TVA_VLM_PROVIDER={vlm}"
+    checks.append(DoctorCheck(id="vlm_provider", status=vlm_status, detail=vlm_detail))
+
+    if gemini_key:
+        gem_status, gem_detail = "ok", "GEMINI_API_KEY set"
+    elif vlm in {"gemini", "google"}:
+        gem_status, gem_detail = "fail", "TVA_VLM_PROVIDER=gemini but GEMINI_API_KEY is unset"
+    else:
+        gem_status, gem_detail = "warn", "GEMINI_API_KEY unset (VLM gemini is opt-in)"
+    checks.append(DoctorCheck(id="gemini_key", status=gem_status, detail=gem_detail))
 
     el_key = bool((os.environ.get("ELEVENLABS_API_KEY") or "").strip())
     checks.append(

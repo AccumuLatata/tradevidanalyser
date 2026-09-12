@@ -60,6 +60,7 @@ tva wer 2026-09-11_143000 --ref path/to/reference.txt
 tva frames 2026-09-11_143000 --contact-sheet
 tva ocr 2026-09-11_143000
 tva clips 2026-09-11_143000 --redact
+tva vlm 2026-09-11_143000
 tva serve --host 127.0.0.1 --port 8764
 ```
 
@@ -90,6 +91,15 @@ time, P&L to a signed float, position to an int. Fake OCR is the default
 `clips/<t>.mp4` with the mic track only (`-c copy`). `--redact` applies
 `layout.yaml` `*_mask` ROIs as black boxes (re-encodes video). The same
 masks are burned into every JPEG `tva frames` writes.
+
+`tva vlm <id>` is **off unless `TVA_VLM_PROVIDER` is set** (not even fake
+by default). Input is redacted frames and/or clips — never the raw
+recording. Grok sends JPEG `image_url` data URLs (`docs.x.ai` image
+understanding; Imagine `video_url` is generation, not used). Gemini can
+upload a redacted clip via the File API. Notes are stored on
+`insights.visual_notes` (`frames_cited[]`) and `visual_notes.json`; a
+note that states a number absent from `ocr.parquet` is dropped. Cost is
+added to `status.json` `cost_usd`.
 
 ASR and extraction default to **fake** providers (`TVA_ASR_PROVIDER=fake`,
 `TVA_EXTRACT_PROVIDER=fake`) so CI and first-run never call a paid API.

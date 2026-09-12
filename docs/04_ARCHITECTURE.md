@@ -115,6 +115,7 @@ Every stage is a CLI subcommand, idempotent, writing into
 | Frames | `tva frames <session> [--at t…] [--contact-sheet]` | CLI (keyframes stay on `TVA_ROOT`; not a bot media route) | `frames/<t>.jpg` + optional contact sheet | yes, optional |
 | OCR | `tva ocr <session>` | CLI (not a bot run stage) | `ocr.parquet` (`t, roi, text, confidence, parsed`) | yes, optional |
 | Clips | `tva clips <session> [--redact]` | CLI (`GET /clips/{name}` only if `TVA_SERVE_MEDIA=1`) | `clips/<t>.mp4`, mic only; masks on `--redact` | yes, optional |
+| VLM | `tva vlm <session>` | CLI (not a bot run stage; off unless `TVA_VLM_PROVIDER`) | `visual_notes.json` + `insights.visual_notes` | yes, optional |
 | Status | `tva status` | `GET /sessions`, `GET /sessions/latest` | stage states | yes |
 | Read | — | `GET /sessions/{id}`, `/transcript`, `/insights` | JSON | yes |
 | Doctor | `tva doctor` | `GET /health` | ffmpeg / GPU / keys / NAS mount | yes |
@@ -158,6 +159,7 @@ insights:                        # model-derived, every field cited or null
     #         break|rule_mention|brief_ref|grok_ref
   summary_de: string             # labelled prose, ≤ 120 words
   summary_en: string
+  visual_notes: [{text, t, frames_cited[], clip}]  # PR-15; default []
   # PR-08: provider/model/prompt_version; grok windows ≤40 / overlap 5
   # citation failures drop into gaps[] (unknown seg or fabricated quote)
   # PR-09: events from a second pass (ids + first-pass citation ids, no
@@ -186,6 +188,14 @@ PR-09: additive `session_events` / `summary_de` / `summary_en` on the same
 and the closed `kind` set above. The citation guard covers events and
 rejects summaries whose digit runs are not exact runs in a valid cited
 segment (`summary_de` also capped at 120 words).
+
+PR-15: additive `visual_notes` on the same `schema_version: "1"` (default
+`[]`). `tva vlm` is off unless `TVA_VLM_PROVIDER` is set. Grok sends
+redacted JPEG `image_url`s (official docs.x.ai image understanding —
+Imagine `video_url` is generation-only). Gemini uses the File API for a
+redacted clip. The number guard drops a note whose digit runs are not in
+`ocr.parquet`. Cost is accumulated on `status.cost_usd`. Not a
+`POST /run` stage.
 
 ---
 
