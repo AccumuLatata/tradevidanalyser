@@ -151,6 +151,9 @@ insights:                        # model-derived, every field cited or null
   brief_refs: [{seg, text}]
   observations: [{seg, text}]    # labelled interpretation
   gaps: [string]                 # what the extractor could not hear
+  # PR-08: provider/model/prompt_version on the file; grok windows ≤40 / overlap 5
+  # citation failures drop into gaps[] (unknown seg or fabricated quote)
+  # session_events / summary_de / summary_en are PR-09
 
 fills: null                      # later
 trades: null                     # later
@@ -163,6 +166,11 @@ provenance: {app_version, ffmpeg, models, created_at}
 Hard rules: every model-derived field has a sibling reference; every number
 that is not later supplied by fills or OCR is `null` or raw quoted text,
 never estimated.
+
+PR-08 extractor: `tva extract --provider grok` (`XAI_API_KEY`, optional
+`TVA_EXTRACT_MODEL`). System prompt is `prompts/insights_v1.de.md`;
+`prompt_version` is `{stem}+{sha256[:12]}`. Fake keyword scan stays the
+default so CI never calls xAI.
 
 ---
 
