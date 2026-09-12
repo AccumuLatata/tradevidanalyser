@@ -5,9 +5,10 @@ Routines, Trading Journal, Trading Plan / Methodology 1.1, DRC template, Process
 and roadmap lock page), the public ThesisTester repository docs, and vendor
 documentation (TopstepX / ProjectX, TradesViz, OBS, Quantower, xAI, Google).
 
-The ThesisTester Origin repository itself was not readable from this session
-(token scoped to this repo only); everything about ThesisTester below comes from
-its public GitHub docs and the Notion lock page.
+The ThesisTester Origin repository is not in this agent's token scope. The
+public GitHub mirror `AccumuLatata/ThesisTester` (HEAD read 12 Sep 2026,
+`e82c2a9`) was cloned for the journal package (`schema.py`, `tradesviz.py`,
+`amp_statement.py`). That code is the reference for a *later* join, not for v1.
 
 ---
 
@@ -16,15 +17,21 @@ its public GitHub docs and the Notion lock page.
 ```mermaid
 flowchart LR
   subgraph desk["Trading PC (Windows, Vienna)"]
-    QT[Quantower<br/>ProjectX → TopstepX]
-    OBS[OBS Studio<br/>screen + mic recording]
-    TV[TradingView / MenthorQ / FJ]
-    VID[(Session videos<br/>local disk)]
+    QT[Quantower]
+    OBS[OBS Studio<br/>screen + mic, German]
+    VID[(Session videos<br/>local SSD → NAS copy)]
     OBS --> VID
   end
 
+  subgraph home["Home LAN — planned"]
+    NAS[(Synology NAS)]
+    MAC[Mac — always on<br/>Study B + future tva serve]
+    VID --> NAS
+    NAS --- MAC
+  end
+
   subgraph grok["Grok Bot cloud computer (shared by ~10 bots)"]
-    DTB[Daily Trading Briefs<br/>08:00 / 14:00 / 17:30]
+    DTB[Daily Trading Briefs<br/>08:00 / 14:00 / 17:30 English]
     SP[Sparring Partner]
     TI[Trade Importer<br/>21:45 + 23:00 watchdog]
     TT[Thesistester bot<br/>08:03 drift audit / 20:00 log]
@@ -32,9 +39,10 @@ flowchart LR
     QB[Question Bot<br/>Sunday audit]
   end
 
-  subgraph saas["SaaS"]
-    TSX[TopstepX<br/>live account]
-    TVZ[TradesViz<br/>journal, tags, notes]
+  subgraph saas["SaaS / brokers"]
+    TSX[TopstepX<br/>current venue]
+    AMP[AMP<br/>destination venue]
+    TVZ[TradesViz<br/>journal, both venues]
     NOT[(Notion<br/>Trading Journal DB,<br/>briefs, DRC, lock pages)]
   end
 
@@ -44,8 +52,10 @@ flowchart LR
   end
 
   QT --> TSX
+  QT --> AMP
   TI -- browser CSV export --> TSX
   TI -- browser CSV upload --> TVZ
+  TVZ --- AMP
   TI -- one log line --> NOT
   DTB --> NOT
   SP -.pushback.-> DTB
@@ -123,7 +133,7 @@ enforce them:
 
 Bots relevant to this project: **Trade Importer** (fills), **Thesistester /
 Edge Finder** (lab results), **Daily Trading Briefs** (published bias per day),
-and a future **Debrief / Coach** bot that does not exist yet (two empty "New
+and a future **TradeVid / Coach** bot that does not exist yet (two empty "New
 Agent" stubs are available).
 
 ### 2.3 ThesisTester (the lab)
@@ -153,30 +163,34 @@ Two surfaces matter here:
    loader parked (its clock is Vienna local, not NY).
 
 Consequence for scope: **level attribution, trigger inference, R math and
-counterfactuals already exist in ThesisTester.** The new app must not rebuild
-them. Its unique contribution is *evidence from the recording* (what the trader
-said, saw and did, time-stamped) and the *daily debrief* that joins evidence,
-fills, lab attribution and the day's published brief.
+counterfactuals already exist in ThesisTester.** TradeVidAnalyser must not
+rebuild them. Its unique v1 contribution is *evidence from the recording*
+(German commentary, time-stamped) exposed to Grok. Joining that to fills,
+lab attribution and the day's brief is a later phase — the desk's original
+idea, and the right cut.
 
-Another consequence: TradesViz tags/notes are today the only "intent" input to
-TJ and they are typed by hand. Spoken commentary is a much richer and cheaper
-intent source; the app can *propose* tags/notes from speech.
+Another later consequence: TradesViz tags/notes are today the only "intent"
+input to TJ and they are typed by hand. Spoken commentary is a cheaper
+intent source; a later stage can *propose* tags from speech.
 
-### 2.4 Fills: TopstepX, Quantower, TradesViz
+### 2.4 Fills: TradesViz first, AMP as the goal, TopstepX as one venue
 
 | Source | Access | Timestamps | Notes |
 |---|---|---|---|
 | **TopstepX ProjectX Gateway API** | REST + SignalR, bearer JWT. `POST /api/Trade/search {accountId, startTimestamp, endTimestamp}` returns half-turn fills (`creationTimestamp`, `price`, `side`, `size`, `profitAndLoss`, `fees`, `orderId`, `voided`). `POST /api/History/retrieveBars` returns OHLCV. | ISO-8601 UTC | **$29/mo, 50% off with code `topstep` → $14.50/mo.** Key is full-trading scope — store like a password. Topstep ToS: read-only logging/analytics on a private server is explicitly allowed; order transmission from a server is not. No sandbox; Practice account uses the same endpoints. |
 | TopstepX web export (current) | Browser: Layouts → trade export → EXPORT → CSV | account tz (US/Central) | What Trade Importer does today. Fragile (see 2.2). |
 | Quantower | Order History / Time & Sales panel → Export Data → CSV; Algo API `Core.Trades` | Europe/Vienna local | ThesisTester parked this loader because of the clock. |
-| **TradesViz executions export** | Import → Export/Manage → Existing Uploads → *Executions* + *Native* → CSV. No public API found; auto-sync is broker-side and daily. | as imported | The clock ThesisTester TJ is built on. Carries tags, notes, declared SL/TP (intent). |
+| **TradesViz executions export** | Import → Export/Manage → Existing Uploads → *Executions* + *Native* → CSV. No public API found; auto-sync is broker-side and daily. | UTC (`+0000`) | **The journal clock ThesisTester TJ is built on**, and the only source that is already venue-agnostic (TopstepX and AMP both land here). Tags, notes, declared SL/TP = intent. Fees are 0 — not money-truth. |
+| **AMP Daily Statement PDF** | FCM daily statement (PDF only; no CSV). ThesisTester `amp_statement` already parses confirmations, P&S, fee schedule. | date only (no timestamps) | Destination broker. Money-truth (fees, P&S). Reconciles with TradesViz on overlapping days in the TJ goldens. |
 
-Recommendation carried into the roadmap: adopt the **TopstepX API as the
-primary, automatic fill source** (read-only client; order endpoints never
-implemented), keep producing a CSV that TradesViz can ingest so the human
-journal and ThesisTester TJ keep working unchanged, and retire the browser
-export to a fallback. This removes the desk's most fragile routine as a side
-effect.
+Desk position (12 Sep 2026): **do not build a TopstepX-only spine.** AMP is
+the goal; TradesViz is how both venues are journaled today. The first
+version of TradeVidAnalyser does not ingest fills at all. When it does
+(TVA4), the loader is the TradesViz executions CSV, optionally AMP PDFs
+via the existing ThesisTester parser. A TopstepX API client is an optional
+later convenience for one venue (and would still not cover AMP). The
+fragile Trade Importer remains a *separate* problem; solving it is not a
+v1 goal.
 
 ### 2.5 Recording: OBS
 
@@ -218,8 +232,9 @@ without schema changes.
    entry, arrival-candle-close wait) is never scored.
 4. **Intent is expensive.** TJ needs hand-typed TradesViz tags; speech already
    contains the intent.
-5. **The fill import is the weakest link** and there is a documented API that
-   makes it unnecessary.
+5. **The fill import is the weakest link** for TopstepX specifically. That is
+   a real desk problem and a documented API would help *that venue* — it is
+   not this app's v1 job, and it does not help AMP.
 
 ---
 

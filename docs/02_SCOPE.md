@@ -1,190 +1,194 @@
 # 02 — Scope and focus
 
-Working name: **Debrief** (series code **DF**). Rename freely; the code is only
-used to number milestones the way ThesisTester does (TJ, JS, RS…).
+Working name: **TradeVidAnalyser** (series code **TVA**). Earlier drafts used
+*Debrief* / DF; the job is the same, the v1 cut is smaller.
 
 ---
 
 ## 1. One-sentence job
 
 > Turn each recorded trading session into a time-stamped, verifiable **Session
-> Record** (what was said, seen and done, aligned to the actual fills), and
-> from it produce a **daily debrief** and a **longitudinal coaching ledger**
-> that the Grok bots can act on — without a human having to open a video.
+> Record** (what was said, and what can reasonably be read from the screen)
+> and expose it through a **small headless API** so Grok can coach from the
+> tape — without a human opening a video.
 
 The desk's stated job is *"help Accumu make more money as a discretionary day
 trader of NQ/ES."* ThesisTester attacks that from the *location* side (does
-this level have edge?). Debrief attacks it from the *behaviour* side (did the
-trader do what the plan says, and what does it cost when he doesn't?). Both feed
-the Edge Finder.
+this level have edge?). TradeVidAnalyser attacks it from the *behaviour*
+side (what did the trader say and do on the tape?). Those two products meet
+later, on purpose — not in v1.
+
+AMP is the destination broker; TopstepX is a current venue. The journal that
+already spans both is **TradesViz**. This app must not grow a TopstepX-only
+spine.
 
 ---
 
-## 2. Who uses it
+## 2. Who uses it (v1)
 
 | User | Mode | What they need |
 |---|---|---|
-| **Debrief bot** (new Grok bot, evening routine) | primary, headless | A CLI that ingests the newest session, produces artifacts, and returns a machine-readable status. Then it writes the Notion page and pings only if something needs attention. |
-| **Edge Finder bot** (exists) | reader | Per-trade evidence + ThesisTester attribution, to judge live behaviour against lab results. |
-| **Coach conversation** (any bot, on demand) | reader | Query the ledger: "show me every re-entry violation in the last 20 sessions with the clip". |
-| **Accumu** (human) | occasional | Read the Notion debrief; jump to a clip when he disagrees with a finding; confirm/reject proposed tags. Never required to run anything. |
-| **ThesisTester journal** (`journal …` CLI) | downstream | Executions CSV + proposed intent tags, exactly in the format TJ already loads. |
+| **Grok bots** (coach / research / any) | primary | `GET /sessions/latest` (and by date) returning structured insights + transcript excerpts with timestamps. Quiet on success; they already know how to write Notion. |
+| **Accumu** | occasional | Read the insights Grok cites; jump to a timestamp or a clip when he disagrees. Never required to run anything. |
+| **Scheduler on the trading PC** | writer | After OBS stops: copy the recording to the NAS (and, if the PC is doing the heavy work, run ingest + transcribe). |
 
-Design consequence: **every output is a file with a stable schema**; every
-finding carries **provenance** (timestamps, transcript segment ids, frame ids)
-so a bot or a human can check it in seconds.
+**Not a v1 user:** ThesisTester's `journal …` CLI. It becomes a consumer in
+TVA4+ when we choose to join fills.
 
----
-
-## 3. In scope (v1 = DF0–DF6)
-
-1. **Session ingest** — detect finished OBS recordings, probe them, extract
-   audio tracks, register the session (wall-clock start, duration, chapters).
-2. **Transcript** — word-timestamped ASR with a trading-jargon vocabulary,
-   German/English code-switching, stored per session.
-3. **Fills** — pull fills for the session from the TopstepX API (read-only);
-   pair into round trips using ThesisTester's journal contract; emit the CSV
-   TradesViz / TJ already accept.
-4. **Alignment** — one clock. Map video time ↔ wall clock ↔ fill time, with a
-   calibration step (filename start time, OBS creation time, optional OCR of
-   the on-screen platform clock) and a reported confidence.
-5. **Trade evidence** — for each round trip: transcript window, stated
-   setup/bias/stop/target if spoken, keyframes at entry/exit, OCR of the
-   positions/P&L region, a short clip file.
-6. **Session events** — hourly check-ins, bias statements, trade / no-trade
-   zone calls, tilt language, references to the brief or to Grok, rule
-   mentions.
-7. **Rule checks** — deterministic checks from the rule catalog (§6) with
-   `pass / violated / unverifiable` and evidence refs. Never inferred from an
-   LLM alone when fills can decide it.
-8. **Daily debrief** — Markdown + JSON: source strip, day summary, per-trade
-   table, rule scorecard, contrast with the day's Macro/NY brief, three
-   candidate learnings, gaps. Written to the Notion Trading Journal by the bot.
-9. **Ledger** — append-only per-session metrics (SQLite/DuckDB + Parquet) for
-   weekly / monthly rollups and trend questions.
-10. **Bot routine pack** — copy-ready prompts and hard rules for the Debrief
-    bot, mirroring `STUDY_RUNNER_GROK_ROUTINE_PACK.md`.
-
-## 4. Out of scope (v1)
-
-- Any order-transmitting code path. The TopstepX client will not implement
-  order/position endpoints at all (import-time guard), so a misconfigured bot
-  cannot trade.
-- A GUI. A read-only viewer is a *later* option (ThesisTester's Studies
-  viewer pattern), not a v1 deliverable.
-- Rebuilding what exists: TradesViz statistics, ThesisTester level
-  attribution / triggers / counterfactuals, brief generation.
-- Live, in-session coaching (real-time). Everything here is post-session.
-- Real-time video analysis or full-frame "watch the whole chart" understanding.
-  Visual analysis is scoped to regions of interest and per-trade clips.
-- Emotion recognition from face/webcam. Only speech content and, optionally,
-  simple prosody features (rate, pauses) labelled *experimental*.
-- Multi-user / multi-account.
+Design consequence: **every output is a file with a stable schema** on a
+shared root (NAS). The API only serves those files. Every finding carries
+**provenance** (timestamps, transcript segment ids, optional frame ids).
 
 ---
 
-## 5. Principles (inherit the desk's culture)
+## 3. In scope — v1 (TVA0–TVA3)
 
-1. **Facts, then interpretation, never blended.** The Session Record is facts
-   with provenance. The debrief's "Interpretation" and "Learnings" sections
-   are clearly labelled as model output and cite record ids.
-2. **Never invent numbers.** Prices, P&L, times, counts come from fills and
-   OCR with confidence, or are marked *missing*. A transcript quote is a
-   quote, not a price.
-3. **Fail closed on alignment.** If the video↔fill clock offset cannot be
-   established within tolerance (target ±2 s), trade evidence windows are
-   marked `alignment: low` and rule checks that depend on timing become
-   `unverifiable`.
-4. **Deterministic first.** Anything a rule engine can decide from fills
-   (trade count, consecutive losses, re-entry timing, daily loss) is decided
-   deterministically; the LLM only reads speech and frames.
-5. **Idempotent, resumable, content-addressed.** Re-running on the same video
-   and fills produces byte-identical facts. Model outputs carry model +
-   prompt version so they can be regenerated.
-6. **Quiet on success.** Bot pings only for violations, gaps or failures.
-7. **PII stays local by default.** Videos show account numbers and balances.
-   Hosted models receive audio and cropped/redacted frames only, and only
-   when the operator has opted in per provider.
-8. **CLI is the contract.** No embedded agent, no MCP server, no queue. Same
-   posture as ThesisTester's routine pack.
+The original ask, and the right first cut: a small headless service that
+feeds Grok from the videos.
+
+1. **Session ingest** — find finished OBS recordings on any configured
+   machine, probe them, extract the mic track, register the session
+   (wall-clock start, duration, chapters, hashes).
+2. **Transcript** — word-timestamped ASR, **German primary**, with a trading
+   jargon vocabulary (English level tokens inside German speech: ONH, dVWAP,
+   3c, …). Stored per session.
+3. **Session insights** — structured, cited extraction from the transcript:
+   spoken bias, playbook names, stated stop/target, hourly check-ins, tilt
+   language, brief references, hesitation, rule mentions. Quotes are quotes;
+   no invented numbers.
+4. **Optional visual notes** — keyframes at chapter markers; ROI OCR of the
+   on-screen clock (helps later alignment); short clips around chapters.
+   Full-frame "watch the chart" is out. A VLM pass on clips is opt-in.
+5. **Headless API** — local HTTP on the always-on Mac, reading the NAS root.
+   List sessions, return transcript + insights + status. No UI.
+6. **Bot routine pack** — copy-ready prompt: where the API lives, what the
+   JSON means, hard rules (never invent a quote; cite segment ids).
+
+## 4. Later (explicitly not v1)
+
+These are real, and they are how the tape becomes expensive in a good way.
+They wait until v1 is boring and reliable.
+
+7. **Fills from TradesViz** (TVA4) — executions CSV, broker-agnostic
+   (TopstepX today, AMP as the goal, anything TradesViz already journals).
+   AMP Daily Statement PDF is money-truth if we need fees/P&S; ThesisTester
+   already parses it (`amp_statement`). Not a TopstepX API client.
+8. **Clock alignment + per-trade evidence windows** — video time ↔ fill
+   time, once fills exist.
+9. **Rule scorecard** — the catalog in §6, including the $100 vs $200 daily
+   loss question. Needs fills. Parked (see D4).
+10. **ThesisTester join** — `journal attribute` / `zones` / `triggers` next
+    to spoken setup names. "He said ONH; the lab tagged pdPOC."
+11. **Daily debrief page + coaching ledger + Notion publish** — Grok can
+    already write Notion; v1 just has to give it facts. A dedicated publish
+    command is optional later.
+12. **Intent-tag proposals back into TradesViz.**
+
+## 5. Out of scope (all phases unless reopened)
+
+- Any order-transmitting code path, any broker.
+- A GUI.
+- Rebuilding TradesViz statistics or ThesisTester level math.
+- Live, in-session coaching.
+- Emotion recognition from face/webcam.
+- A TopstepX-only (or AMP-only) architecture.
+- Multi-user.
 
 ---
 
-## 6. Rule catalog (what the coach can grade)
+## 6. Principles
+
+1. **Facts, then interpretation, never blended.** The Session Record is
+   facts with provenance. Insights labelled *interpretation* cite record ids.
+2. **Never invent numbers.** A transcript quote is a quote, not a price.
+   Prices and P&L appear only when a later fills/OCR stage supplies them.
+3. **Broker-agnostic journal.** When fills arrive, they arrive as TradesViz
+   executions (and optionally AMP statements). Venue is a field, not a
+   product fork.
+4. **ThesisTester is a later consumer, not a dependency.** v1 must run on a
+   machine that has never installed ThesisTester.
+5. **Idempotent, resumable, content-addressed.** Re-running on the same
+   video produces byte-identical facts. Model outputs carry model + prompt
+   version.
+6. **Quiet on success.** Bots ping only for gaps or failures.
+7. **PII stays on the LAN by default.** Videos show account numbers and
+   balances. Hosted models receive audio and cropped/redacted frames only,
+   and only when opted in per provider. The NAS is private; the API is not
+   on the public internet without a tunnel the operator chose.
+8. **Files are the source of truth; the API is a window.** CLI and API call
+   the same functions. No embedded agent, no MCP server, no queue.
+
+---
+
+## 7. Rule catalog (parked until TVA4+)
+
+Kept so it is not forgotten. **None of this is a v1 deliverable.** D4
+(daily loss $100 vs $200) only matters here.
 
 Decidable from fills alone (deterministic):
 
 | id | Rule | Check |
 |---|---|---|
-| R-DLL | Daily loss limit ($200 plan / $100 DRC — **one value must be chosen**) | realized P&L incl. fees never below limit; flag first breach time |
+| R-DLL | Daily loss limit (value is a config, not a constant) | realized P&L incl. fees never below limit |
 | R-MAX10 | ≤ 10 trades per day | round-trip count |
-| R-3L30 | 3 consecutive losses → 30 min timeout | gap between 3rd loss exit and next entry ≥ 30 min |
-| R-5M | Loss → 5 min block before a new trade | gap ≥ 5 min after any losing exit |
-| R-REENTRY | Stopped on entry → max one re-entry, then 5 min block | detect entry/stop pairs within N seconds at same level/direction |
+| R-3L30 | 3 consecutive losses → 30 min timeout | gap after 3rd loss |
+| R-5M | Loss → 5 min block | gap after any losing exit |
+| R-REENTRY | Stopped on entry → max one re-entry, then 5 min | same level/direction |
 | R-CLOSE | Flat by session end (if the plan says so) | last exit before cutoff |
 
 Decidable from fills + transcript (evidence-backed):
 
 | id | Rule | Check |
 |---|---|---|
-| R-PLAYBOOK | Trade follows a named playbook, no on-the-fly entries | a playbook name (or its alias) is spoken in the window before entry |
-| R-DEFINED | Entry, invalidation, target stated before entry | stop/target words + numbers in pre-entry window |
-| R-3C-CT | Counter-trend needs 3c confirmation | stated "counter" / "CTR" + "3c" mention; cross-check with ThesisTester `journal triggers` |
-| R-ARRIVAL | Wait for arrival candle close | spoken cue and/or entry timestamp vs 1m bar close |
-| R-SLTP | SL/TP only moved on new information | fill/order modifications (API) vs stated reason |
-| R-HOURLY | Hourly check-in (xx:50) | check-in language near each xx:50 ± 5 min |
-| R-ZONE | Trades only in declared trade zones | "no-trade zone" declared → no entries until revoked |
-| R-BIAS | Bias re-evaluated every 5–15 min / agile | frequency of bias statements; contradiction with brief noted |
-| R-TILT | TILT noticed → cool-down | tilt language followed by ≥ N min without entries |
+| R-PLAYBOOK | Named playbook, no on-the-fly entries | playbook spoken before entry |
+| R-DEFINED | Entry, invalidation, target stated before entry | stop/target in pre-entry window |
+| R-3C-CT | Counter-trend needs 3c | speech + later `journal triggers` |
+| R-ARRIVAL | Wait for arrival candle close | cue and/or entry vs 1m close |
+| R-SLTP | SL/TP only moved on new information | modifications vs stated reason |
+| R-HOURLY | Hourly check-in (xx:50) | check-in language near xx:50 |
+| R-ZONE | Trades only in declared trade zones | "no-trade zone" → no entries |
+| R-BIAS | Bias re-evaluated / agile | frequency; contradiction with brief |
+| R-TILT | TILT noticed → cool-down | tilt language then quiet |
 
-Everything not covered above is *observation*, not a rule check (e.g. "you
-mentioned the HVL 14 times and traded through it twice").
-
----
-
-## 7. Success criteria for v1
-
-- A finished session produces a Session Record and a debrief **without human
-  input**, on the evening of the session, in under 30 minutes of compute on
-  the chosen host.
-- Alignment confidence ≥ 0.9 on ≥ 90 % of sessions (measured against the
-  OCR'd platform clock).
-- Every rule check in §6 marked deterministic returns pass/violated on 100 %
-  of sessions with fills; evidence-backed checks return `unverifiable` rather
-  than guessing when speech is absent.
-- Transcript WER on trading jargon ≤ 10 % on a hand-checked 20-minute sample
-  (measured once in DF1, tracked when the model changes).
-- The Trade Importer routine can be switched off because Debrief delivers the
-  TradesViz-importable CSV (DF2 exit criterion).
-- Accumu reads the debrief and, in at least three of the first ten sessions,
-  finds one finding he did not know about *and can verify from the clip*.
+v1 may *extract* the spoken events (check-in, tilt, playbook name) without
+grading them against fills.
 
 ---
 
-## 8. Headless: the recommendation
+## 8. Success criteria for v1
 
-Yes — build it headless, bot-first. Reasons specific to this desk:
+- After a session, artifacts land on the NAS and `GET /sessions/latest`
+  returns insights **without human input**.
+- Transcript is usable German: WER on trading jargon ≤ 10 % on a
+  hand-checked 20-minute sample (English tokens inside German speech count
+  as jargon).
+- Every insight field that is a quote cites a transcript segment that
+  actually contains that text.
+- A Grok bot can, from the API alone, produce a useful session note that
+  Accumu can check against the tape in under five minutes.
+- The app runs against the NAS root on the trading PC, the Mac, and a
+  laptop with only a path/env change.
 
-- The bots already own every other artifact (briefs, imports, lab logs) and
-  the operating conventions (quiet on success, one log line, source strip,
-  Sunday audit) are established. A UI would be a second, unmaintained surface.
-- ThesisTester proved the pattern: CLI + artifacts + a routine pack. The
-  bots use it reliably; the parts of the desk that use browsers (Trade
-  Importer) are the parts that break.
-- Grok Bot's cloud computer has a terminal and filesystem; a CLI is the most
-  reliable surface it has.
+---
 
-Three nuances so "headless" does not become "opaque":
+## 9. Headless API: the recommendation
 
-1. **The bot is the user, but the human is the judge.** Every finding needs a
-   2-second way to be checked: a timestamped quote, a keyframe, or a 30–90 s
-   clip. Artifacts are designed for that, not for a dashboard.
-2. **Headless ≠ cloud.** The videos are born on the trading PC and are large
-   (see `04_ARCHITECTURE.md` §2). The heavy media step should run where the
-   video is; only small artifacts travel to where the bot is. "Headless" here
-   means *no UI*, not *runs on the bot's machine*.
-3. **Two model roles, kept apart.** The app itself uses a model for
-   *extraction* (structured, cited, low temperature). The Grok bot uses a
-   model for *coaching* (conversational, cross-session, opinionated). The
-   first is inside the CLI and versioned; the second is a prompt in the
-   routine pack. Do not let the coach edit the facts.
+Yes — headless, bot-first, **API as the bot surface**, CLI as the operator
+and scheduler surface. Reasons specific to this desk:
+
+- The original idea was a small API that feeds Grok. That is still the
+  right v1. ThesisTester-style CLI is how *processing* is invoked; it is
+  not how a cloud bot should discover last night's session.
+- Grok's cloud computer cannot mount a Synology share. It can `curl` an
+  API on the always-on Mac (Tailscale / Cloudflare tunnel).
+- A UI would be a second, unmaintained surface.
+
+Three nuances:
+
+1. **The bot is the user, the human is the judge.** Every finding needs a
+   2-second check: a timestamped quote, a keyframe, or a short clip.
+2. **Headless ≠ cloud.** Heavy media runs on the LAN (trading PC GPU
+   preferred). The API is a window onto LAN files.
+3. **Two model roles, kept apart.** The app extracts (structured, cited,
+   low temperature). Grok coaches (conversational, opinionated). The coach
+   does not edit facts.

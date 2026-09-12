@@ -1,161 +1,109 @@
-# 05 — Engineering roadmap (DF0–DF7)
+# 05 — Engineering roadmap
 
-Same conventions as ThesisTester: numbered milestones, each additive, each
-with an exit criterion that a bot or a human can check. No calendar estimates;
-ordering and dependencies only. A milestone is "landed" when its exit
-criterion holds on the golden session **and** on one real session.
+Numbered milestones, additive, each with an exit criterion a bot or a
+human can check. No calendar estimates. A milestone is landed when the
+exit holds on the golden excerpt **and** on one real session.
+
+v1 is **TVA0–TVA3** (tape → API). Everything after that is a later
+product decision, not a hidden dependency.
 
 | Milestone | Intent | Depends on | Status |
 |---|---|---|---|
-| **DF0** | Plan lock, decisions, desk prep (OBS, API key, host, sync path), golden session | — | this document |
-| **DF1** | Ingest + transcript | DF0 | |
-| **DF2** | Fills via TopstepX API + TradesViz/TJ-compatible CSV | DF0 | |
-| **DF3** | Alignment + trade windows + evidence extraction + deterministic rules | DF1, DF2 | |
-| **DF4** | Frames: ROI OCR, keyframes, clips, optional VLM notes | DF3 | |
-| **DF5** | Context join (briefs, DRC, ThesisTester attribution) + debrief report + Notion publish | DF3 | |
-| **DF6** | Ledger + weekly rollup + Debrief bot routine pack + Trade Importer retirement | DF5 | |
-| **DF7** | Coach loop: trend questions, intent-tag proposals back to TradesViz/TJ, experiment tracking | DF6 | |
-| later | Full-session Gemini agentic pass; live fill → OBS chapter stamping; read-only viewer; `journal propose-study` input | DF7 | parked |
+| **TVA0** | Plan lock, decisions, desk prep, golden excerpt | — | this document (decisions locked 12 Sep 2026) |
+| **TVA1** | Ingest + German transcript | TVA0 | |
+| **TVA2** | Insights extract + headless API (`tva serve`) | TVA1 | |
+| **TVA3** | Optional frames / clock OCR / chapter clips / opt-in VLM | TVA2 | |
+| **TVA4** | TradesViz executions join (broker-agnostic fills) | TVA2 | later |
+| **TVA5** | Alignment + per-trade windows + rule scorecard | TVA4 | later |
+| **TVA6** | Briefs + ThesisTester attribution + debrief/ledger | TVA5 | later |
+| **TVA7** | Coach loop: intent-tag proposals, experiments | TVA6 | later |
+| parked | Full-session Gemini pass; live fill → OBS chapters; viewer; TopstepX API as a *venue adapter* | — | parked |
 
 ---
 
-## DF0 — Plan lock and desk preparation
+## TVA0 — Plan lock and desk preparation
 
-Nothing to code except a repo skeleton. Everything here is a decision or a
-setting; each one blocks a later milestone if skipped.
+Nothing to code except, when we start TVA1, a repo skeleton.
 
-**Decisions Accumu must make (see §"Decisions needed" below):** D1 host,
-D2 TopstepX API, D3 sync path, D4 daily loss value, D5 language, D6 providers.
+**Decisions:** D1–D9 are recorded in the table below. Open follow-ups are
+only "NAS is on the desk yet?" and "how the Mac API is reached from Grok"
+(Tailscale vs tunnel) — both are wiring, not product forks.
 
-**Desk settings (one-time):**
-- OBS: Hybrid MP4; filename `%CCYY-%MM-%DD %hh-%mm-%ss`; mic on audio track 1,
-  desktop/Grok audio on track 2; "Add chapter marker" hotkey bound; optional
-  obs-websocket enabled for recording-stopped trigger. Confirm the platform
-  clock is visible on screen for OCR calibration (note its screen region).
-- TopstepX: ProjectX dashboard account, API subscription (promo `topstep`),
-  link, generate key, store in the host's secret store.
-- Record one **golden session** (20–30 min, practice account acceptable) with
-  deliberate content: a spoken bias, a named playbook, one trade with stated
-  stop/target, one re-entry, one hourly check-in, some German and some
-  English. Export its fills. Hand-correct its transcript once (WER reference).
+**Desk settings (one-time, can start now):**
+- OBS: Hybrid MP4; filename `%CCYY-%MM-%DD %hh-%mm-%ss`; mic on its own
+  audio track; "Add chapter marker" hotkey. Platform clock visible on
+  screen (helps TVA3 / later alignment). **Record to the trading PC disk,
+  not to the NAS.**
+- After the session: a copy (or robocopy / rsync) of the MP4 onto
+  `TVA_ROOT/recordings/`.
+- Hand-correct one **golden excerpt** (20–30 min of a real session,
+  redacted): German commentary, a spoken bias, a named playbook, one
+  stated stop/target, one hourly check-in. This is the WER reference.
+  Keep it on the NAS, not in git.
 
-**Repo skeleton:** `pyproject.toml` (Python 3.11+, ruff, pytest), `debrief/`
-package with empty stage modules, `docs/` (these files), `schemas/` (JSON
-schema exports), CI running lint + tests. No providers wired yet.
+**Exit:** this file's decision table is the desk's position; golden
+excerpt exists on the future `TVA_ROOT`.
 
-**Exit:** decisions recorded in this file; golden session and fills stored at
-the fixtures location; `debrief doctor` runs and reports what is missing.
+## TVA1 — Ingest and transcript
 
-## DF1 — Ingest and transcript
+- `tva ingest`: ffprobe, wall-clock start from filename + creation-time
+  cross-check, chapters, mic-track Opus, hashes, `session.json`. Split
+  OBS files stitch to one session.
+- `tva transcribe`: provider interface + WhisperX (local GPU) + one
+  hosted adapter; German primary; jargon `initial_prompt` from
+  `docs/GLOSSARY.md`; word timestamps; per-segment language.
+- WER harness against the golden excerpt.
+- `tva doctor` for ffmpeg / GPU / `TVA_ROOT`.
 
-- `debrief ingest`: ffprobe metadata, wall-clock start from filename with
-  creation-time cross-check, chapter list, per-track Opus extraction, hashes,
-  `session.json`. Handles split files (OBS auto-split) as one session.
-- `debrief transcribe`: provider interface + WhisperX adapter (local) + one
-  hosted adapter; jargon `initial_prompt` from a checked-in glossary
-  (`docs/GLOSSARY.md`: level tokens, playbooks, platform words); language per
-  segment; word timestamps; confidences.
-- WER harness against the hand-corrected golden transcript.
+**Exit:** golden + one real session produce `transcript.json`; jargon
+recall ≥ 90 %; `session.json` re-runs byte-identical.
 
-**Exit:** golden and one real session produce `transcript.json`; WER on the
-golden ≤ 10 % overall and jargon terms ≥ 90 % recall; re-run is byte-identical
-for `session.json` and stable (same model) for the transcript.
+## TVA2 — Insights and API
 
-## DF2 — Fills
+- `tva extract`: constrained JSON, German input, citations required,
+  `fake` provider in CI. Fields as in `04_ARCHITECTURE.md` §4. English
+  briefs stay out of this stage — Grok already has them and can compare.
+- `tva serve`: `GET /health`, `/sessions`, `/sessions/latest`,
+  `/sessions/{id}`, `/transcript`, `/insights`. Read-only except
+  `POST /sessions/{id}/run` bound to localhost / Tailscale.
+- Example JSON committed for contract tests (no media).
+- Draft `docs/TVA_GROK_ROUTINE_PACK.md`: URL, schema, hard rules.
 
-- Read-only TopstepX client: auth, token refresh, `Trade/search`,
-  `History/retrieveBars`. **No order/position write methods exist in the
-  module; a test asserts that.** Practice and live account ids configurable.
-- Fallback loader for the TradesViz executions CSV (reuse ThesisTester
-  profile) and for the TopstepX web export CSV.
-- Pairing into round trips using ThesisTester's `JournalTrade` contract
-  (import or mirror + contract test). Session date = trading session date
-  (ETH start 18:00 ET), not Vienna calendar date.
-- Emit `tradesviz_import.csv` in the format TradesViz accepts for TopstepX,
-  and verify one upload by hand.
+**Exit:** a `curl` from another machine on the LAN (and, once tunneled,
+from a throwaway request) returns last session's insights; every quote
+round-trips to a real segment.
 
-**Exit:** for three past sessions, fills from the API reconcile 1:1 with what
-the Trade Importer uploaded (count, symbols, timestamps within 1 s, P&L);
-TradesViz de-dupes the CSV as expected.
+## TVA3 — Frames (feasibility slice)
 
-## DF3 — Alignment, evidence, rules
+- Keyframes at chapter markers.
+- Optional ROI OCR of the platform clock (calibration contact sheet).
+- Optional short clips around chapters (ffmpeg stream copy, mic only).
+- Optional VLM notes on those clips, redaction mask on balance/account
+  ROIs, cost-logged, off by default.
 
-- `debrief align`: filename prior + OCR of the platform clock at K sampled
-  frames (needs a minimal ROI OCR here; full frame work is DF4); offset, drift,
-  confidence; fail-closed thresholds.
-- Trade windows and session slots (hourly xx:50 ± 5 min).
-- `debrief extract`: LLM structured extraction per window with citations
-  enforced by schema; German/English; prompts versioned; `fake` provider for
-  tests. Fields: stated setup / playbook / bias / stop / target, markers
-  (tilt, hesitation, rule mention, brief ref, Grok ref), session events.
-- `debrief rules`: the deterministic catalog (R-DLL, R-MAX10, R-3L30, R-5M,
-  R-REENTRY, R-CLOSE) from fills only; the evidence-backed catalog with
-  `unverifiable` when speech is absent or alignment is low.
+**Exit:** a chapter clip opens at the right moment; OCR clock, if
+enabled, is within 1 s of filename time on the golden excerpt.
 
-**Exit:** on the golden session the planted facts (bias, playbook, stop,
-target, re-entry, check-in) are all found with correct citations; on a real
-session every deterministic rule returns pass/violated; alignment confidence
-≥ 0.9.
+---
 
-## DF4 — Frames
+## Later phases (not scheduled)
 
-- Keyframes at entry/exit ±(configurable) seconds and at chapter markers.
-- ROI OCR (PaddleOCR) for clock, position, unrealised P&L, instrument; ROIs
-  configured per layout in a YAML with a calibration helper that prints a
-  contact sheet.
-- Clips per trade (ffmpeg stream copy, mic track only, burned-in timestamp
-  optional).
-- Optional VLM notes per clip (Grok 4.3 `video_url` after verifying the
-  official docs; Gemini as alternative), opt-in, cost-logged per session;
-  redaction mask over account/balance regions before anything leaves the
-  machine.
+**TVA4 — TradesViz fills.** Loader for the executions export (reuse or
+contract-test ThesisTester's `tradesviz_executions` profile). Venue is a
+column. AMP PDF is optional money-truth via ThesisTester `amp_statement`.
+No TopstepX API required. Exit: three mixed-venue days parse.
 
-**Exit:** per-trade clips open at the right moment on a real session; OCR
-P&L at exit matches the fill P&L on ≥ 90 % of trades; VLM notes, if enabled,
-cite frame ids and never state a price the OCR did not read.
+**TVA5 — Align + rules.** Video clock ↔ fill clock; per-trade windows;
+deterministic + evidence-backed catalog. **D4 is decided here**, not
+before.
 
-## DF5 — Context and debrief
+**TVA6 — Context join.** Notion briefs (English) + DRC + ThesisTester
+`journal attribute|zones|triggers`. Optional `tva report` / publish.
+This is the first time the two repos must be installed on the same
+machine (likely the Mac, where the study store already lives).
 
-- `debrief context`: Notion read of the day's Macro / NY brief (bias,
-  conviction, kill levels, quoted); DRC scores if present; ThesisTester
-  `journal attribute` / `triggers` results for the session's trades.
-- `debrief report`: fixed page order (source strip · day in one paragraph ·
-  trade table with evidence links · rule scorecard · brief-vs-behaviour ·
-  observations · three candidate learnings · gaps); Markdown + JSON.
-- `debrief publish --notion`: page in Trading Journal titled
-  `<D Mon YYYY> Session Debrief`, tag *Trades Summary*, `Summaries` property
-  = one sentence, `Learning 1–3` filled from candidates; update in place if
-  it exists; one log line on a *Debrief runs* page.
-
-**Exit:** a human can read the Notion page in under five minutes and check
-any finding from the linked clip/quote; the page has no number that is not in
-`fills`/`ocr`/`context`.
-
-## DF6 — Ledger, rollup, bot routine
-
-- `ledger.duckdb` with per-session and per-trade rows; `debrief rollup
-  --week` produces a weekly Markdown (adherence rates, violation counts, time
-  in market, trades per hour, stated-vs-attributed setup agreement).
-- Routine pack (`docs/DEBRIEF_GROK_ROUTINE_PACK.md`): Debrief bot evening
-  routine + watchdog, hard rules, Sunday additions, Trade Importer change.
-- Run in shadow for two weeks alongside the Trade Importer; then flip the
-  importer to fallback-only.
-
-**Exit:** ten consecutive weekday sessions processed by the bot without manual
-intervention; Trade Importer's browser export not needed on any of them.
-
-## DF7 — Coach loop
-
-- Intent-tag proposals from speech written as TradesViz notes/tags CSV and
-  `intent_proposals.json`; human confirmation status tracked.
-- Coach prompt over the ledger: trend questions with citations, one weekly
-  behavioural experiment as a testable rule (e.g. "no entries in the first
-  15 min after a loss for two weeks"), tracked in the ledger with its outcome.
-- Edge Finder hook: per-trade evidence + lab attribution side by side.
-
-**Exit:** the weekly review contains at least one claim that is backed by
-≥ 10 cited instances across sessions, and one experiment is running with a
-defined stop criterion.
+**TVA7 — Coach loop.** Proposed TradesViz tags from speech; weekly
+experiment tracking.
 
 ---
 
@@ -163,37 +111,54 @@ defined stop criterion.
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| Clock misalignment (OBS start vs exchange time, pauses, splits) | evidence attached to the wrong trade | OCR'd platform clock calibration, chapter markers, fail-closed `unverifiable` |
-| ASR misses jargon or German/English switches | wrong or missing intent | jargon prompt/glossary, WER harness, hosted fallback for comparison |
-| LLM invents a quote or number | destroys trust | schema-enforced citations, drop uncited claims, numbers only from fills/OCR |
-| Videos or frames with account data leave the desk | PII exposure | T1 topology, redaction masks, per-provider opt-in, hosted calls get audio + crops only |
-| TopstepX API key misuse | live account risk | client has no order methods (tested), key in secret store, read-only server allowed by ToS |
-| Trading PC busy post-session | pipeline delayed | run after session end at low priority; T3 degraded mode |
-| Provider churn (models, prices, endpoints) | rework | adapter interfaces, pinned versions, `fake` providers in CI |
-| Scope creep into a UI or into ThesisTester's territory | dilution | out-of-scope list in `02_SCOPE.md`; contract tests instead of re-implementation |
-| Two conflicting daily-loss values ($100 vs $200) | wrong violations | D4 decision; rule catalog reads one config value |
+| German ASR drops English level tokens | insights miss the actual setup name | jargon glossary + WER on those tokens |
+| LLM invents a quote | destroys trust | schema-enforced citations; drop uncited claims |
+| OBS written straight to SMB | dropped frames, corrupt Hybrid MP4 | record local, copy after (desk rule) |
+| NAS copy still running when the bot calls | empty `/sessions/latest` | `status: ingesting`; watchdog; PC should transcribe before copy *or* copy-then-process with a lock file |
+| Mac disk / GPU too small to process | pipeline stuck if PC is off | hosted ASR fallback; prefer PC GPU |
+| Grok cannot reach the API | bots unused | Tailscale or tunnel; `/health` on Sunday audit |
+| Scope creeps into ThesisTester / TopstepX | delayed v1 | this file's v1 cut; no TT import in package metadata |
+| Videos or frames leave the LAN | PII | API default = JSON only; media endpoints opt-in + redaction |
 
 ---
 
-## Decisions needed from Accumu (block DF0)
+## Decisions (locked 12 Sep 2026)
 
-| # | Decision | Options | Default if silent |
+| # | Decision | Locked position | Notes |
 |---|---|---|---|
-| D1 | Processing host | trading PC · Mac (Program B box) · bot cloud computer | trading PC (T1) |
-| D2 | TopstepX API subscription ($14.50/mo) | yes · no (keep browser export as source) | yes |
-| D3 | Artifact sync path PC → bot | Google Drive on `tradingautomations1` · S3/B2 bucket · git-LFS | Google Drive (already signed in on the bot box) |
-| D4 | Daily loss limit for R-DLL | $100 (DRC) · $200 (Plan) | — must be chosen |
-| D5 | Debrief language | English page + German chat ping (current bot convention) · German page | English page, German ping |
-| D6 | Model providers | ASR: WhisperX local / hosted; extraction: xAI Grok; VLM: Grok 4.3 / Gemini | as listed |
-| D7 | Is Grok used by voice during sessions (desktop audio contains Grok)? | yes → separate OBS track, transcribe both · no | separate track anyway |
-| D8 | Practice vs live account for the first weeks of fills | practice · live | live (read-only) |
-| D9 | Where the ThesisTester journal runs today (which machine has the store) | PC · Mac · bot | — needed for DF5 |
+| **D1** | Processing / serving hosts | **All three machines must work** (trading PC, laptop, Mac) via `TVA_ROOT`. **Default process: trading PC** after the session (fastest). **Default serve: Mac** (always on, Study B box). | Laptop is the same CLI. Bot cloud computer is HTTP-only, never a processor. |
+| **D2** | Fill source | **Not TopstepX-exclusive. Not v1.** When fills land: **TradesViz executions** (venue-agnostic). AMP Daily Statement PDF for money-truth if needed (ThesisTester already parses it). TopstepX API is an optional later *adapter* for one venue, never the spine. | Matches how ThesisTester TJ is built. |
+| **D3** | Artifact / video sync | **Synology NAS on the LAN** as `TVA_ROOT`. Record local, copy after. Until the NAS exists, a folder on the Mac. **Grok reaches JSON via `tva serve` on the Mac + Tailscale or Cloudflare tunnel** — not via a NAS mount. | This was the "Google Drive vs S3" question. The NAS replaces that for LAN machines; the tunnel is the remaining hop. |
+| **D4** | Daily loss $100 vs $200 | **Parked.** Irrelevant until TVA5 rule checks. The video API does not grade P&L. | See §"Why D4 existed" below. |
+| **D5** | Language | **Videos / ASR: German.** Briefs stay English (already produced). Insights store **German quotes verbatim**; Grok may write English notes from them. Jargon list is bilingual (German speech, English level tokens). | |
+| **D6** | Providers | ASR: **WhisperX local on the PC GPU**, hosted fallback (Scribe v2 or Deepgram) from the Mac if needed. Extraction: **xAI Grok**, constrained JSON. VLM: opt-in later, Grok 4.3 or Gemini after a docs check. | Adapters, so any row can swap. |
+| **D7** | Grok voice on the tape | **No.** Mic-only track is enough. Desktop audio optional, not required. | Separate tracks remain an OBS recommendation in case that changes. |
+| **D8** | Practice vs live tape | **Real trading videos.** Golden excerpt is a redacted real session, not a practice account. | Still no order-sending code. |
+| **D9** | ThesisTester store / data gravity | **Mostly the Mac** (Study B, always on). Disk is tight → **NAS becomes the bulk store** (recordings, Session Records, eventually large study artifacts if you choose). Journal CLI stays where the store is; TVA v1 does not need it. | Good idea — see architecture §2.1. |
+
+### Why D3 was confusing
+
+The question was not "which cloud bucket." It was: **the Grok bot does
+not sit on your LAN.** Something has to move *small* artifacts (or an
+HTTP response) from the machine that has the video to the machine that
+has the bot. Drive/S3/git-LFS were candidates when the shared disk was
+undefined. A Synology share solves PC ↔ Mac ↔ laptop. It does **not**
+by itself solve Grok. `tva serve` + Tailscale is that hop.
+
+### Why D4 is not a video-analyser question
+
+R-DLL ("did he breach the daily loss limit?") is a **fills** rule. The
+plan says $200, the DRC says $100. That conflict only matters when we
+score a day against realized P&L. v1 does not have P&L. When TVA5
+exists, the limit is a config value on the rule engine, not a
+hard-coded constant — decide it then, in the same place the rest of the
+rulebook is reconciled.
 
 ---
 
-## Non-goals restated (so the bots do not drift)
+## Non-goals (so the bots do not drift)
 
-Do not build a UI. Do not compute levels. Do not rank setups by outcome from a
-few sessions. Do not let the coach edit facts. Do not add order endpoints. Do
-not upload raw video by default. Do not write to Notion columns the schema
-does not have.
+Do not build a UI. Do not compute levels. Do not import ThesisTester in
+v1. Do not make TopstepX the spine. Do not let the coach edit facts.
+Do not add order endpoints. Do not record OBS onto the NAS. Do not
+upload raw video by default.

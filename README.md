@@ -1,48 +1,52 @@
-# Debrief (working name)
+# TradeVidAnalyser (working name)
 
-Headless, bot-first pipeline that turns recorded futures trading sessions
-(OBS screen + commentary) into a time-stamped **Session Record** aligned to
-the actual fills, then into a **daily debrief** and a **coaching ledger** that
-the desk's Grok bots consume. Companion to
-[ThesisTester](https://github.com/AccumuLatata/ThesisTester) (the lab): the
-lab answers *where* has edge, Debrief answers *how the trader behaves* against
-his own plan and what it costs.
+Headless, bot-first service that turns recorded futures trading sessions
+(OBS screen + spoken commentary, **German**) into a time-stamped **Session
+Record** and a small **HTTP API** the desk's Grok bots can query — without
+anyone opening a video.
 
-**Status: scoping.** No code yet. This repository currently holds the
-discovery, scope, research, architecture and roadmap documents that precede
-implementation (milestone DF0).
+**Status: scoping.** No code yet. This repository holds the discovery, scope,
+research, architecture and roadmap that precede implementation (milestone
+TVA0). Series code **TVA**. Earlier drafts used the name *Debrief* / **DF**;
+those labels are retired.
+
+v1 does **not** join ThesisTester or import fills. It answers: *what was said
+and seen on the tape?* Combining that with the lab (ThesisTester) and the
+journal (TradesViz, AMP + TopstepX) is a later phase.
 
 ## Documents
 
 | Doc | What it is |
 |---|---|
-| [`docs/01_DISCOVERY.md`](docs/01_DISCOVERY.md) | What exists on the desk today: bots, ThesisTester journal, TopstepX/TradesViz/OBS/Quantower, rulebook, Notion. Where the gap is. |
-| [`docs/02_SCOPE.md`](docs/02_SCOPE.md) | Job, users (bots), in/out of scope, principles, rule catalog, success criteria, headless stance. |
-| [`docs/03_STATE_OF_THE_ART.md`](docs/03_STATE_OF_THE_ART.md) | ASR, video LLMs, OCR, AI trade journals, Grok Bot, TopstepX API, OBS — and the decision per layer. |
-| [`docs/04_ARCHITECTURE.md`](docs/04_ARCHITECTURE.md) | Topology (where it runs), pipeline stages and CLI, Session Record contract, ThesisTester relationship, bot routine pack. |
-| [`docs/05_ROADMAP.md`](docs/05_ROADMAP.md) | Milestones DF0–DF7 with exit criteria, risks, and the decisions needed to start. |
+| [`docs/01_DISCOVERY.md`](docs/01_DISCOVERY.md) | What exists on the desk today. Where the gap is. |
+| [`docs/02_SCOPE.md`](docs/02_SCOPE.md) | Job, users, v1 vs later, principles, headless-API stance. |
+| [`docs/03_STATE_OF_THE_ART.md`](docs/03_STATE_OF_THE_ART.md) | ASR, video LLMs, OCR, journals, Grok Bot — decision per layer. |
+| [`docs/04_ARCHITECTURE.md`](docs/04_ARCHITECTURE.md) | Machines + NAS, pipeline, API/CLI, Session Record, later joins. |
+| [`docs/05_ROADMAP.md`](docs/05_ROADMAP.md) | TVA0–TVA3 (v1) and later phases; locked decisions D1–D9. |
 
-## Planned shape (for orientation)
+## Planned shape (v1)
 
 ```
-debrief ingest <video.mp4>     # register session, extract audio tracks, chapters
-debrief transcribe <session>   # word-timestamped ASR (WhisperX local by default)
-debrief fills <session>        # TopstepX API (read-only) → trades + TradesViz/TJ CSV
-debrief align <session>        # video clock ↔ fill clock, with confidence
-debrief frames <session>       # keyframes, ROI OCR, per-trade clips
-debrief extract <session>      # cited, structured evidence from speech
-debrief rules <session>        # deterministic + evidence-backed rule checks
-debrief context <session>      # day's brief, DRC, ThesisTester attribution
-debrief report <session>       # debrief.md / debrief.json
-debrief publish --notion       # Trading Journal page + one log line
-debrief run --latest           # all of the above, resumable
+# local / scheduler (any of: trading PC, Mac, laptop — same NAS root)
+tva ingest <video.mp4>
+tva transcribe <session>
+tva extract <session>
+tva frames <session>          # optional visual notes / keyframes
+tva run --latest
+
+# always-on Mac serves the bots
+tva serve --root /Volumes/nas/tradevid
+
+# Grok bot
+GET /sessions/latest
+GET /sessions/{id}/insights
 ```
 
-Python 3.11+, `pyproject.toml`, ruff + pytest, provider adapters with fake
-implementations for CI. Same engineering posture as ThesisTester: CLI is the
-contract, no embedded agent, no MCP server, facts separated from
-interpretation, never invent numbers.
+Python 3.11+, `pyproject.toml`, ruff + pytest, provider adapters with `fake`
+implementations for CI. Facts stay in files on the NAS; the API is a read
+surface, not a second source of truth.
 
 ## Running locally
 
-There is nothing to run yet. DF0 adds the repo skeleton and `debrief doctor`.
+Nothing to run yet. TVA0 records the locked decisions; TVA1 adds the skeleton
+and `tva doctor`.

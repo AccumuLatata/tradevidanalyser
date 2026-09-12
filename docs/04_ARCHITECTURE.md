@@ -1,7 +1,7 @@
 # 04 — Architecture (high level)
 
-No code yet. This fixes the shape: where things run, what flows between them,
-what the contracts are, and how the bots drive it.
+No code yet. This fixes the shape: where things run, what flows between
+machines, what the contracts are, and how the bots consume the API.
 
 ---
 
@@ -9,221 +9,212 @@ what the contracts are, and how the bots drive it.
 
 ```mermaid
 flowchart TB
-  subgraph pc["A · Trading PC (where the video is born)"]
-    OBS[OBS<br/>Hybrid MP4, mic on own track,<br/>chapter hotkey]
-    WATCH[debrief watch<br/>recording-stopped → job]
-    ING[ingest<br/>probe · audio · chapters]
-    ASR[transcribe<br/>WhisperX local GPU]
-    OCR[frames<br/>ROI OCR · keyframes · clips]
-    OBS --> WATCH --> ING --> ASR --> OCR
+  subgraph lan["Home LAN"]
+    PC[Trading PC<br/>OBS + fastest GPU]
+    MAC[Mac — always on<br/>tva serve + Study B]
+    LAP[Laptop — optional CLI]
+    NAS[(Synology NAS<br/>recordings + Session Records)]
+    PC -- "after session: copy video<br/>optional: ingest+transcribe" --> NAS
+    MAC --- NAS
+    LAP --- NAS
+    MAC -- "tva serve" --> API[HTTP API<br/>Tailscale / tunnel]
   end
 
-  subgraph api["B · Read-only sources"]
-    TSX[TopstepX API<br/>Trade/search · retrieveBars]
-    NOT[(Notion<br/>briefs · DRC)]
-    TT[ThesisTester<br/>journal attribute / triggers]
+  subgraph later["Later — not v1"]
+    TVZ[TradesViz executions CSV]
+    AMP[AMP Daily Statement PDF]
+    TT[ThesisTester journal CLI]
+    TVZ -.-> JOIN
+    AMP -.-> JOIN
+    TT -.-> JOIN
+    JOIN[align + rules + lab]
   end
 
-  subgraph core["C · Core (runs wherever the artifacts are)"]
-    FILL[fills<br/>pull · pair · CSV for TradesViz/TJ]
-    ALIGN[align<br/>clock calibration]
-    EXTRACT[extract<br/>LLM structured, cited]
-    RULES[rules<br/>deterministic checks]
-    REC[(Session Record<br/>JSON + Parquet + media derivatives)]
-    DEB[debrief<br/>Markdown + JSON]
-    LEDGER[(ledger<br/>DuckDB)]
-    FILL --> ALIGN --> EXTRACT --> RULES --> REC --> DEB --> LEDGER
+  subgraph bot["Grok Bot cloud computer"]
+    GB[any bot]
   end
 
-  subgraph bot["D · Grok Bot cloud computer"]
-    DB[Debrief bot<br/>evening routine]
-    EF[Edge Finder]
-    COACH[Coach conversations]
-  end
-
-  OCR -- small artifacts<br/>(audio · transcript · frames · clips) --> core
-  TSX --> FILL
-  NOT --> DEB
-  TT --> DEB
-  DEB -- page + one log line --> NOT
-  DB -- runs CLI, reads artifacts --> core
-  EF --> REC
-  COACH --> LEDGER
+  API --> GB
+  NAS -.-> later
 ```
 
-Boxes A and C may be the same machine. Box D is never where the video is.
+The NAS is the shared disk. The Mac is the default API host. The trading PC
+is the default *processing* host. Grok never sees the raw video.
 
 ---
 
-## 2. Where does it run? (the topology decision)
+## 2. Where does it run? (locked — D1, D3, D9)
 
-The session videos are large: a 5–6 h 1080p/60 OBS recording at typical
-bitrates is **several GB**; a week is tens of GB. The Grok bots run on a cloud
-computer with `/workspace`, no GPU, and a browser that is deliberately kept
-signed *out* of the personal Google account. So the question "where does
-Debrief run" has a real answer, not a preference.
+| Machine | Role | Why |
+|---|---|---|
+| **Trading PC** | Record locally. After OBS stops: copy the Hybrid MP4 to the NAS. Prefer running ingest + transcribe here (fastest GPU). | Videos are born here. Do **not** record OBS directly onto SMB. |
+| **Mac** | Always-on. Default `tva serve`. Can run the pipeline if the PC did not (hosted ASR fallback if there is no GPU). Hosts ThesisTester Study B today; disk is already tight — that is why the NAS exists. | Bots need a process that is up in the evening. |
+| **Laptop** | Same CLI, same `TVA_ROOT` on the NAS mount. Ad-hoc / travel. | One codebase, path-configured. |
+| **Synology NAS** | Source of truth for recordings and Session Records. Not a compute node. | See §2.1. |
+| **Grok cloud computer** | HTTP client only. | Cannot mount the NAS. |
 
-| Topology | How | Pros | Cons |
-|---|---|---|---|
-| **T1 · Edge-heavy (recommended)** | Full media pipeline (ingest, ASR, OCR, clips) runs on the trading PC (or the Mac that already hosts the Program B farm) right after the session. Only artifacts (≈ 50–150 MB/session: Opus audio, transcript, keyframes, clips, JSON) are pushed to a sync location the bot can read. The bot runs the *core* steps that need the internet APIs and Notion, or the PC runs everything and the bot only reads. | Video never leaves the desk (PII); local GPU makes ASR free and fast; no upload of GBs; matches Topstep's "read-only on private server" allowance. | Trading PC does post-session work (schedule it after the session, low priority); needs a sync path (see §2.1). |
-| T2 · Bot-heavy | Videos synced to cloud storage; the bot's cloud computer downloads and processes. | Nothing to install on the PC beyond a sync client. | Multi-GB uploads daily; no GPU on the bot box → hosted ASR/VLM for everything; full-frame PII leaves the desk. |
-| T3 · Audio-only to bot | PC extracts and uploads audio + a few hundred keyframes; bot does ASR via hosted API, OCR on frames, everything else. | Small uploads; PC does almost nothing. | Loses the ability to cut clips later without the video; hosted ASR cost; still needs an install on the PC for extraction. |
+This is still topology **T1** (edge-heavy): media stays on the LAN; only
+JSON (and, if a bot asks, a small clip) leave via the API.
 
-**Recommendation: T1**, with T3 as the degraded mode when the PC is off.
-Concretely: a small Windows service / Task Scheduler job (`debrief watch`)
-triggered by OBS "recording stopped" (obs-websocket) or by a nightly timer.
+### 2.1 Synology as the store — yes, with four rules
 
-### 2.1 The artifact handoff
+A home NAS is the right answer to "how do three machines and a future
+private cloud share the tapes." It is a better D3 than Google Drive for
+multi-GB video.
 
-Options for moving ≈ 100 MB/session from the PC to the bot: a Google Drive
-folder on the **tradingautomations1@gmail.com** account (already allowed to be
-signed in on the bot box), an S3/B2 bucket, or a private git-LFS repo. Any of
-them works; the app treats the artifact root as a path and stays
-storage-agnostic. Notion receives only the debrief page and one log line,
-never media.
+1. **Record local, copy after.** OBS Hybrid MP4 onto a Synology share drops
+   frames and makes crash-recovery less useful. Trading PC SSD → post-session
+   copy to `recordings/YYYY-MM-DD/`. A 20–40 GB file wants wired Ethernet
+   (2.5G/10G if you have it); Wi-Fi copies will still be running when the
+   evening bot fires.
+2. **One env var, same layout everywhere.** `TVA_ROOT=/Volumes/tradevid` or
+   `T:\tradevid`. Layout:
+   `recordings/`, `sessions/<id>/`, `fixtures/`. The API and the CLI both
+   take `--root` / `TVA_ROOT`.
+3. **Snapshots, not just RAID.** The tapes are irreplaceable. Synology
+   Btrfs snapshots + a second-destination Hyper Backup (USB or offsite)
+   beat a bigger volume.
+4. **The NAS does not make the cloud bot local.** Grok still needs a
+   reachability path to `tva serve` on the Mac: **Tailscale** (Synology has
+   an official package; the Mac can also advertise the subnet) or a
+   **Cloudflare tunnel**. No public port-forward of the API. The bot stores
+   a Tailscale/Funnel URL, not a `192.168.x` address.
+
+Until the NAS is on the desk, a folder on the Mac is a fine `TVA_ROOT`.
+The app must not care.
 
 ### 2.2 Secrets
 
-TopstepX API key, xAI/Google keys: OS keychain / environment on the machine
-that calls the API. The bot's convention (`/workspace/tt.md`-style first-line
-password files) is acceptable for the bot box only if the app never logs or
-echoes them. The TopstepX client refuses to construct if any order endpoint
-is referenced (unit-tested guard).
+xAI (extraction) and any hosted ASR key live in the OS keychain /
+environment on the machine that calls out. Never in a world-readable NAS
+share. The bot's existing first-line password-file convention is acceptable
+on the bot box only if the app never logs or echoes them.
+
+No broker API keys in v1.
 
 ---
 
-## 3. Pipeline stages and CLI surface
+## 3. Pipeline stages and surfaces
 
-Every stage is a CLI subcommand, idempotent, writing into a per-session
-directory. Same argv works for a human, a scheduler, or a bot.
+Every stage is a CLI subcommand, idempotent, writing into
+`$TVA_ROOT/sessions/<id>/`. The API exposes the same artifacts.
 
-| Stage | Command (sketch) | Input | Output | Deterministic? |
+| Stage | CLI | API (sketch) | Output | v1? |
 |---|---|---|---|---|
-| Register | `debrief ingest <video.mp4>` | OBS file | `session.json` (id, wall-clock start, duration, tracks, chapters, hashes), `audio/mic.opus`, `audio/desktop.opus` | yes |
-| Transcribe | `debrief transcribe <session>` | audio | `transcript.json` (segments + words + confidences, language per segment, provider/model) | model-dependent, pinned |
-| Fills | `debrief fills <session>` | TopstepX API (or CSV fallback) | `fills.parquet`, `trades.parquet` (ThesisTester `FillRecord`/`JournalTrade` shape), `tradesviz_import.csv` | yes |
-| Align | `debrief align <session>` | session + ROI OCR of clock | `alignment.json` (offset, drift, confidence, method) | yes |
-| Frames | `debrief frames <session>` | video + trades + alignment | `frames/*.jpg` (entry/exit/±), `ocr.parquet` (ROI text with confidence), `clips/trade_<id>.mp4` | yes |
-| Extract | `debrief extract <session>` | transcript + trades + frames | `evidence.json` (per-trade evidence, session events; every claim cites segment/frame ids) | model, pinned prompt |
-| Rules | `debrief rules <session>` | trades + evidence + alignment | `rules.json` (pass/violated/unverifiable + refs) | yes |
-| Context | `debrief context <session>` | Notion briefs, DRC; ThesisTester `journal attribute/triggers` output | `context.json` (bias of the day, DRC scores, level tokens per trade) | yes (reads) |
-| Debrief | `debrief report <session>` | everything above | `debrief.md`, `debrief.json` | model for prose, facts verbatim |
-| Ledger | `debrief ledger add <session>` | debrief.json | `ledger.duckdb` rows | yes |
-| Publish | `debrief publish <session> --notion` | debrief.md | Notion Trading Journal page, one log line | yes |
-| One-shot | `debrief run --latest` | — | all of the above, resumable, machine-readable exit status + `status.json` | — |
+| Register | `tva ingest <video.mp4>` | `POST /sessions` (path on NAS) | `session.json`, `audio/mic.opus` | yes |
+| Transcribe | `tva transcribe <session>` | (kicked by `POST /sessions/{id}/run`) | `transcript.json` | yes |
+| Extract | `tva extract <session>` | same | `insights.json` (cited) | yes |
+| Frames | `tva frames <session>` | same | keyframes, optional OCR clock, chapter clips | yes, optional |
+| Status | `tva status` | `GET /sessions`, `GET /sessions/latest` | stage states | yes |
+| Read | — | `GET /sessions/{id}`, `/transcript`, `/insights` | JSON | yes |
+| Doctor | `tva doctor` | `GET /health` | ffmpeg / GPU / keys / NAS mount | yes |
+| Fills | `tva fills <session>` | — | TradesViz executions → trades | **later** |
+| Align | `tva align <session>` | — | video ↔ fill clock | **later** |
+| Rules | `tva rules <session>` | — | scorecard | **later** |
+| Context | `tva context <session>` | — | briefs + ThesisTester attribution | **later** |
 
-`debrief status` prints the last N sessions and their stage states for the
-Sunday audit. `debrief doctor` checks ffmpeg, GPU, model weights, API keys,
-OBS settings.
+`tva run --latest` is the scheduler entry on the PC. `tva serve` is the
+Mac entry. Same package.
 
 ---
 
-## 4. The Session Record (contract sketch)
+## 4. The Session Record (v1 contract sketch)
 
-Versioned JSON schema (Pydantic models; `schema_version` on every file).
-Illustrative, not final:
+Versioned JSON. Illustrative, not final:
 
 ```yaml
 session:
-  id: 2026-09-11                 # trading_session_date, ThesisTester convention (eth_start 18:00 ET)
-  recording: {path, sha256, start_wallclock_vienna, duration_s, tracks: [mic, desktop], chapters: [{t, name}]}
-  alignment: {offset_s, drift_s_per_h, confidence, method: ocr_clock|filename|manual}
+  id: 2026-09-11                 # trading session date, ETH 18:00 ET
+  recording: {path, sha256, start_wallclock_vienna, duration_s, tracks: [mic], chapters: [{t, name}]}
+  language: de                   # primary; segments may flip
+  alignment: null                # later: offset_s, confidence, method
 
 transcript:
   provider: whisperx; model: large-v3; prompt_version: jargon-v1
   segments: [{id, t0, t1, lang, text, words: [{w, t0, t1, p}]}]
 
-fills:   # ThesisTester FillRecord shape, source: topstepx_api|tradesviz_executions
-trades:  # ThesisTester JournalTrade shape + debrief ids
+insights:                        # model-derived, every field cited or null
+  bias_statements: [{seg, text, t}]
+  playbooks_mentioned: [{seg, name}]
+  stated_levels: [{seg, token}]  # ONH, dVWAP, … as spoken, not as lab truth
+  stated_stops_targets: [{seg, raw_text}]  # raw speech, not parsed prices
+  checkins: [{seg, t, text}]
+  tilt_markers: [{seg, text}]
+  brief_refs: [{seg, text}]
+  observations: [{seg, text}]    # labelled interpretation
+  gaps: [string]                 # what the extractor could not hear
 
-trade_evidence:
-  - trade_id: T03
-    window: {t0, t1}                          # entry −180 s … exit +120 s, video time
-    commentary: [seg_412, seg_413, seg_419]   # refs, quotes rendered from transcript
-    stated: {setup: "ONH touch scalp", bias: "up", stop: 29380, target: 29450, playbook: "MFR"}  # each with seg ref or null
-    markers: [{kind: tilt|hesitation|rule_mention|brief_ref|grok_ref, seg}]
-    frames: [{t, path, kind: entry|exit|pre|post}]
-    ocr: [{t, roi: clock|pnl|position, text, confidence}]
-    clip: clips/T03.mp4
-    visual_notes: {provider: grok-4.3, prompt_version, notes: [...], frames_cited: [...]}   # optional
+fills: null                      # later
+trades: null                     # later
+rule_checks: null                # later
+context: null                    # later — briefs, DRC, lab
 
-session_events:
-  - {t, kind: hourly_checkin|bias_statement|no_trade_zone|trade_zone|tilt|break, seg, text}
-
-rule_checks:
-  - {rule: R-3L30, status: violated, evidence: {loss_streak_exit: ..., next_entry: ..., gap_s: 412}}
-  - {rule: R-PLAYBOOK, status: unverifiable, reason: "no speech in pre-entry window"}
-
-context:
-  brief: {macro_url, ny_url, bias_nq, bias_es, conviction, kill_levels}   # quoted, not re-derived
-  drc: {scores, notes_url}
-  lab: {per_trade_level_tokens, inferred_trigger, product_match}        # from ThesisTester journal
-
-debrief:
-  generated_by: {model, prompt_version}
-  markdown: debrief.md
 provenance: {app_version, ffmpeg, models, created_at}
 ```
 
-Two hard rules for the schema: every model-derived field has a sibling
-reference to the evidence it came from; every number that is not a fill or an
-OCR read is `null`, never estimated.
+Hard rules: every model-derived field has a sibling reference; every number
+that is not later supplied by fills or OCR is `null` or raw quoted text,
+never estimated.
 
 ---
 
-## 5. Relationship to ThesisTester
+## 5. Relationship to ThesisTester and the journal (later)
 
-Debrief **depends on** ThesisTester as a library/CLI, it does not fork it:
+v1 has **no import** of ThesisTester and **no fill join**. That is
+intentional (see `02_SCOPE.md` §4).
 
-- Reuse `FillRecord` / `JournalTrade` contracts and the `tradesviz_executions`
-  profile so `trades.parquet` and `tradesviz_import.csv` are directly loadable
-  by `journal …`.
-- Call `journal attribute` / `journal zones` / `journal triggers` (or their
-  library functions) to obtain level tokens and inferred triggers per entry;
-  Debrief never computes levels itself.
-- Feed back **proposed intent tags** (from speech) as a TradesViz-importable
-  notes/tags column and as `intent_proposals.json`, so TJ's "tags are intent"
-  input becomes cheap. Human confirms in TradesViz; Debrief marks them
-  `proposed` until then.
-- Later (post-v1): `journal propose-study` (JS3) could take Debrief's
-  frequency of *stated* setups as one more input, human-gated as always.
+When we do join, the direction is still "consume, do not fork":
 
-If depending on the ThesisTester package is inconvenient early on, mirror the
-two schemas exactly and add a contract test that loads a Debrief CSV with the
-ThesisTester loader.
+- **TradesViz executions CSV** is the broker-agnostic fill clock (TopstepX
+  and AMP already land there). ThesisTester's `tradesviz_executions`
+  profile is the proven parser — call it or contract-test against it.
+- **AMP Daily Statement PDF** is FCM money truth (fees, P&S). ThesisTester
+  already owns `amp_statement`. Use it; do not re-parse the PDF.
+- **ThesisTester** `journal attribute|zones|triggers` supplies level tokens
+  and inferred triggers. TradeVidAnalyser never computes levels.
+- Spoken setup names become *proposed* TradesViz tags (`proposed` until a
+  human confirms). Tags stay intent, not evidence.
+
+Good reasons to do that join *eventually*:
+
+- Speech alone is "he said ONH." Speech + fill is "he said ONH and filled
+  eight seconds later four ticks through." That is the coaching that
+  changes behaviour.
+- Speech + lab is "he named the scalp playbook at a location the study
+  says is a coin flip." Edge Finder can use that.
+- TradesViz already solved "I trade more than one venue." We should not
+  undo that by growing a TopstepX client as the spine.
+
+Good reasons **not** to do it in v1: it delays the only thing that does
+not exist today (tape → structured German transcript → Grok), and it
+couples the first useful API to a second repo and a journal export ritual.
 
 ---
 
-## 6. Bot integration (the routine pack)
+## 6. Bot integration (v1)
 
-Mirror `STUDY_RUNNER_GROK_ROUTINE_PACK.md`:
+- **Any Grok bot**, on demand or as an evening routine: `GET /health`,
+  then `GET /sessions/latest`. If `insights` is present, write whatever
+  Notion/coaching note that bot already owns. If `status` is `missing` or
+  `failed`, ping. 23:30 watchdog if the session date has a recording and
+  no insights.
+- **Hard rules:** never edit `insights.json` / `transcript.json`; never
+  invent a quote; every quoted line must exist in `transcript.json`; never
+  treat a spoken price as a fill; never call anything but the API.
+- **Reachability:** Tailscale URL or Cloudflare tunnel to the Mac, stored
+  like any other bot secret. Not a LAN IP.
+- Sunday audit (Question Bot): `GET /sessions?days=7` + `/health`.
 
-- **Debrief bot** — weekday routine after the fill import window (e.g. 22:15
-  Vienna): `debrief run --latest`; on success `debrief publish --notion`;
-  prepend one log line to a *Debrief runs* Notion page
-  (`YYYY-MM-DD HH:mm Vienna | session YYYY-MM-DD | N trades | rules: X pass / Y viol / Z unverif | alignment 0.97 | published`);
-  chat ping **only** on violations, gaps, or failure. 23:30 watchdog if no log
-  line.
-- **Hard rules for the bot:** never edit `evidence.json` / `rules.json`; never
-  invent a quote; every quoted line must exist in `transcript.json`; report
-  `unverifiable` as unverifiable; never call anything but the CLI; never touch
-  order endpoints (there are none).
-- **Coach prompt** (on demand or Sunday): reads `ledger.duckdb` and the last N
-  debriefs; produces trend observations with citations; proposes at most one
-  behavioural experiment for the week, phrased as a testable rule change.
-- **Sunday audit** (Question Bot) adds Debrief's routines and the `debrief
-  status` output to its checklist.
-- **Trade Importer** becomes: "if Debrief's `tradesviz_import.csv` exists for
-  today, upload it; else fall back to the browser export."
+A dedicated "TradeVid bot" is optional. v1 is useful to the bots that
+already exist.
 
 ---
 
 ## 7. Quality gates (engineering)
 
-- Golden session: one redacted 20–30 min recording + synthetic fills checked
-  into a private fixtures location; every stage has a golden artifact; model
-  stages have tolerance-based comparisons (WER, JSON field agreement).
-- Contract tests against ThesisTester loaders.
-- `ruff` + `pytest` in CI (GitHub Actions or Origin CI), Python 3.11+.
-- Provider adapters (ASR / VLM / LLM) behind interfaces with a `fake`
-  implementation for tests, so CI never calls a paid API.
+- Golden session: one redacted real-session excerpt (German commentary,
+  20–30 min) in a *private* fixtures location (NAS, not this public-ish
+  repo). Hand-corrected transcript for WER.
+- `ruff` + `pytest` in CI. Provider adapters with a `fake` implementation.
+- No ThesisTester import in the v1 package metadata.
+- API contract tests against committed example JSON (no video in CI).

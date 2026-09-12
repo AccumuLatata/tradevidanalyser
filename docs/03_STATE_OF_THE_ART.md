@@ -59,7 +59,7 @@ Two very different tools exist now; use each for what it is good at.
   (mp4/mov/webm, ≤ 1080p, recommended ≤ 5 min, sampled at 1–4 fps, billed as
   image tokens; $1.25 / $2.50 per M in/out; 1M context). The official
   docs.x.ai page for video *understanding* was not reachable from this
-  session, so **verify against docs.x.ai before depending on it** (DF4 spike).
+  session, so **verify against docs.x.ai before depending on it** (TVA3 spike).
 - Fit: a per-trade clip (entry −3 min … exit +2 min) is almost exactly the
   5-minute envelope. This is the natural way to let *Grok* look at the trade
   the way the user asked, without shipping the whole session.
@@ -90,21 +90,22 @@ evidence, opt-in per provider. Full-session Gemini agentic pass is an
 
 | Product | AI today | Video / recording | Relevance |
 |---|---|---|---|
-| **TradeZella** ($29–49/mo) | *Zella AI* agents on every plan: Market Sentiment Briefing, **Auto-Tagger**, **Session Review** (compares the day with the morning plan, flags revenge trades and sizing deviations), Automated Backtesting; weekly/monthly reports | Tick-by-tick *market* replay; no screen-recording ingest | Closest analogue for the *debrief* output. Its Session Review is what Debrief produces, but from fills + rules only. |
+| **TradeZella** ($29–49/mo) | *Zella AI* agents on every plan: Market Sentiment Briefing, **Auto-Tagger**, **Session Review** (compares the day with the morning plan, flags revenge trades and sizing deviations), Automated Backtesting; weekly/monthly reports | Tick-by-tick *market* replay; no screen-recording ingest | Closest analogue for a later *session review* page. TradeVidAnalyser v1 is the tape layer those products do not have. |
 | TraderSync ($79.95 Elite) | Cypher AI pattern coaching, per-message limits | 250 ms market replay | Replay, not the trader's own recording |
 | **TradesViz** (in use, $20–30) | Reactive AI Q&A over your data; 600+ stats | none | Stays the human journal + TJ source |
 | Edgewonk ($197/yr) | Weekly *Edge Finder* email report; Tiltmeter psychology tracking | none | Confirms demand for psychology/adherence scoring |
 | Tradervue | none | none | — |
 
-**No product ingests the trader's own screen recording with live commentary,
-aligns it to fills, and grades rule adherence from what was said.** That is the
-white space, and it is only reachable for someone who already records every
-session (the DRC tech-check makes that a habit here).
+**No product ingests the trader's own screen recording with live commentary.**
+That is the v1 white space. Aligning the tape to fills and grading rule
+adherence is a later slice of the same gap, and it is only reachable for
+someone who already records every session (the DRC tech-check makes that a
+habit here).
 
 The desk also has something none of these products have: a personal
 backtesting lab with a closed level vocabulary and a journal that attributes
 fills to it. Joining commentary to *that* (did he say "ONH" when the lab says
-the entry was at `ONH`?) is unique.
+the entry was at `ONH`?) is unique — and explicitly a later phase.
 
 ---
 
@@ -119,27 +120,30 @@ the entry was at `ONH`?) is unique.
   browser automation where possible ("websites change, block automation,
   present CAPTCHAs"). The Trade Importer's log confirms it.
 
-**Decision:** the Debrief bot drives a CLI and reads files; it never scrapes.
-Same contract shape as `STUDY_RUNNER_GROK_ROUTINE_PACK.md`.
+**Decision:** Grok drives a **small local HTTP API** (`tva serve`) and never
+scrapes. Processing is still a CLI the scheduler runs. Same "no embedded
+agent" posture as `STUDY_RUNNER_GROK_ROUTINE_PACK.md`, different read
+surface — because the bot cannot mount the NAS.
 
 ---
 
-## 5. Fills and market data: TopstepX / ProjectX Gateway API
+## 5. Fills (later): TradesViz, AMP, optional venue APIs
 
-- REST (`api.topstepx.com`) + SignalR real-time hubs (`rtc.topstepx.com`).
-  `POST /api/Trade/search` (half-turn fills with fees and P&L),
-  `POST /api/Order/v2/query`, `POST /api/History/retrieveBars` (15 s–1 D bars).
-- **$14.50/mo** with the Topstep promo. Key grants full trading power → treat
-  as a secret; the client must physically lack order/position write methods.
-- Topstep ToS permits **read-only logging/analytics on a private server**;
-  prohibits order transmission from servers/VPS. Debrief is read-only by
-  construction.
-- Community clients exist (npm `topstepx-api`, Python wrappers); a thin
-  in-repo client is small enough to own.
+v1 has no fill ingest. When TVA4 opens:
 
-**Decision:** primary fill source. Bars from the same API give the app a
-self-contained market context (1 m bars around each trade) without depending on
-Quantower exports.
+- **TradesViz executions CSV** is the only source that already spans
+  TopstepX and AMP. ThesisTester's `tradesviz_executions` profile is the
+  proven parser (UTC, `spread_id`, tags/notes as intent, fees always 0).
+- **AMP Daily Statement PDF** is FCM money-truth. Already parsed in
+  ThesisTester `amp_statement` (confirmations, P&S, fee schedule, no
+  timestamps). Call that; do not re-implement.
+- **TopstepX / ProjectX Gateway API** exists (`Trade/search`,
+  `History/retrieveBars`, $14.50/mo promo, key is full-trading scope, ToS
+  allows read-only analytics on a private server). Useful as a *later
+  adapter for one venue*. It cannot be the spine: it does not see AMP.
+
+**Decision:** no fill client in v1. Next fill source is TradesViz, not a
+broker API.
 
 ---
 
@@ -183,8 +187,11 @@ VLM layers so any can be swapped or run side by side for evaluation.
 - Facts: JSON (schema-versioned) + Parquet per session; a **DuckDB** file for
   ledger queries (columnar, single-file, zero-ops, reads Parquet directly).
 - Media derivatives: Opus mono audio (~25 MB/h), JPEG keyframes, MP4 clips
-  (stream-copied, no re-encode). Originals stay where OBS wrote them; the app
-  stores hashes and paths, never copies videos.
+  (stream-copied, no re-encode). Originals are copied to the NAS *after*
+  OBS finishes (never recorded straight to SMB); the Session Record stores
+  hashes and NAS-relative paths.
+- Shared root: Synology on the LAN (`TVA_ROOT`). The Grok bot does not
+  mount it; it calls `tva serve`.
 
 ---
 
@@ -194,6 +201,6 @@ VLM layers so any can be swapped or run side by side for evaluation.
   pass once clip-level review is stable.
 - OBS ≥ 32 stream captions / live transcription → a real-time coach later.
 - ProjectX SignalR `GatewayUserTrade` events → could stamp fills into OBS as
-  chapter markers *during* the session (zero alignment error). Elegant, but it
-  runs on the trading PC next to the live account; only as a read-only
-  listener and only after v1.
+  chapter markers *during* the session (zero alignment error). Elegant, but
+  TopstepX-only and it runs next to a live account; only as a read-only
+  listener, only after fills exist, and never as the AMP path.
