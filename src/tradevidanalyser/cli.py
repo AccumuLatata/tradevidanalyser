@@ -20,7 +20,9 @@ from tradevidanalyser.pipeline import (
     context_session,
     evidence_session,
     extract_session,
+    confirm_proposal,
     ledger_add,
+    proposals_session,
     publish_session,
     report_session,
     rollup_ledger,
@@ -224,6 +226,21 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_pub.add_argument("--provider", default=None, help="fake (default) or notion")
 
+    p_prop = sub.add_parser(
+        "proposals",
+        help="spoken playbook/levels → TradesViz tag CSV (ThesisTester tag_map)",
+    )
+    p_prop.add_argument(
+        "ident",
+        help="session id, or 'confirm' then a proposal id (T01 or session_id:T01)",
+    )
+    p_prop.add_argument(
+        "proposal_id",
+        nargs="?",
+        default=None,
+        help="trade id when the first argument is confirm",
+    )
+
     p_serve = sub.add_parser("serve", help="HTTP API over TVA_ROOT")
     p_serve.add_argument("--host", default="127.0.0.1")
     p_serve.add_argument("--port", type=int, default=8764)
@@ -381,6 +398,22 @@ def main(argv: list[str] | None = None) -> int:
                 notion=args.notion,
                 provider_name=args.provider,
             )
+            _emit(result.as_dict(), as_json=True)
+            return 0
+        if args.cmd == "proposals":
+            if args.ident == "confirm":
+                if not args.proposal_id:
+                    raise ValueError(
+                        "confirm requires a proposal id (T01 or session_id:T01)"
+                    )
+                result = confirm_proposal(args.proposal_id, root=root)
+            else:
+                if args.proposal_id:
+                    raise ValueError(
+                        "unexpected extra argument; use: tva proposals <session> "
+                        "or tva proposals confirm <id>"
+                    )
+                result = proposals_session(args.ident, root=root)
             _emit(result.as_dict(), as_json=True)
             return 0
         if args.cmd == "serve":

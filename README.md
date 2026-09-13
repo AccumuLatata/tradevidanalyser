@@ -73,6 +73,8 @@ tva ledger add 2026-09-11_143000
 tva rollup --week
 tva rollup --week --month
 tva publish 2026-09-11_143000 --notion
+tva proposals 2026-09-11_143000
+tva proposals confirm T01
 tva serve --host 127.0.0.1 --port 8764
 ```
 
@@ -185,6 +187,15 @@ no duplicate pages. Notion is fake by default (`TVA_NOTION_PROVIDER=fake`);
 live write needs `NOTION_API_KEY`, `TVA_NOTION_JOURNAL_DB`, and
 `TVA_NOTION_PROVIDER=notion`. The bot may keep writing its own note.
 Not a bot `POST /run` stage.
+
+`tva proposals <id>` maps `stated.playbook` / `stated_levels` onto the
+ThesisTester [`tag_map.yaml`](tag_map.yaml) vocabulary and writes
+`intent_proposals.json` plus a TradesViz manual-import
+`tradesviz_tags.csv` (`date, symbol, side, price, quantity, tags, notes`,
+notes prefixed `[TVA proposed]`). Unknown spoken words are dropped, never
+invented. `tva proposals confirm <id>` toggles `proposed` ↔ `confirmed`
+(`T01` when unique, or `session_id:T01`). Optional omit-when-missing;
+not a bot `POST /run` stage. Coach experiments stay later.
 
 ASR, extraction, and report default to **fake** providers
 (`TVA_ASR_PROVIDER=fake`, `TVA_EXTRACT_PROVIDER=fake`,

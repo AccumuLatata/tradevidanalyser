@@ -680,6 +680,7 @@ def ingest_fills(
         store.rules_path(root, record.id).unlink(missing_ok=True)
         store.context_path(root, record.id).unlink(missing_ok=True)
         store.drop_debrief(root, record.id)
+        store.drop_proposals(root, record.id)
         store.drop_ledger_session(root, record.id)
         store.compute_status(root, record.id)
         return FillsResult(
@@ -714,12 +715,13 @@ def ingest_fills(
     assert_no_cost_columns(trade_table)
     write_table(fills_file, fill_table)
     write_table(trades_file, trade_table)
-    # tva_trade_id is reassigned T01… on each ingest; stale evidence/rules
-    # would attach to the wrong trades.
+    # tva_trade_id is reassigned T01… on each ingest; stale evidence/rules/
+    # proposals would attach to the wrong trades.
     store.evidence_path(root, record.id).unlink(missing_ok=True)
     store.rules_path(root, record.id).unlink(missing_ok=True)
     store.context_path(root, record.id).unlink(missing_ok=True)
     store.drop_debrief(root, record.id)
+    store.drop_proposals(root, record.id)
     store.drop_ledger_session(root, record.id)
     store.compute_status(root, record.id)
     return FillsResult(

@@ -16,7 +16,7 @@ product decision, not a hidden dependency.
 | **TVA4** | TradesViz executions join (broker-agnostic fills) | TVA2 | PR-16/17 landed (loader + mirror + recon passthrough) |
 | **TVA5** | Alignment + per-trade windows + rule scorecard | TVA4 | landed (PR-18…PR-21; D4 stays parked) |
 | **TVA6** | Briefs + ThesisTester attribution + debrief/ledger | TVA5 | landed (PR-22…25; publish optional / off by default) |
-| **TVA7** | Coach loop: intent-tag proposals, experiments | TVA6 | later |
+| **TVA7** | Coach loop: intent-tag proposals, experiments | TVA6 | started (PR-26 landed; coach later) |
 | parked | Full-session Gemini pass; live fill → OBS chapters; viewer; TopstepX API as a *venue adapter* | — | parked |
 
 ---
@@ -120,8 +120,11 @@ place and logs one line on *TVA runs*. Off by default; Notion is mocked
 in CI. The two repos share a machine when lab parquet is used (likely
 the Mac, where the study store already lives).
 
-**TVA7 — Coach loop.** Proposed TradesViz tags from speech; weekly
-experiment tracking.
+**TVA7 — Coach loop.** `tva proposals` (PR-26) maps spoken playbook /
+levels onto the ThesisTester `tag_map.yaml` vocabulary and writes
+`intent_proposals.json` plus a TradesViz manual-import
+`tradesviz_tags.csv`. `tva proposals confirm <id>` toggles status.
+Coach experiments stay later (PR-27).
 
 ---
 

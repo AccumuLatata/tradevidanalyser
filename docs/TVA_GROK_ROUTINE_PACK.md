@@ -242,7 +242,8 @@ Gaps: `dropped uncited quote (seg_…)`.
 | debrief | **TVA6** | no (`tva report`; CLI only) |
 | ledger | **TVA6** | no (`tva ledger add` / `tva rollup`; `GET /ledger/summary`) |
 | Notion Session Debrief publish | **TVA6** | no (`tva publish --notion`; off by default; bot may keep writing the note) |
-| intent-tag proposals, coach experiments | **TVA7** | yes |
+| intent-tag proposals | **TVA7** | no (`tva proposals`; CLI only; not a bot run stage) |
+| coach experiments | **TVA7** | yes |
 
 Do not write “no trades today” from the tape. Do not grade the day. Do
 not mention AMP/TopstepX fills. Those pages stay with the bots that

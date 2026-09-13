@@ -26,6 +26,11 @@ from tradevidanalyser.ledger import (
     add_session as run_ledger_add,
     rollup as run_rollup,
 )
+from tradevidanalyser.proposals import (
+    ProposalsResult,
+    confirm_proposal as run_confirm_proposal,
+    proposals_session as run_proposals,
+)
 from tradevidanalyser.publish import PublishResult, publish_session as run_publish
 from tradevidanalyser.report import ReportResult, report_session as run_report
 from tradevidanalyser.rules import RulesResult, rules_session as run_rules
@@ -359,6 +364,7 @@ def evidence_session(
                 )
             except ValueError:
                 evidence_file.unlink(missing_ok=True)
+                store.drop_proposals(root, session_id)
                 store.compute_status(root, session_id)
                 raise
     return result
@@ -430,6 +436,16 @@ def publish_session(
     return run_publish(
         session_id, root=root, notion=notion, provider_name=provider_name
     )
+
+
+def proposals_session(session_id: str, *, root: Path) -> ProposalsResult:
+    if not store.is_safe_path_name(session_id):
+        raise ValueError(f"unsafe session id {session_id!r}")
+    return run_proposals(session_id, root=root)
+
+
+def confirm_proposal(ident: str, *, root: Path) -> ProposalsResult:
+    return run_confirm_proposal(ident, root=root)
 
 
 def align_session(
