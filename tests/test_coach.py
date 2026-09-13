@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 import httpx
@@ -16,9 +17,12 @@ from tradevidanalyser.coach import (
     CoachDraft,
     CoachError,
     FakeCoachProvider,
+    _load_debriefs,
+    accept_experiment,
     coach_session,
     gather_pack,
     get_coach_provider,
+    instance_cite_ids,
     load_latest,
     min_citations,
 )
@@ -36,13 +40,18 @@ from tradevidanalyser.schema import (
 from tradevidanalyser.serve import ALLOWED_RUN_STAGES, create_app
 
 
-def _session(root: Path, session_id: str = "2026-09-11_143000") -> SessionRecord:
+def _session(
+    root: Path,
+    session_id: str = "2026-09-11_143000",
+    *,
+    start: str | None = None,
+) -> SessionRecord:
     record = SessionRecord(
         id=session_id,
         recording=RecordingInfo(
             path=f"recordings/{session_id.replace('_', ' ')}.mp4",
             sha256="0" * 64,
-            start_wallclock_vienna=f"{session_id[:10]}T14:30:00+02:00",
+            start_wallclock_vienna=start or f"{session_id[:10]}T14:30:00+02:00",
             duration_s=7200.0,
             filename=f"{session_id.replace('_', ' ')}.mp4",
         ),
@@ -84,8 +93,14 @@ def _write_rules(root: Path, session_id: str, *, status: str = "violated") -> No
     )
 
 
-def _seed_ledger(root: Path, *, trades: int = 10, session_id: str = "2026-09-11_143000") -> str:
-    record = _session(root, session_id)
+def _seed_ledger(
+    root: Path,
+    *,
+    trades: int = 10,
+    session_id: str = "2026-09-11_143000",
+    start: str | None = None,
+) -> str:
+    record = _session(root, session_id, start=start)
     _write_trades(root, record.id, trades)
     _write_rules(root, record.id)
     add_session(record.id, root=root)
@@ -321,3 +336,224 @@ def test_grok_mock_is_still_citation_checked(tva_root: Path, monkeypatch: pytest
     assert any("fabricated" in gap for gap in report.gaps)
     assert report.experiment is not None
     assert report.experiment.stop_criterion
+
+
+def test_thin_session_id_padding_is_dropped(tva_root: Path) -> None:
+    _seed_ledger(tva_root, trades=3)
+    pack = gather_pack(tva_root, weeks=4, min_n=5)
+    # session + 3 trades + 1 rule = 5 allow-listed ids, but only 4 instance rows
+    assert len(pack.row_ids) >= 5
+    assert len(instance_cite_ids(pack)) == 4
+    coach_session(
+        root=tva_root,
+        weeks=4,
+        min_n=5,
+        provider=FakeCoachProvider(
+            CoachDraft(claims=[CoachClaim(text="Padded with the session id.", cites=pack.row_ids)])
+        ),
+    )
+    report = load_latest(tva_root)
+    assert report is not None
+    assert report.claims == []
+    assert any("need >=5" in gap for gap in report.gaps)
+
+
+def test_invented_claim_digit_is_dropped(tva_root: Path) -> None:
+    _seed_ledger(tva_root, trades=5)
+    pack = gather_pack(tva_root, weeks=4, min_n=5)
+    instances = sorted(instance_cite_ids(pack))
+    coach_session(
+        root=tva_root,
+        weeks=4,
+        min_n=5,
+        provider=FakeCoachProvider(
+            CoachDraft(
+                claims=[
+                    CoachClaim(
+                        text="Adherence is 87 percent across these rows.",
+                        cites=instances,
+                    )
+                ]
+            )
+        ),
+    )
+    report = load_latest(tva_root)
+    assert report is not None
+    assert report.claims == []
+    assert any("invented digit" in gap for gap in report.gaps)
+
+
+def test_start_date_cannot_launder_experiment_digits(tva_root: Path) -> None:
+    _seed_ledger(tva_root, trades=5)
+    pack = gather_pack(tva_root, weeks=4, min_n=5)
+    instances = sorted(instance_cite_ids(pack))
+    coach_session(
+        root=tva_root,
+        weeks=4,
+        min_n=5,
+        provider=FakeCoachProvider(
+            CoachDraft(
+                claims=[CoachClaim(text="Repeats across five ledger rows.", cites=instances)],
+                experiment=CoachExperiment(
+                    rule_change="Cap loss at 2099",
+                    start="2099-01-01",
+                    stop_criterion="Stop at 2099",
+                ),
+            )
+        ),
+    )
+    report = load_latest(tva_root)
+    assert report is not None
+    assert report.claims
+    assert report.experiment is None
+    assert list_experiments(tva_root) == []
+    assert any("invented digit" in gap for gap in report.gaps)
+
+
+def test_empty_ledger_writes_no_experiment(tva_root: Path) -> None:
+    result = coach_session(root=tva_root, weeks=4, min_n=10)
+    assert result.status == "ok"
+    assert result.claims == 0
+    report = load_latest(tva_root)
+    assert report is not None
+    assert report.claims == []
+    assert report.experiment is None
+    assert list_experiments(tva_root) == []
+    assert any("citeable rows" in gap for gap in report.gaps)
+    client = TestClient(create_app(tva_root))
+    body = client.get("/coach/latest")
+    assert body.status_code == 200
+    assert body.json()["claims"] == []
+
+
+def test_week_window_excludes_sessions_outside_trailing_iso_weeks(tva_root: Path) -> None:
+    _seed_ledger(tva_root, trades=2, session_id="2026-08-01_143000")
+    _seed_ledger(tva_root, trades=2, session_id="2026-09-11_143000")
+    pack = gather_pack(tva_root, weeks=4, min_n=2)
+    assert "2026-09-11_143000" in pack.session_ids
+    assert "2026-08-01_143000" not in pack.session_ids
+    assert all(not cite.startswith("2026-08-01_143000") for cite in pack.row_ids)
+
+
+def test_utc_wallclock_uses_vienna_iso_week(tva_root: Path) -> None:
+    # 22:30 UTC Sunday 13 Sep is 00:30 Vienna Monday 14 Sep (2026-W38).
+    _seed_ledger(
+        tva_root,
+        trades=2,
+        session_id="2026-09-13_223000",
+        start="2026-09-13T22:30:00+00:00",
+    )
+    pack = gather_pack(tva_root, weeks=1, min_n=2)
+    assert pack.session_ids == ["2026-09-13_223000"]
+
+
+def test_experiment_start_uses_vienna_today(tva_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _seed_ledger(tva_root, trades=3)
+    monkeypatch.setattr("tradevidanalyser.coach.vienna_today", lambda: date(2026, 9, 14))
+    monkeypatch.setattr("tradevidanalyser.coach.date.today", lambda: date(2026, 9, 13))
+    pack = gather_pack(tva_root, weeks=4, min_n=3)
+    instances = sorted(instance_cite_ids(pack))
+    draft = CoachDraft(
+        claims=[CoachClaim(text="Repeats across three ledger rows.", cites=instances)],
+        experiment=CoachExperiment(
+            rule_change="State the playbook before entry",
+            start="",
+            stop_criterion="Stop after 4 weeks",
+        ),
+    )
+    experiment, gaps = accept_experiment(draft, pack)
+    assert gaps == []
+    assert experiment is not None
+    assert experiment.start == "2026-09-14"
+
+
+def test_rerun_keeps_running_when_draft_proposes_another(tva_root: Path) -> None:
+    _seed_ledger(tva_root, trades=10)
+    first = coach_session(root=tva_root, weeks=4, min_n=10)
+    pack = gather_pack(tva_root, weeks=4, min_n=10)
+    draft = CoachDraft(
+        claims=[
+            CoachClaim(
+                text="The same process miss repeats across 10 ledger rows.",
+                cites=sorted(instance_cite_ids(pack)),
+            )
+        ],
+        experiment=CoachExperiment(
+            rule_change="Different rule entirely",
+            start="2026-09-11",
+            stop_criterion="Stop after 4 weeks",
+        ),
+    )
+    second = coach_session(root=tva_root, weeks=4, min_n=10, provider=FakeCoachProvider(draft))
+    assert first.experiment_id == second.experiment_id == "E01"
+    held = list_experiments(tva_root)
+    assert len(held) == 1
+    assert held[0].rule_change != "Different rule entirely"
+
+
+def test_no_claims_does_not_append_experiment(tva_root: Path) -> None:
+    _seed_ledger(tva_root, trades=2)
+    pack = gather_pack(tva_root, weeks=4, min_n=10)
+    coach_session(
+        root=tva_root,
+        weeks=4,
+        min_n=10,
+        provider=FakeCoachProvider(
+            CoachDraft(
+                claims=[CoachClaim(text="Too thin.", cites=pack.row_ids[:2])],
+                experiment=CoachExperiment(
+                    rule_change="State the playbook before entry",
+                    start="2026-09-11",
+                    stop_criterion="Stop after 4 weeks",
+                ),
+            )
+        ),
+    )
+    assert list_experiments(tva_root) == []
+    report = load_latest(tva_root)
+    assert report is not None
+    assert report.experiment is None
+
+
+def test_coach_refuses_dir_symlink_outside_root(tva_root: Path, tmp_path: Path) -> None:
+    _seed_ledger(tva_root, trades=10)
+    outside = tmp_path / "outside_coach"
+    outside.mkdir()
+    dest = store.coach_dir(tva_root)
+    try:
+        dest.symlink_to(outside)
+    except OSError:
+        pytest.skip("symlink not permitted")
+    with pytest.raises((CoachError, ValueError), match="TVA_ROOT"):
+        coach_session(root=tva_root, weeks=4, min_n=10)
+    assert not (outside / "latest.json").exists()
+    assert load_latest(tva_root) is None
+    client = TestClient(create_app(tva_root))
+    assert client.get("/coach/latest").status_code == 404
+
+
+def test_debrief_symlink_and_unsafe_session_id_are_skipped(
+    tva_root: Path, tmp_path: Path
+) -> None:
+    session_id = _seed_ledger(tva_root, trades=2)
+    outside = tmp_path / "leaked.json"
+    outside.write_text(
+        DebriefReport(
+            session_id=session_id,
+            provider="fake",
+            model="none",
+            prompt_version="debrief-fake-v1",
+            sections=[DebriefSection(id="day", title="Day", kind="prose", body="Secret 777")],
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+    dest = store.debrief_json_path(tva_root, session_id)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        dest.symlink_to(outside)
+    except OSError:
+        pytest.skip("symlink not permitted")
+    pack = gather_pack(tva_root, weeks=4, min_n=2)
+    assert pack.debriefs == []
+    assert "777" not in pack.allowed_runs
+    assert _load_debriefs(tva_root, ["..", "foo/bar", session_id], limit=4) == []

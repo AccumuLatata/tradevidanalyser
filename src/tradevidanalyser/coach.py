@@ -16,12 +16,13 @@ from tradevidanalyser import store
 from tradevidanalyser.ledger import (
     LedgerError,
     append_experiment,
-    running_experiment,
+    list_experiments,
     window_row_ids,
     window_rule_facts,
     window_session_ids,
     window_trade_facts,
 )
+from tradevidanalyser.naming import vienna_today
 from tradevidanalyser.providers.extract import default_prompt_path, prompt_version_for
 from tradevidanalyser.schema import (
     CoachClaim,
@@ -65,6 +66,7 @@ class CoachPack:
     rules: list[dict[str, Any]]
     debriefs: list[dict[str, str]]
     running: CoachExperiment | None
+    existing: CoachExperiment | None
     allowed_runs: set[str]
 
 
@@ -133,7 +135,12 @@ def _collect_allowed_runs(pack_bits: list[str], *, min_n: int, weeks: int) -> se
 def _load_debriefs(root: Path, session_ids: list[str], *, limit: int) -> list[dict[str, str]]:
     out: list[dict[str, str]] = []
     for session_id in reversed(session_ids):
-        path = store.debrief_json_path(root, session_id)
+        if not store.is_safe_path_name(session_id):
+            continue
+        try:
+            path = store.require_under_root(store.debrief_json_path(root, session_id), root)
+        except ValueError:
+            continue
         if not path.is_file():
             continue
         try:
@@ -148,20 +155,37 @@ def _load_debriefs(root: Path, session_ids: list[str], *, limit: int) -> list[di
     return out
 
 
+def instance_cite_ids(pack: CoachPack) -> set[str]:
+    """Trade and rule row ids that count toward the ≥ N citation floor."""
+    ids: set[str] = set()
+    for row in (*pack.trades, *pack.rules):
+        ident = row.get("id")
+        if ident:
+            ids.add(str(ident))
+    return ids
+
+
+def _existing_experiment(root: Path) -> tuple[CoachExperiment | None, CoachExperiment | None]:
+    items = list_experiments(root)
+    running = next((item for item in items if item.status == "running"), None)
+    return running, running or (items[0] if items else None)
+
+
 def gather_pack(root: Path, *, weeks: int, min_n: int) -> CoachPack:
     session_ids = window_session_ids(root, weeks=weeks)
     row_ids = window_row_ids(root, session_ids)
     trades = window_trade_facts(root, session_ids)
     rules = window_rule_facts(root, session_ids)
     debriefs = _load_debriefs(root, session_ids, limit=weeks)
-    bits = [str(weeks), str(min_n), *session_ids, *row_ids]
+    bits = [str(weeks), str(min_n), vienna_today().isoformat(), *session_ids, *row_ids]
     for row in (*trades, *rules):
         bits.extend(str(value) for value in row.values() if value is not None)
     for item in debriefs:
         bits.extend(item.values())
-    running = running_experiment(root)
-    if running is not None:
-        bits.extend([running.rule_change, running.start, running.stop_criterion, running.id])
+    running, existing = _existing_experiment(root)
+    held = existing or running
+    if held is not None:
+        bits.extend([held.rule_change, held.start, held.stop_criterion, held.id])
     return CoachPack(
         weeks=weeks,
         min_citations=min_n,
@@ -171,6 +195,7 @@ def gather_pack(root: Path, *, weeks: int, min_n: int) -> CoachPack:
         rules=rules,
         debriefs=debriefs,
         running=running,
+        existing=existing,
         allowed_runs=_collect_allowed_runs(bits, min_n=min_n, weeks=weeks),
     )
 
@@ -186,10 +211,12 @@ def validate_claim(claim: CoachClaim, pack: CoachPack) -> str | None:
         if cite not in seen:
             seen.add(cite)
             unique.append(cite)
-    if len(unique) < pack.min_citations:
+    instances = [cite for cite in unique if cite in instance_cite_ids(pack)]
+    if len(instances) < pack.min_citations:
         return f"need >={pack.min_citations} ledger cites"
     extra = (_digit_runs(claim.text) | _digit_runs(claim.question)) - pack.allowed_runs
     # counts of cites are allowed (the claim is about N instances)
+    extra -= _digit_runs(str(len(instances)))
     extra -= _digit_runs(str(len(unique)))
     extra -= _digit_runs(str(pack.min_citations))
     if extra:
@@ -219,8 +246,8 @@ def accept_claims(draft: CoachDraft, pack: CoachPack) -> tuple[list[CoachClaim],
 
 
 def accept_experiment(draft: CoachDraft, pack: CoachPack) -> tuple[CoachExperiment | None, list[str]]:
-    if pack.running is not None:
-        return pack.running, []
+    if pack.existing is not None:
+        return pack.existing, []
     raw = draft.experiment
     if raw is None:
         return None, []
@@ -235,9 +262,8 @@ def accept_experiment(draft: CoachDraft, pack: CoachPack) -> tuple[CoachExperime
         except ValueError:
             return None, [f"dropped experiment: bad start {start!r}"]
     else:
-        start = date.today().isoformat()
+        start = vienna_today().isoformat()
     extra = (_digit_runs(rule) | _digit_runs(stop) | _digit_runs(start)) - pack.allowed_runs
-    extra -= _digit_runs(start)
     extra -= _digit_runs(str(pack.min_citations))
     extra -= _digit_runs(str(pack.weeks))
     if extra:
@@ -302,9 +328,9 @@ class FakeCoachProvider:
                     question="Name the playbook before the next entry?",
                 )
             )
-        experiment = pack.running
+        experiment = pack.existing
         if experiment is None and claims:
-            start = pack.session_ids[0][:10] if pack.session_ids else date.today().isoformat()
+            start = pack.session_ids[0][:10] if pack.session_ids else vienna_today().isoformat()
             experiment = CoachExperiment(
                 rule_change="State the playbook before entry (R-PLAYBOOK)",
                 start=start,
@@ -327,7 +353,10 @@ def _preferred_cites(pack: CoachPack) -> list[str]:
     trade_ids = [str(row["id"]) for row in pack.trades if row.get("id")]
     if len(trade_ids) >= pack.min_citations:
         return trade_ids
-    return list(pack.row_ids)
+    instances = [cite for cite in pack.row_ids if cite in instance_cite_ids(pack)]
+    if len(instances) >= pack.min_citations:
+        return instances
+    return []
 
 
 class GrokCoachProvider:
@@ -514,7 +543,10 @@ def get_coach_provider(
 
 
 def load_latest(root: Path) -> CoachReport | None:
-    path = store.coach_json_path(root)
+    try:
+        path = store.require_under_root(store.coach_json_path(root), root)
+    except ValueError:
+        return None
     if not path.is_file():
         return None
     try:
@@ -549,8 +581,8 @@ def coach_session(
             stored = append_experiment(root, experiment)
         except LedgerError as exc:
             gaps.append(str(exc))
-    elif experiment is not None and pack.running is not None:
-        stored = pack.running
+    elif experiment is not None and pack.existing is not None:
+        stored = pack.existing
     report = CoachReport(
         schema_version=SCHEMA_VERSION,
         provider=chosen.name,
@@ -563,8 +595,11 @@ def coach_session(
         gaps=gaps,
     )
     report = report.model_copy(update={"markdown": render_markdown(report)})
-    json_path = store.coach_json_path(root)
-    md_path = store.coach_md_path(root)
+    try:
+        json_path = store.require_under_root(store.coach_json_path(root), root)
+        md_path = store.require_under_root(store.coach_md_path(root), root)
+    except ValueError as exc:
+        raise CoachError(str(exc)) from exc
     store.write_json(json_path, report.model_dump(mode="json"))
     md_path.parent.mkdir(parents=True, exist_ok=True)
     md_path.write_text(report.markdown, encoding="utf-8")

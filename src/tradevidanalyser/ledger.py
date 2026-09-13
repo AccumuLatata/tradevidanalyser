@@ -15,6 +15,7 @@ import duckdb
 
 from tradevidanalyser import store
 from tradevidanalyser.context import session_calendar_date
+from tradevidanalyser.naming import vienna_today
 from tradevidanalyser.schema import (
     AdherenceTally,
     CoachExperiment,
@@ -957,7 +958,11 @@ def window_session_ids(root: Path, *, weeks: int) -> list[str]:
         except (duckdb.Error, LedgerError, ValueError):
             return []
         try:
-            return _session_ids_for(con, weeks=weeks)
+            return [
+                session_id
+                for session_id in _session_ids_for(con, weeks=weeks)
+                if store.is_safe_path_name(session_id)
+            ]
         except duckdb.Error as exc:
             if _is_absent_ledger_error(exc):
                 return []
@@ -1113,6 +1118,19 @@ def _experiment_from_row(row: tuple[Any, ...]) -> CoachExperiment:
     )
 
 
+def _list_experiments_con(con: duckdb.DuckDBPyConnection) -> list[CoachExperiment]:
+    try:
+        rows = con.execute(
+            "SELECT id, rule_change, start, stop_criterion, status "
+            "FROM experiments ORDER BY id"
+        ).fetchall()
+    except duckdb.Error as exc:
+        if _is_absent_ledger_error(exc) or "experiments" in str(exc).lower():
+            return []
+        raise
+    return [_experiment_from_row(row) for row in rows]
+
+
 def list_experiments(root: Path) -> list[CoachExperiment]:
     path = ledger_db_path(root)
     if not path.is_file() or path.stat().st_size == 0:
@@ -1123,17 +1141,13 @@ def list_experiments(root: Path) -> list[CoachExperiment]:
         except (duckdb.Error, LedgerError, ValueError):
             return []
         try:
-            rows = con.execute(
-                "SELECT id, rule_change, start, stop_criterion, status "
-                "FROM experiments ORDER BY id"
-            ).fetchall()
+            return _list_experiments_con(con)
         except duckdb.Error as exc:
             if _is_absent_ledger_error(exc) or "experiments" in str(exc).lower():
                 return []
             raise
         finally:
             con.close()
-    return [_experiment_from_row(row) for row in rows]
 
 
 def running_experiment(root: Path) -> CoachExperiment | None:
@@ -1144,21 +1158,21 @@ def running_experiment(root: Path) -> CoachExperiment | None:
 
 
 def append_experiment(root: Path, experiment: CoachExperiment) -> CoachExperiment:
-    """Keep at most one running experiment. Existing running rows win."""
-    current = running_experiment(root)
-    if current is not None:
-        return current
+    """Keep at most one experiment. A running row wins; else the first row."""
     if not experiment.rule_change.strip() or not experiment.stop_criterion.strip():
         raise LedgerError("experiment needs rule_change and stop_criterion")
-    start = experiment.start.strip() or date.today().isoformat()
-    existing = list_experiments(root)
-    if existing:
-        return existing[0]
+    start = experiment.start.strip() or vienna_today().isoformat()
     next_id = experiment.id.strip() or "E01"
     created = datetime.now(tz=timezone.utc).replace(microsecond=0).isoformat()
     with _LEDGER_LOCK:
         con = _connect(root)
         try:
+            existing = _list_experiments_con(con)
+            for item in existing:
+                if item.status == "running":
+                    return item
+            if existing:
+                return existing[0]
             with _txn(con):
                 con.execute(
                     """

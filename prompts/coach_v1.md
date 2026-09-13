@@ -13,9 +13,10 @@ Return JSON only:
 
 ## Hard rules
 
-1. Every claim must cite **at least** `min_citations` ledger row ids
-   from the allow-list. Ids look like `2026-09-11_143000`,
-   `2026-09-11_143000:T01`, `2026-09-11_143000:R-PLAYBOOK`.
+1. Every claim must cite **at least** `min_citations` **trade or rule**
+   ledger row ids from the allow-list (`2026-09-11_143000:T01`,
+   `2026-09-11_143000:R-PLAYBOOK`). Bare session ids and event segs may
+   appear as extra context but do not count toward the floor.
 2. Do not cite an id that is not on the allow-list.
 3. Do not invent a number. Digit runs in `text` must already appear in
    the fact pack (ids, dates, prices, counts).

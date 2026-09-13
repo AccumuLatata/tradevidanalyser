@@ -207,6 +207,16 @@ def is_safe_path_name(name: str) -> bool:
     )
 
 
+def require_under_root(path: Path, root: Path) -> Path:
+    """Resolve ``path`` and refuse anything that escapes ``root`` (symlink hop)."""
+    resolved = path.expanduser().resolve()
+    try:
+        resolved.relative_to(root.expanduser().resolve())
+    except ValueError as exc:
+        raise ValueError(f"refusing path outside TVA_ROOT: {path}") from exc
+    return resolved
+
+
 def list_frame_jpgs(root: Path, session_id: str) -> list[Path]:
     folder = frames_dir(root, session_id)
     if not folder.is_dir():
