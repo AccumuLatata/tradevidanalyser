@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import csv
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
+
+import yaml
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -24,6 +26,7 @@ from tradevidanalyser.proposals import (
     CSV_COLUMNS,
     NOTES_PREFIX,
     ProposalsError,
+    _as_date,
     default_tag_map_path,
     load_tag_map,
     map_stated_text,
@@ -173,6 +176,32 @@ def test_vocabulary_mapping_keeps_desk_keys() -> None:
     assert "Scalp" not in invented
     assert "invented_tag" not in invented
     assert all(tag in tag_map.vocabulary for tag in invented)
+    # Nested context tags: ITR-C must not also emit ITR.
+    assert map_stated_text("played ITR-C today", tag_map) == ["ITR-C"]
+    assert "ITR" not in map_stated_text("played ITR-C today", tag_map)
+    assert map_stated_text("CTR-R", tag_map) == ["CTR-R"]
+
+
+def test_engine_tokens_map_to_desk_keys_never_emitted() -> None:
+    tag_map = load_tag_map()
+    package = Path(__file__).resolve().parents[1] / "src" / "tradevidanalyser" / "tag_map.yaml"
+    payload = yaml.safe_load(package.read_text(encoding="utf-8"))
+    exact = payload["exact"]
+    assert map_stated_text("pdHigh", tag_map) == ["pdH"]
+    assert map_stated_text("SMA_21_5min", tag_map) == ["5m21SMA"]
+    assert map_stated_text("EMA_21_5min", tag_map) == ["5m21EMA"]
+    assert map_stated_text("VWAP_rolling_4h", tag_map) == ["4hVWAP"]
+    assert map_stated_text("prev30mVWAP", tag_map) == ["p30VWAP"]
+    assert map_stated_text("pdHigh_retest", tag_map) == ["pdH"]
+    for key, spec in exact.items():
+        token = spec.get("token") if isinstance(spec, dict) else None
+        if not token:
+            continue
+        mapped = map_stated_text(str(token), tag_map)
+        assert mapped == [str(key)], (token, mapped, key)
+        if str(token) != str(key):
+            assert str(token) not in mapped
+        assert all(tag in tag_map.vocabulary for tag in mapped)
 
 
 def test_proposals_map_playbook_and_levels(tva_root: Path) -> None:
@@ -411,6 +440,109 @@ def test_session_levels_attach_only_when_spoken_or_single_trade(tva_root: Path) 
     assert by_id["T02"].proposed_tags == ["3c"]
     assert "dVWAP" not in by_id["T01"].proposed_tags
     assert "dVWAP" not in by_id["T02"].proposed_tags
+
+
+def test_session_onh_does_not_attach_to_ponh_trade(tva_root: Path) -> None:
+    record = _session(tva_root)
+    _write_trades(tva_root, record.id, trade_ids=["T01", "T02"])
+    evidence = Evidence(
+        provider="fake",
+        model="none",
+        prompt_version="stated-fake-v1",
+        session_id=record.id,
+        trades=[
+            EvidenceTrade(
+                tva_trade_id="T01",
+                window=EvidenceWindow(t0=0.0, t1=60.0),
+                stated=StatedFields(playbook=StatedCite(value="pONH", seg="s1")),
+                alignment_confidence=0.9,
+            ),
+            EvidenceTrade(
+                tva_trade_id="T02",
+                window=EvidenceWindow(t0=80.0, t1=120.0),
+                stated=StatedFields(playbook=StatedCite(value="ONH", seg="s2")),
+                alignment_confidence=0.9,
+            ),
+        ],
+    )
+    store.write_json(store.evidence_path(tva_root, record.id), evidence.model_dump(mode="json"))
+    _write_insights(tva_root, record.id, levels=[("ONH", "s3")])
+    proposals_session(record.id, root=tva_root)
+    by_id = {item.tva_trade_id: item for item in _load_report(tva_root, record.id).proposals}
+    assert by_id["T01"].proposed_tags == ["pONH"]
+    assert by_id["T02"].proposed_tags == ["ONH"]
+    assert "ONH" not in by_id["T01"].proposed_tags
+
+
+def test_csv_date_is_calendar_day_not_isoformat_datetime(tva_root: Path) -> None:
+    record = _session(tva_root)
+    table = pa.table(
+        {
+            "tva_trade_id": ["T01"],
+            "trade_id": ["jt-0"],
+            "direction": ["long"],
+            "instrument": ["MNQ"],
+            "entry_price": [21000.25],
+            "qty": [2],
+            "session_date": [datetime(2026, 9, 11, 22, 0, tzinfo=timezone.utc)],
+        }
+    )
+    path = store.trades_path(tva_root, record.id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(table, path)
+    _write_evidence(tva_root, record.id)
+    proposals_session(record.id, root=tva_root)
+    rows = _read_csv(tva_root, record.id)
+    assert rows[0]["date"] == "2026-09-11"
+    assert "T" not in rows[0]["date"]
+    assert "+" not in rows[0]["date"]
+    assert _as_date(datetime(2026, 9, 11, 22, 0, tzinfo=timezone.utc), "2026-09-12") == "2026-09-11"
+    assert _as_date(datetime(2026, 9, 11, 0, 0), "2026-09-12") == "2026-09-11"
+    assert _as_date(date(2026, 9, 11), "2026-09-12") == "2026-09-11"
+
+
+def test_insights_only_does_not_invent_trade(tva_root: Path) -> None:
+    record = _session(tva_root)
+    _write_insights(tva_root, record.id, levels=[("dVWAP", "s1")], playbooks=[("ONH Touch", "s2")])
+    result = proposals_session(record.id, root=tva_root)
+    assert result.status == "ok"
+    report = _load_report(tva_root, record.id)
+    assert report.proposals == []
+    assert any("no trades" in gap for gap in report.gaps)
+    assert _read_csv(tva_root, record.id) == []
+
+
+def test_confirm_skips_corrupt_sibling_session(tva_root: Path) -> None:
+    first = _session(tva_root, "2026-09-11_143000")
+    second = _session(tva_root, "2026-09-12_143000")
+    _write_trades(tva_root, first.id)
+    _write_evidence(tva_root, first.id)
+    proposals_session(first.id, root=tva_root)
+    store.write_json(store.proposals_path(tva_root, second.id), {"not": "a proposals file"})
+    result = confirm_proposal("T01", root=tva_root)
+    assert result.session_id == first.id
+    assert result.status == "confirmed"
+
+
+def test_csv_keeps_zero_quantity(tva_root: Path) -> None:
+    record = _session(tva_root)
+    table = pa.table(
+        {
+            "tva_trade_id": ["T01"],
+            "trade_id": ["jt-0"],
+            "direction": ["long"],
+            "instrument": ["MNQ"],
+            "entry_price": [21000.25],
+            "qty": [0],
+            "session_date": [date(2026, 9, 11)],
+        }
+    )
+    path = store.trades_path(tva_root, record.id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(table, path)
+    _write_evidence(tva_root, record.id)
+    proposals_session(record.id, root=tva_root)
+    assert _read_csv(tva_root, record.id)[0]["quantity"] == "0"
 
 
 def test_doctor_tag_map_ok(tva_root: Path) -> None:

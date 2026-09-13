@@ -6,7 +6,7 @@ import csv
 import os
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -124,6 +124,13 @@ def load_tag_map(path: Path | None = None) -> TagMap:
     by_fold: dict[str, str] = {}
     for key in (*exact, *context):
         by_fold.setdefault(key.casefold(), key)
+    # Engine token spellings resolve to the desk key. Tokens are never vocabulary.
+    for key, spec in exact_raw.items():
+        if not key or not isinstance(spec, dict):
+            continue
+        token = spec.get("token")
+        if token:
+            by_fold.setdefault(str(token).casefold(), str(key))
     return TagMap(exact=exact, context=context, by_fold=by_fold, qualifiers=qualifiers)
 
 
@@ -163,20 +170,31 @@ def map_stated_text(text: str, tag_map: TagMap) -> list[str]:
         return found
     compact = re.sub(r"[^a-z0-9]", "", blob.casefold())
     if compact:
-        for key in sorted(tag_map.vocabulary, key=len, reverse=True):
-            if re.sub(r"[^a-z0-9]", "", key.casefold()) == compact:
-                add(key)
-                return found
+        compact_hit: str | None = None
+        for needle, desk in tag_map.by_fold.items():
+            if re.sub(r"[^a-z0-9]", "", needle) == compact:
+                if compact_hit is None or len(desk) > len(compact_hit):
+                    compact_hit = desk
+        if compact_hit:
+            add(compact_hit)
+            return found
+    # Longest non-overlapping hits. "ITR-C" must not also emit "ITR".
+    # Needles include engine-token spellings; values are always desk keys.
     hits: list[tuple[int, int, str]] = []
-    for key in tag_map.vocabulary:
+    for needle, desk in tag_map.by_fold.items():
         pattern = re.compile(
-            r"(?<![A-Za-z0-9_])" + re.escape(key) + r"(?![A-Za-z0-9_])",
+            r"(?<![A-Za-z0-9_])" + re.escape(needle) + r"(?![A-Za-z0-9_])",
             re.IGNORECASE,
         )
         for match in pattern.finditer(blob):
-            hits.append((match.start(), -len(key), key))
-    for _, _, key in sorted(hits):
-        add(key)
+            hits.append((match.start(), -len(match.group(0)), desk))
+    occupied: list[tuple[int, int]] = []
+    for start, neg_len, desk in sorted(hits):
+        end = start - neg_len
+        if any(start < other_end and end > other_start for other_start, other_end in occupied):
+            continue
+        add(desk)
+        occupied.append((start, end))
     for token in _WORD.findall(blob):
         hit = resolve_stated_token(token, tag_map)
         if hit:
@@ -234,17 +252,29 @@ def _cell(table, name: str, index: int) -> object:
 
 
 def _as_date(value: object, fallback: str) -> str:
+    """Return YYYY-MM-DD. ``datetime`` is a ``date`` subclass — do not isoformat it."""
+    if isinstance(value, datetime):
+        return value.date().isoformat()
     if isinstance(value, date):
         return value.isoformat()
+    if hasattr(value, "to_pydatetime"):
+        try:
+            return _as_date(value.to_pydatetime(), fallback)
+        except (TypeError, ValueError):
+            pass
     if hasattr(value, "date") and callable(value.date):
         try:
-            return value.date().isoformat()
+            got = value.date()
+            if isinstance(got, datetime):
+                return got.date().isoformat()
+            if isinstance(got, date):
+                return got.isoformat()
         except (TypeError, ValueError):
             pass
     text = str(value or "").strip()
-    if len(text) >= 10 and text[4] == "-":
+    if len(text) >= 10 and text[4] == "-" and text[7] == "-":
         return text[:10]
-    return fallback[:10]
+    return fallback[:10] if len(fallback) >= 10 else fallback
 
 
 def build_proposals(
@@ -263,8 +293,6 @@ def build_proposals(
         for trade in evidence.trades:
             if trade.tva_trade_id and trade.tva_trade_id not in trade_ids:
                 trade_ids.append(trade.tva_trade_id)
-    if not trade_ids:
-        trade_ids = ["T01"] if (evidence or insights) else []
     gaps: list[str] = []
     proposals: list[IntentProposal] = []
     session_level_tags: list[tuple[str, str]] = []
@@ -303,8 +331,10 @@ def build_proposals(
                 if cite.seg:
                     segs.append(cite.seg)
         spoken_blob = " ".join(spoken)
+        spoken_tags = set(map_stated_text(spoken_blob, mapping)) if spoken_blob else set()
         for tag, seg in session_level_tags:
-            if len(trade_ids) == 1 or (tag.casefold() in spoken_blob.casefold()):
+            # Substring checks attach ONH to a pONH trade. Require a mapped mention.
+            if len(trade_ids) == 1 or tag in spoken_tags:
                 tags.append(tag)
                 if seg:
                     segs.append(seg)
@@ -321,7 +351,7 @@ def build_proposals(
             )
         )
     if not trade_ids:
-        gaps.append("no trades.parquet or evidence.json")
+        gaps.append("no trades to attach proposals to")
     return IntentProposals(
         schema_version=SCHEMA_VERSION,
         session_id=session_id,
@@ -386,7 +416,7 @@ def _csv_rows(root: Path, session_id: str, report: IntentProposals) -> list[dict
                     "symbol": str(_cell(table, "instrument", index) or ""),
                     "side": str(_cell(table, "direction", index) or ""),
                     "price": _csv_number(_cell(table, "entry_price", index)),
-                    "quantity": _csv_number(_cell(table, "qty", index) or 1),
+                    "quantity": _csv_number(_cell(table, "qty", index), default="1"),
                     "tags": ",".join(proposal.proposed_tags),
                     "notes": f"{NOTES_PREFIX} {tva_id}",
                 }
@@ -409,11 +439,14 @@ def _csv_rows(root: Path, session_id: str, report: IntentProposals) -> list[dict
     return rows
 
 
-def _csv_number(value: object) -> str:
+def _csv_number(value: object, *, default: str = "") -> str:
     if value is None:
-        return ""
-    if isinstance(value, float) and value.is_integer():
-        return str(int(value))
+        return default
+    if isinstance(value, float):
+        if value != value:  # NaN
+            return default
+        if value.is_integer():
+            return str(int(value))
     return str(value)
 
 
@@ -459,7 +492,10 @@ def find_proposal(root: Path, ident: str) -> tuple[str, IntentProposals, IntentP
         path = store.proposals_path(root, session_id)
         if not path.is_file():
             raise ProposalsError(f"no proposals for {session_id}")
-        report = IntentProposals.model_validate(store.read_json(path))
+        try:
+            report = IntentProposals.model_validate(store.read_json(path))
+        except (ValueError, OSError) as exc:
+            raise ProposalsError(f"unreadable proposals for {session_id}") from exc
         for item in report.proposals:
             if item.tva_trade_id == trade_id:
                 return session_id, report, item
@@ -469,7 +505,10 @@ def find_proposal(root: Path, ident: str) -> tuple[str, IntentProposals, IntentP
         path = store.proposals_path(root, sid)
         if not path.is_file():
             continue
-        report = IntentProposals.model_validate(store.read_json(path))
+        try:
+            report = IntentProposals.model_validate(store.read_json(path))
+        except (ValueError, OSError):
+            continue
         for item in report.proposals:
             if item.tva_trade_id == trade_id:
                 hits.append((sid, report, item))
