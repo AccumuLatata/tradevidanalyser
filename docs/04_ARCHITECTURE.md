@@ -126,6 +126,7 @@ Every stage is a CLI subcommand, idempotent, writing into
 | Context | `tva context <session> [--lab-dir]` | CLI (not a bot run stage) | `context.json` briefs/DRC + lab join on `entry_fill_id` | yes, optional |
 | Report | `tva report <session>` | CLI (not a bot run stage) | `debrief.md` / `debrief.json` facts + cited prose | yes, optional |
 | Ledger | `tva ledger add` / `tva rollup --week [--month]` | `GET /ledger/summary?weeks=4` | `ledger/ledger.duckdb` + rollup Markdown | yes, optional |
+| Publish | `tva publish <session> --notion` | CLI (off by default; not a bot run stage) | Trading Journal Session Debrief + *TVA runs* log line | yes, optional |
 
 `tva run --latest` is the scheduler entry on the PC. `tva serve` is the
 Mac entry. Same package.
@@ -209,6 +210,9 @@ ledger:                          # PR-24; omit until `tva ledger add`
   duckdb tables: sessions, trades, rule_checks, events
   # DuckDB reads trades.parquet; add is idempotent
   # rollup: adherence, violations, trades/hour, stated-vs-lab
+publish:                         # PR-25; omit until `tva publish --notion`
+  page_id / url / title / Summaries / Learning 1–3
+  # off without --notion; fake Notion default; update in place
 
 provenance: {app_version, ffmpeg, models, created_at}
 ```
@@ -268,6 +272,9 @@ PR-16 consumes ThesisTester; it does not fork it.
 - **Ledger (PR-24):** `tva ledger add` copies one session into
   `ledger/ledger.duckdb`. Trades come from `read_parquet`. Stated-vs-lab
   compares `evidence.stated` to `context.lab` tokens (no level math).
+- **Publish (PR-25):** `tva publish --notion` writes one Trading Journal
+  page (`<D Mon YYYY> Session Debrief`, tag *Trades Summary*) and one
+  *TVA runs* log line. Idempotent update in place. Off by default.
 
 Good reasons to do that join *eventually*:
 
@@ -307,6 +314,8 @@ couples the first useful API to a second repo and a journal export ritual.
   `debrief.md`.
 - `GET /ledger/summary?weeks=4` is the ledger read. `tva ledger add` /
   `tva rollup` stay CLI. Not a `POST /run` stage.
+- `tva publish --notion` is CLI-only, off by default. The bot may keep
+  writing its own Notion note from insights.
 
 Copy-ready pack: [`TVA_GROK_ROUTINE_PACK.md`](TVA_GROK_ROUTINE_PACK.md)
 and [`examples/bot/`](../examples/bot/). Paste `SYSTEM.md` as the bot

@@ -21,6 +21,7 @@ from tradevidanalyser.pipeline import (
     evidence_session,
     extract_session,
     ledger_add,
+    publish_session,
     report_session,
     rollup_ledger,
     rules_session,
@@ -211,6 +212,18 @@ def main(argv: list[str] | None = None) -> int:
         help="calendar month; combine with --week for both sections",
     )
 
+    p_pub = sub.add_parser(
+        "publish",
+        help="optional Notion Session Debrief page (off without --notion)",
+    )
+    p_pub.add_argument("session")
+    p_pub.add_argument(
+        "--notion",
+        action="store_true",
+        help="write/update the Trading Journal page (off by default)",
+    )
+    p_pub.add_argument("--provider", default=None, help="fake (default) or notion")
+
     p_serve = sub.add_parser("serve", help="HTTP API over TVA_ROOT")
     p_serve.add_argument("--host", default="127.0.0.1")
     p_serve.add_argument("--port", type=int, default=8764)
@@ -360,6 +373,15 @@ def main(argv: list[str] | None = None) -> int:
                 _emit(result.as_dict(), as_json=True)
             else:
                 sys.stdout.write(result.markdown)
+            return 0
+        if args.cmd == "publish":
+            result = publish_session(
+                args.session,
+                root=root,
+                notion=args.notion,
+                provider_name=args.provider,
+            )
+            _emit(result.as_dict(), as_json=True)
             return 0
         if args.cmd == "serve":
             import uvicorn
