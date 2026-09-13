@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import re
+import threading
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import duckdb
 
 from tradevidanalyser import store
+from tradevidanalyser.context import session_calendar_date
 from tradevidanalyser.schema import (
     AdherenceTally,
     LedgerPeriod,
@@ -25,6 +29,9 @@ LEDGER_FILENAME = "ledger.duckdb"
 WEEK_RE = re.compile(r"^(\d{4})-W(\d{2})$")
 MONTH_RE = re.compile(r"^(\d{4})-(\d{2})$")
 TOKEN_RE = re.compile(r"[a-z0-9]+")
+_LOCK_RETRIES = 8
+_LOCK_BACKOFF_S = 0.05
+_LEDGER_LOCK = threading.Lock()
 
 
 class LedgerError(ValueError):
@@ -80,20 +87,82 @@ def _require_safe_session_id(session_id: str) -> str:
     return session_id
 
 
+def _under_root(path: Path, root: Path) -> Path:
+    resolved = path.expanduser().resolve()
+    try:
+        resolved.relative_to(root.expanduser().resolve())
+    except ValueError as exc:
+        raise ValueError(f"refusing path outside TVA_ROOT: {path}") from exc
+    return resolved
+
+
 def _duck_path(path: Path) -> str:
     return str(path.resolve()).replace("\\", "/").replace("'", "''")
+
+
+def _is_lock_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return "lock" in msg or "conflicting" in msg
+
+
+def _is_absent_ledger_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return (
+        "does not exist" in msg
+        or "catalog error" in msg
+        or "not a valid duckdb" in msg
+        or "no files found" in msg
+        or "cannot open" in msg
+    )
+
+
+def _empty_summary(*, weeks: int | None = None) -> LedgerSummary:
+    summary = LedgerSummary(weeks=weeks)
+    summary.markdown = render_markdown(summary)
+    return summary
+
+
+@contextmanager
+def _txn(con: duckdb.DuckDBPyConnection) -> Iterator[None]:
+    con.execute("BEGIN TRANSACTION")
+    try:
+        yield
+        con.execute("COMMIT")
+    except Exception:
+        try:
+            con.execute("ROLLBACK")
+        except duckdb.Error:
+            pass
+        raise
 
 
 def _connect(root: Path, *, read_only: bool = False) -> duckdb.DuckDBPyConnection:
     path = ledger_db_path(root)
     if read_only:
-        if not path.is_file():
+        if not path.is_file() or path.stat().st_size == 0:
             raise LedgerError("ledger is empty")
-        return duckdb.connect(str(path), read_only=True)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    con = duckdb.connect(str(path))
-    _ensure_schema(con)
-    return con
+        path = _under_root(path, root)
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.is_file() and path.stat().st_size == 0:
+            path.unlink()
+        # resolve() after mkdir so a ledger/ symlink cannot escape TVA_ROOT.
+        path = _under_root(path, root)
+    last: duckdb.Error | None = None
+    for attempt in range(_LOCK_RETRIES):
+        try:
+            if read_only:
+                return duckdb.connect(str(path), read_only=True)
+            con = duckdb.connect(str(path))
+            _ensure_schema(con)
+            return con
+        except duckdb.Error as exc:
+            last = exc
+            if not _is_lock_error(exc) or attempt == _LOCK_RETRIES - 1:
+                raise
+            time.sleep(_LOCK_BACKOFF_S * (2**attempt))
+    assert last is not None
+    raise last
 
 
 def _ensure_schema(con: duckdb.DuckDBPyConnection) -> None:
@@ -161,51 +230,39 @@ def _ensure_schema(con: duckdb.DuckDBPyConnection) -> None:
 
 def session_recorded(root: Path, session_id: str) -> bool:
     path = ledger_db_path(root)
-    if not path.is_file():
+    if not path.is_file() or path.stat().st_size == 0:
         return False
-    try:
-        con = duckdb.connect(str(path), read_only=True)
-    except duckdb.Error:
-        return False
-    try:
-        row = con.execute(
-            "SELECT 1 FROM sessions WHERE session_id = ? LIMIT 1",
-            [session_id],
-        ).fetchone()
-        return row is not None
-    except duckdb.Error:
-        return False
-    finally:
-        con.close()
+    with _LEDGER_LOCK:
+        try:
+            con = _connect(root, read_only=True)
+        except (duckdb.Error, LedgerError, ValueError):
+            return False
+        try:
+            row = con.execute(
+                "SELECT 1 FROM sessions WHERE session_id = ? LIMIT 1",
+                [session_id],
+            ).fetchone()
+            return row is not None
+        except duckdb.Error:
+            return False
+        finally:
+            con.close()
 
 
 def drop_session(root: Path, session_id: str) -> None:
     path = ledger_db_path(root)
-    if not path.is_file():
+    if not path.is_file() or path.stat().st_size == 0:
         return
-    con = duckdb.connect(str(path))
-    try:
-        _ensure_schema(con)
-        con.execute("DELETE FROM events WHERE session_id = ?", [session_id])
-        con.execute("DELETE FROM rule_checks WHERE session_id = ?", [session_id])
-        con.execute("DELETE FROM trades WHERE session_id = ?", [session_id])
-        con.execute("DELETE FROM sessions WHERE session_id = ?", [session_id])
-    finally:
-        con.close()
-
-
-def _session_date(session_id: str, wallclock: str) -> date:
-    prefix = session_id[:10]
-    try:
-        return date.fromisoformat(prefix)
-    except ValueError:
-        pass
-    if wallclock:
+    with _LEDGER_LOCK:
+        con = _connect(root)
         try:
-            return date.fromisoformat(wallclock[:10])
-        except ValueError:
-            pass
-    raise LedgerError(f"cannot derive session date from {session_id!r}")
+            with _txn(con):
+                con.execute("DELETE FROM events WHERE session_id = ?", [session_id])
+                con.execute("DELETE FROM rule_checks WHERE session_id = ?", [session_id])
+                con.execute("DELETE FROM trades WHERE session_id = ?", [session_id])
+                con.execute("DELETE FROM sessions WHERE session_id = ?", [session_id])
+        finally:
+            con.close()
 
 
 def iso_week_id(value: date) -> str:
@@ -251,16 +308,25 @@ def _norm_token(text: str) -> str:
     return "".join(TOKEN_RE.findall(text.casefold()))
 
 
+def _tokens(text: str) -> set[str]:
+    return set(TOKEN_RE.findall(text.casefold()))
+
+
 def stated_lab_agree(
     stated_setup: str | None,
     stated_playbook: str | None,
     lab_token: str | None,
     tag_alignment: str | None,
 ) -> bool | None:
-    stated = _norm_token(stated_setup or "") or _norm_token(stated_playbook or "")
-    lab = _norm_token(lab_token or "")
+    stated_raw = stated_setup or stated_playbook or ""
+    lab_raw = lab_token or ""
+    stated = _norm_token(stated_raw)
+    lab = _norm_token(lab_raw)
     if stated and lab:
-        return stated == lab or stated in lab or lab in stated
+        if stated == lab:
+            return True
+        # Whole tokens only. Substring ("POC" in "pdPOC") is a false agree.
+        return bool(_tokens(stated_raw) & _tokens(lab_raw))
     if (tag_alignment or "").strip().casefold() == "all_aligned":
         return True
     return None
@@ -290,19 +356,20 @@ def _read_trades_from_parquet(
     path = store.trades_path(root, session_id)
     if not path.is_file():
         return 0
+    path = _under_root(path, root)
     available = _parquet_columns(con, path)
     tva = _sql_col("tva_trade_id", available, "VARCHAR")
     trade_id = _sql_col("trade_id", available, "VARCHAR")
     src = _duck_path(path)
     con.execute(
         f"""
-        INSERT INTO trades (
+        INSERT OR REPLACE INTO trades (
             session_id, tva_trade_id, trade_id, entry_fill_id, direction,
             instrument, entry_price, exit_price, net_pnl_currency, status, venue
         )
         SELECT
             ? AS session_id,
-            COALESCE({tva}, {trade_id}) AS tva_trade_id,
+            CAST(COALESCE({tva}, {trade_id}) AS VARCHAR) AS tva_trade_id,
             {trade_id} AS trade_id,
             {_sql_col("entry_fill_id", available, "VARCHAR")} AS entry_fill_id,
             {_sql_col("direction", available, "VARCHAR")} AS direction,
@@ -315,6 +382,10 @@ def _read_trades_from_parquet(
         FROM read_parquet('{src}')
         WHERE COALESCE({tva}, {trade_id}) IS NOT NULL
           AND CAST(COALESCE({tva}, {trade_id}) AS VARCHAR) <> ''
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY CAST(COALESCE({tva}, {trade_id}) AS VARCHAR)
+            ORDER BY 1
+        ) = 1
         """,
         [session_id],
     )
@@ -384,11 +455,14 @@ def _insert_rules(con: duckdb.DuckDBPyConnection, root: Path, session_id: str) -
             continue
         reason = item.get("reason")
         con.execute(
-            "INSERT INTO rule_checks VALUES (?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO rule_checks VALUES (?, ?, ?, ?)",
             [session_id, rule, status, str(reason) if reason is not None else None],
         )
         count += 1
-    return count
+    row = con.execute(
+        "SELECT COUNT(*) FROM rule_checks WHERE session_id = ?", [session_id]
+    ).fetchone()
+    return int(row[0]) if row else count
 
 
 def _insert_events(con: duckdb.DuckDBPyConnection, root: Path, session_id: str) -> int:
@@ -415,36 +489,38 @@ def add_session(session_id: str, *, root: Path) -> LedgerAddResult:
         raise ValueError(
             f"session.json id {record.id!r} does not match directory {session_id!r}"
         )
-    day = _session_date(session_id, record.recording.start_wallclock_vienna)
+    day = session_calendar_date(record)
     hours = (record.recording.duration_s or 0.0) / 3600.0
-    con = _connect(root)
-    try:
-        con.execute("DELETE FROM events WHERE session_id = ?", [session_id])
-        con.execute("DELETE FROM rule_checks WHERE session_id = ?", [session_id])
-        con.execute("DELETE FROM trades WHERE session_id = ?", [session_id])
-        con.execute("DELETE FROM sessions WHERE session_id = ?", [session_id])
-        trades = _read_trades_from_parquet(con, root, session_id)
-        _apply_stated_lab(con, root, session_id)
-        rules = _insert_rules(con, root, session_id)
-        events = _insert_events(con, root, session_id)
-        con.execute(
-            """
-            INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                session_id,
-                day,
-                iso_week_id(day),
-                year_month_id(day),
-                record.recording.start_wallclock_vienna,
-                float(record.recording.duration_s or 0.0),
-                record.language,
-                trades,
-                hours,
-            ],
-        )
-    finally:
-        con.close()
+    with _LEDGER_LOCK:
+        con = _connect(root)
+        try:
+            with _txn(con):
+                con.execute("DELETE FROM events WHERE session_id = ?", [session_id])
+                con.execute("DELETE FROM rule_checks WHERE session_id = ?", [session_id])
+                con.execute("DELETE FROM trades WHERE session_id = ?", [session_id])
+                con.execute("DELETE FROM sessions WHERE session_id = ?", [session_id])
+                trades = _read_trades_from_parquet(con, root, session_id)
+                _apply_stated_lab(con, root, session_id)
+                rules = _insert_rules(con, root, session_id)
+                events = _insert_events(con, root, session_id)
+                con.execute(
+                    """
+                    INSERT OR REPLACE INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        session_id,
+                        day,
+                        iso_week_id(day),
+                        year_month_id(day),
+                        record.recording.start_wallclock_vienna,
+                        float(record.recording.duration_s or 0.0),
+                        record.language,
+                        trades,
+                        hours,
+                    ],
+                )
+        finally:
+            con.close()
     store.compute_status(root, session_id)
     return LedgerAddResult(
         session_id=session_id,
@@ -509,12 +585,12 @@ def _tally_stated_lab(rows: list[tuple[Any, ...]]) -> StatedLabTally:
     agree = disagree = unverifiable = 0
     for value, count in rows:
         n = int(count)
-        if value is True:
-            agree += n
-        elif value is False:
-            disagree += n
-        else:
+        if value is None:
             unverifiable += n
+        elif value:
+            agree += n
+        else:
+            disagree += n
     den = agree + disagree
     return StatedLabTally(
         agree=agree,
@@ -550,7 +626,9 @@ def _session_ids_for(
     if not latest or latest[0] is None:
         return []
     latest_day = latest[0]
-    if not isinstance(latest_day, date):
+    if isinstance(latest_day, datetime):
+        latest_day = latest_day.date()
+    elif not isinstance(latest_day, date):
         latest_day = date.fromisoformat(str(latest_day)[:10])
     last_week = iso_week_id(latest_day)
     wanted = {shift_iso_week(last_week, delta) for delta in range(1 - weeks, 1)}
@@ -706,55 +784,65 @@ def build_summary(
     week: str | None = None,
     month: str | None = None,
 ) -> LedgerSummary:
+    if weeks is not None and weeks < 1:
+        raise LedgerError("weeks must be >= 1")
     path = ledger_db_path(root)
-    if not path.is_file():
-        summary = LedgerSummary(weeks=weeks)
-        summary.markdown = render_markdown(summary)
-        return summary
-    con = _connect(root, read_only=True)
-    try:
-        periods: list[LedgerPeriod] = []
-        if week is not None:
-            ids = _session_ids_for(con, week=week)
-            stats = _summarize_ids(con, ids)
-            periods.append(_period(con, "week", week, ids))
-            summary = LedgerSummary(weeks=None, periods=periods, **stats)
-        elif month is not None:
-            ids = _session_ids_for(con, month=month)
-            stats = _summarize_ids(con, ids)
-            periods.append(_period(con, "month", month, ids))
-            summary = LedgerSummary(weeks=None, periods=periods, **stats)
-        else:
-            window = 4 if weeks is None else weeks
-            if window < 1:
-                raise LedgerError("weeks must be >= 1")
-            ids = _session_ids_for(con, weeks=window)
-            stats = _summarize_ids(con, ids)
-            week_ids: list[str] = []
-            if ids:
-                rows = con.execute(
-                    f"""
-                    SELECT iso_week, min(session_date)
-                    FROM sessions
-                    WHERE session_id IN ({", ".join("?" for _ in ids)})
-                    GROUP BY iso_week
-                    ORDER BY min(session_date)
-                    """,
-                    ids,
-                ).fetchall()
-                seen: set[str] = set()
-                for row in rows:
-                    week_id = str(row[0])
-                    if week_id not in seen:
-                        seen.add(week_id)
-                        week_ids.append(week_id)
-            for week_id in week_ids:
-                periods.append(
-                    _period(con, "week", week_id, _session_ids_for(con, week=week_id))
-                )
-            summary = LedgerSummary(weeks=window, periods=periods, **stats)
-    finally:
-        con.close()
+    if not path.is_file() or path.stat().st_size == 0:
+        return _empty_summary(weeks=weeks)
+    with _LEDGER_LOCK:
+        try:
+            con = _connect(root, read_only=True)
+        except LedgerError:
+            return _empty_summary(weeks=weeks)
+        except duckdb.Error as exc:
+            if _is_absent_ledger_error(exc):
+                return _empty_summary(weeks=weeks)
+            raise
+        try:
+            periods: list[LedgerPeriod] = []
+            if week is not None:
+                ids = _session_ids_for(con, week=week)
+                stats = _summarize_ids(con, ids)
+                periods.append(_period(con, "week", week, ids))
+                summary = LedgerSummary(weeks=None, periods=periods, **stats)
+            elif month is not None:
+                ids = _session_ids_for(con, month=month)
+                stats = _summarize_ids(con, ids)
+                periods.append(_period(con, "month", month, ids))
+                summary = LedgerSummary(weeks=None, periods=periods, **stats)
+            else:
+                window = 4 if weeks is None else weeks
+                ids = _session_ids_for(con, weeks=window)
+                stats = _summarize_ids(con, ids)
+                week_ids: list[str] = []
+                if ids:
+                    rows = con.execute(
+                        f"""
+                        SELECT iso_week, min(session_date)
+                        FROM sessions
+                        WHERE session_id IN ({", ".join("?" for _ in ids)})
+                        GROUP BY iso_week
+                        ORDER BY min(session_date)
+                        """,
+                        ids,
+                    ).fetchall()
+                    seen: set[str] = set()
+                    for row in rows:
+                        week_id = str(row[0])
+                        if week_id not in seen:
+                            seen.add(week_id)
+                            week_ids.append(week_id)
+                for week_id in week_ids:
+                    periods.append(
+                        _period(con, "week", week_id, _session_ids_for(con, week=week_id))
+                    )
+                summary = LedgerSummary(weeks=window, periods=periods, **stats)
+        except duckdb.Error as exc:
+            if _is_absent_ledger_error(exc):
+                return _empty_summary(weeks=weeks)
+            raise
+        finally:
+            con.close()
     summary.markdown = render_markdown(summary)
     return summary
 
@@ -768,15 +856,22 @@ def rollup(
     chosen_week = week
     chosen_month = month
     path = ledger_db_path(root)
-    if path.is_file() and (chosen_week == "latest" or chosen_month == "latest"):
-        con = _connect(root, read_only=True)
-        try:
-            if chosen_week == "latest":
-                chosen_week = _latest_week(con)
-            if chosen_month == "latest":
-                chosen_month = _latest_month(con)
-        finally:
-            con.close()
+    if path.is_file() and path.stat().st_size > 0 and (
+        chosen_week == "latest" or chosen_month == "latest"
+    ):
+        with _LEDGER_LOCK:
+            try:
+                con = _connect(root, read_only=True)
+            except (duckdb.Error, LedgerError):
+                con = None
+            else:
+                try:
+                    if chosen_week == "latest":
+                        chosen_week = _latest_week(con)
+                    if chosen_month == "latest":
+                        chosen_month = _latest_month(con)
+                finally:
+                    con.close()
     if chosen_week == "latest":
         chosen_week = None
     if chosen_month == "latest":
@@ -789,6 +884,10 @@ def rollup(
         week_summary = build_summary(root, week=chosen_week)
         month_summary = build_summary(root, month=chosen_month)
         periods = [*week_summary.periods, *month_summary.periods]
+        if not any(period.kind == "month" and period.id == chosen_month for period in periods):
+            periods.append(
+                LedgerPeriod(kind="month", id=chosen_month, **_summarize_ids_empty())
+            )
         summary = LedgerSummary(
             weeks=None,
             sessions=week_summary.sessions,
@@ -800,14 +899,7 @@ def rollup(
             stated_vs_lab=week_summary.stated_vs_lab,
             periods=periods,
         )
-        # Combined markdown uses week totals in the header plus both sections.
-        header = render_markdown(week_summary)
-        month_md = render_markdown(month_summary)
-        month_section = month_md.split("## ", 1)
-        extra = "## " + month_section[1] if len(month_section) > 1 else ""
-        summary.markdown = header.rstrip() + "\n\n" + extra
-        if not extra.endswith("\n"):
-            summary.markdown += "\n"
+        summary.markdown = render_markdown(summary)
         return RollupResult(status="ok", markdown=summary.markdown, summary=summary)
     if chosen_month and not chosen_week:
         summary = build_summary(root, month=chosen_month)
@@ -816,6 +908,18 @@ def rollup(
     else:
         summary = build_summary(root, weeks=1)
     return RollupResult(status="ok", markdown=summary.markdown, summary=summary)
+
+
+def _summarize_ids_empty() -> dict[str, Any]:
+    return {
+        "sessions": 0,
+        "trades": 0,
+        "hours": 0.0,
+        "trades_per_hour": None,
+        "adherence": _empty_adherence(),
+        "violations": ViolationTally(),
+        "stated_vs_lab": StatedLabTally(),
+    }
 
 
 def ledger_add(session_id: str, *, root: Path) -> LedgerAddResult:

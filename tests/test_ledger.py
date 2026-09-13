@@ -1,26 +1,34 @@
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
+import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from fastapi.testclient import TestClient
 
 from tradevidanalyser import store
+from tradevidanalyser.align import align_session
 from tradevidanalyser.cli import main
+from tradevidanalyser.context import FakeNotionClient, context_session
 from tradevidanalyser.doctor import run_doctor
+from tradevidanalyser.evidence import evidence_session
 from tradevidanalyser.ingest import ingest
 from tradevidanalyser.ledger import (
     add_session,
     build_summary,
+    iso_week_id,
     ledger_db_path,
     ledger_summary,
     rollup,
     session_recorded,
     stated_lab_agree,
+    year_month_id,
 )
 from tradevidanalyser.pipeline import extract_session, fills_session, transcribe_session
+from tradevidanalyser.rules import rules_session
 from tradevidanalyser.schema import (
     Insights,
     RecordingInfo,
@@ -30,13 +38,19 @@ from tradevidanalyser.schema import (
 from tradevidanalyser.serve import ALLOWED_RUN_STAGES, create_app
 
 
-def _session(root: Path, session_id: str, *, duration_s: float = 7200.0) -> SessionRecord:
+def _session(
+    root: Path,
+    session_id: str,
+    *,
+    duration_s: float = 7200.0,
+    start: str | None = None,
+) -> SessionRecord:
     record = SessionRecord(
         id=session_id,
         recording=RecordingInfo(
             path=f"recordings/{session_id.replace('_', ' ')}.mp4",
             sha256="0" * 64,
-            start_wallclock_vienna=f"{session_id[:10]}T14:30:00+02:00",
+            start_wallclock_vienna=start or f"{session_id[:10]}T14:30:00+02:00",
             duration_s=duration_s,
             filename=f"{session_id.replace('_', ' ')}.mp4",
         ),
@@ -169,6 +183,11 @@ def test_stated_lab_agree_helpers() -> None:
     assert stated_lab_agree("ONH", None, "pdPOC", None) is False
     assert stated_lab_agree(None, None, None, "all_aligned") is True
     assert stated_lab_agree(None, None, None, None) is None
+    # Substring matching is a false agree for the desk's token set.
+    assert stated_lab_agree("POC", None, "pdPOC", None) is False
+    assert stated_lab_agree("VWAP", None, "dVWAP", None) is False
+    assert stated_lab_agree("ONH reclaim", None, "ONH", None) is True
+    assert stated_lab_agree("d-VWAP", None, "dVWAP", None) is True
 
 
 def test_add_is_idempotent(tva_root: Path) -> None:
@@ -346,3 +365,188 @@ def test_add_without_trades_still_records_session(tva_root: Path) -> None:
     assert summary.sessions == 1
     assert summary.trades == 0
     assert summary.trades_per_hour == 0.0
+
+
+def test_zero_duration_trades_per_hour_is_none(tva_root: Path) -> None:
+    record = _session(tva_root, "2026-09-11_143000", duration_s=0.0)
+    _write_trades(tva_root, record.id)
+    add_session(record.id, root=tva_root)
+    summary = build_summary(tva_root, week="2026-W37")
+    assert summary.trades == 2
+    assert summary.hours == 0.0
+    assert summary.trades_per_hour is None
+    assert "Trades/hour: n/a" in summary.markdown
+
+
+def test_all_unverifiable_rules_rate_is_none(tva_root: Path) -> None:
+    record = _session(tva_root, "2026-09-11_143000")
+    store.write_json(
+        store.rules_path(tva_root, record.id),
+        {
+            "schema_version": "1",
+            "session_id": record.id,
+            "rules": [{"rule": "R-DLL", "status": "unverifiable", "evidence": {}}],
+        },
+    )
+    add_session(record.id, root=tva_root)
+    summary = ledger_summary(tva_root, weeks=1)
+    assert summary.adherence.passed == 0
+    assert summary.adherence.violated == 0
+    assert summary.adherence.unverifiable == 1
+    assert summary.adherence.rate is None
+    assert summary.stated_vs_lab.rate is None
+
+
+def test_failed_replace_keeps_previous_rows(tva_root: Path) -> None:
+    record = _seed(tva_root, "2026-09-11_143000")
+    add_session(record.id, root=tva_root)
+    store.rules_path(tva_root, record.id).write_text("{not-json", encoding="utf-8")
+    with pytest.raises(ValueError):
+        add_session(record.id, root=tva_root)
+    assert session_recorded(tva_root, record.id)
+    summary = ledger_summary(tva_root, weeks=4)
+    assert summary.sessions == 1
+    assert summary.trades == 2
+    assert summary.adherence.passed == 1
+    assert summary.adherence.violated == 1
+
+
+def test_replace_rewrites_rules_not_appends(tva_root: Path) -> None:
+    record = _seed(tva_root, "2026-09-11_143000")
+    add_session(record.id, root=tva_root)
+    store.write_json(
+        store.rules_path(tva_root, record.id),
+        {
+            "schema_version": "1",
+            "session_id": record.id,
+            "rules": [{"rule": "R-MAX10", "status": "violated", "evidence": {}}],
+        },
+    )
+    second = add_session(record.id, root=tva_root)
+    assert second.rules == 1
+    summary = ledger_summary(tva_root, weeks=4)
+    assert summary.adherence.passed == 0
+    assert summary.adherence.violated == 1
+    assert summary.adherence.by_rule["R-MAX10"].violated == 1
+    assert "R-PLAYBOOK" not in summary.adherence.by_rule
+
+
+def test_duplicate_rule_rows_do_not_crash_add(tva_root: Path) -> None:
+    record = _session(tva_root, "2026-09-11_143000")
+    store.write_json(
+        store.rules_path(tva_root, record.id),
+        {
+            "schema_version": "1",
+            "session_id": record.id,
+            "rules": [
+                {"rule": "R-MAX10", "status": "pass", "evidence": {}},
+                {"rule": "R-MAX10", "status": "violated", "evidence": {}},
+            ],
+        },
+    )
+    result = add_session(record.id, root=tva_root)
+    assert result.status == "ok"
+    assert result.rules == 1
+    summary = ledger_summary(tva_root, weeks=1)
+    assert summary.adherence.violated == 1
+    assert summary.adherence.passed == 0
+
+
+def test_empty_ledger_file_is_zeros(tva_root: Path) -> None:
+    path = ledger_db_path(tva_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"")
+    summary = ledger_summary(tva_root, weeks=4)
+    assert summary.sessions == 0
+    assert summary.trades == 0
+    assert summary.trades_per_hour is None
+    assert summary.periods == []
+    client = TestClient(create_app(tva_root))
+    body = client.get("/ledger/summary").json()
+    assert body["weeks"] == 4
+    assert body["sessions"] == 0
+
+
+def test_utc_wallclock_rolls_iso_week(tva_root: Path) -> None:
+    # 22:30 UTC on Sunday 13 Sep is 00:30 Vienna on Monday 14 Sep (2026-W38).
+    # Session-id prefix is still 2026-09-13 (Sunday, 2026-W37) if TZ is dropped.
+    record = _session(
+        tva_root,
+        "2026-09-13_223000",
+        start="2026-09-13T22:30:00+00:00",
+    )
+    add_session(record.id, root=tva_root)
+    con = duckdb.connect(str(ledger_db_path(tva_root)), read_only=True)
+    try:
+        row = con.execute("SELECT session_date, iso_week, year_month FROM sessions").fetchone()
+    finally:
+        con.close()
+    assert row is not None
+    assert row[0] == date(2026, 9, 14)
+    assert row[1] == "2026-W38"
+    assert row[2] == "2026-09"
+    week = build_summary(tva_root, week="2026-W38")
+    assert week.sessions == 1
+    assert build_summary(tva_root, week="2026-W37").sessions == 0
+
+
+def test_iso_week_year_boundary_and_calendar_month(tva_root: Path) -> None:
+    # Monday 2025-12-29 is ISO 2026-W01 but calendar month 2025-12.
+    record = _session(
+        tva_root,
+        "2025-12-29_143000",
+        start="2025-12-29T14:30:00+01:00",
+    )
+    add_session(record.id, root=tva_root)
+    assert iso_week_id(date(2025, 12, 29)) == "2026-W01"
+    assert year_month_id(date(2025, 12, 29)) == "2025-12"
+    assert build_summary(tva_root, week="2026-W01").sessions == 1
+    assert build_summary(tva_root, month="2025-12").sessions == 1
+    assert build_summary(tva_root, month="2026-01").sessions == 0
+    trailing = ledger_summary(tva_root, weeks=1)
+    assert [period.id for period in trailing.periods] == ["2026-W01"]
+
+
+def test_combined_rollup_keeps_empty_month_section(tva_root: Path) -> None:
+    _seed(tva_root, "2026-09-11_143000")
+    add_session("2026-09-11_143000", root=tva_root)
+    both = rollup(tva_root, week="2026-W37", month="2026-08")
+    assert "Week 2026-W37" in both.markdown
+    assert "Month 2026-08" in both.markdown
+    assert both.summary.sessions == 1
+
+
+def test_ledger_refuses_trades_symlink_outside_root(tva_root: Path, tmp_path: Path) -> None:
+    record = _session(tva_root, "2026-09-11_143000")
+    outside = tmp_path / "outside.parquet"
+    table = pa.table({"tva_trade_id": ["T01"], "trade_id": ["jt-1"]})
+    pq.write_table(table, outside)
+    dest = store.trades_path(tva_root, record.id)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        dest.symlink_to(outside)
+    except OSError:
+        pytest.skip("symlink not permitted")
+    with pytest.raises(ValueError, match="TVA_ROOT"):
+        add_session(record.id, root=tva_root)
+    assert not session_recorded(tva_root, record.id)
+
+
+def test_rules_evidence_context_align_drop_stale_ledger(tva_root: Path) -> None:
+    record = _seed(tva_root, "2026-09-11_143000")
+    add_session(record.id, root=tva_root)
+    assert session_recorded(tva_root, record.id)
+    rules_session(record.id, root=tva_root)
+    assert not session_recorded(tva_root, record.id)
+
+    add_session(record.id, root=tva_root)
+    evidence_session(record.id, root=tva_root)
+    assert not session_recorded(tva_root, record.id)
+
+    add_session(record.id, root=tva_root)
+    context_session(record.id, root=tva_root, notion=FakeNotionClient())
+    assert not session_recorded(tva_root, record.id)
+
+    add_session(record.id, root=tva_root)
+    align_session(record.id, root=tva_root)
+    assert not session_recorded(tva_root, record.id)

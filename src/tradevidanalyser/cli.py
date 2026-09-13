@@ -8,6 +8,8 @@ import os
 import sys
 from pathlib import Path
 
+import duckdb
+
 from tradevidanalyser import __version__, config, store
 from tradevidanalyser.doctor import run_doctor
 from tradevidanalyser.ingest import ingest
@@ -370,7 +372,7 @@ def main(argv: list[str] | None = None) -> int:
             app = create_app(root, host=args.host)
             uvicorn.run(app, host=args.host, port=args.port, log_level="info")
             return 0
-    except (FileNotFoundError, ValueError, OSError, RuntimeError) as exc:
+    except (FileNotFoundError, ValueError, OSError, RuntimeError, duckdb.Error) as exc:
         _emit({"error": str(exc)}, as_json=True)
         return 1
     parser.error(f"unknown command {args.cmd}")

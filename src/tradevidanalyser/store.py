@@ -179,6 +179,8 @@ def list_frame_jpgs(root: Path, session_id: str) -> list[Path]:
 
 def invalidate_downstream(root: Path, session_id: str) -> None:
     """Drop transcript/insights/frames/clips/fills/evidence/rules/context/report/ledger/alignment so a changed recording is not left looking complete."""
+    # Ledger first: a failed drop must not leave rows after the artifacts are gone.
+    drop_ledger_session(root, session_id)
     transcript_path(root, session_id).unlink(missing_ok=True)
     insights_path(root, session_id).unlink(missing_ok=True)
     ocr_path(root, session_id).unlink(missing_ok=True)
@@ -189,7 +191,6 @@ def invalidate_downstream(root: Path, session_id: str) -> None:
     rules_path(root, session_id).unlink(missing_ok=True)
     context_path(root, session_id).unlink(missing_ok=True)
     drop_debrief(root, session_id)
-    drop_ledger_session(root, session_id)
     frames = frames_dir(root, session_id)
     if frames.is_dir():
         shutil.rmtree(frames)

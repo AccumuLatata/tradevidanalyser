@@ -711,8 +711,9 @@ def context_session(
         notion_provider=notion_provider,
     )
     store.write_json(store.context_path(root, session_id), report.model_dump(mode="json"))
-    # Brief / lab facts feed the debrief; a rewrite must not leave yesterday's prose.
+    # Brief / lab facts feed the debrief and stated-vs-lab; do not leave yesterday's rows.
     store.drop_debrief(root, session_id)
+    store.drop_ledger_session(root, session_id)
     store.compute_status(root, session_id)
     return ContextResult(
         session_id=session_id,
