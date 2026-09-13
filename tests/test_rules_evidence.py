@@ -154,6 +154,13 @@ def test_r_3c_ct_table() -> None:
     other = _evidence(_et(stated=StatedFields(setup=_cite("IB fade", "seg_032"))))
     assert _by_id(other)["R-3C-CT"].status == "unverifiable"
 
+    denied = _evidence(_et(stated=StatedFields(setup=_cite("ohne 3c", "seg_033"))))
+    assert _by_id(denied)["R-3C-CT"].status == "unverifiable"
+
+    events_denied = [_event("rule_mention", 10, "seg_034", "gegen den Trend ohne 3c")]
+    check = _by_id(_evidence(_et(commentary=["seg_001"])), events_denied)["R-3C-CT"]
+    assert check.status == "violated"
+
 
 def test_r_arrival_cue() -> None:
     events = [_event("rule_mention", 20, "seg_040", "warte auf Kerzenschluss")]
@@ -193,6 +200,12 @@ def test_r_hourly_near_xx50() -> None:
 
     assert _by_id(ev, [])["R-HOURLY"].status == "violated"
 
+    mixed = [
+        _event("hourly_checkin", 50 * 60, "seg_050", "Stunden-Check"),
+        _event("hourly_checkin", 20 * 60, "", "zu früh"),
+    ]
+    assert _by_id(ev, mixed)["R-HOURLY"].status == "violated"
+
 
 def test_r_zone_overlap() -> None:
     ev = _evidence(_et(t0=0, t1=400))
@@ -204,6 +217,10 @@ def test_r_zone_overlap() -> None:
 
     speech_only = _evidence(_et())
     assert _by_id(speech_only, [])["R-ZONE"].status == "unverifiable"
+
+    # Zone spoken after entry (still inside the evidence window) is not an overlap.
+    after = [_event("no_trade_zone", 250, "seg_062", "keine Trades")]
+    _assert_pass_cites(_by_id(ev, after)["R-ZONE"])
 
 
 def test_r_bias_from_event_or_stated() -> None:
@@ -231,6 +248,23 @@ def test_r_tilt_cooldown() -> None:
     assert TILT_COOLDOWN_S == 300.0
 
 
+def test_r_tilt_uses_fill_entry_not_window_pad() -> None:
+    # Clipped window t0=0; fill entry is +30 s. Tilt at 50 s is after entry.
+    fill = _trade(1, entry_s=30, exit_s=90, pnl=5)
+    ev = _evidence(_et(t0=0, t1=210))
+    tilt = [_event("tilt", 50, "seg_080", "TILT")]
+    check = {
+        item.rule: item
+        for item in evaluate_rules(
+            [fill],
+            evidence=ev,
+            session_events=tilt,
+            session_start=T0,
+        )
+    }["R-TILT"]
+    _assert_pass_cites(check)
+
+
 def test_low_alignment_keeps_timing_rules_unverifiable() -> None:
     ev = _evidence(_et(alignment="low", confidence=0.4))
     events = [
@@ -248,6 +282,12 @@ def test_low_alignment_keeps_timing_rules_unverifiable() -> None:
     assert checks["R-HOURLY"].status == "unverifiable"
     assert checks["R-ZONE"].status == "unverifiable"
     assert checks["R-TILT"].status == "unverifiable"
+
+    low_conf = _evidence(_et(alignment=None, confidence=0.4))
+    flagged = _by_id(low_conf, events)
+    assert flagged["R-HOURLY"].status == "unverifiable"
+    assert flagged["R-ZONE"].status == "unverifiable"
+    assert flagged["R-TILT"].status == "unverifiable"
 
 
 def test_evidence_backed_pass_always_cites_a_segment() -> None:
@@ -379,6 +419,34 @@ def test_cli_rules_reads_evidence_and_events(tva_root: Path, capsys) -> None:
     first = store.rules_path(tva_root, record.id).read_text(encoding="utf-8")
     assert rules_session(record.id, root=tva_root).status == "ok"
     assert store.rules_path(tva_root, record.id).read_text(encoding="utf-8") == first
+
+
+def test_unreadable_evidence_does_not_block_deterministic_rules(tva_root: Path) -> None:
+    record = _session(tva_root)
+    _write_trades(tva_root, record.id, [_trade(1, entry_s=0, exit_s=60, pnl=5)])
+    store.evidence_path(tva_root, record.id).write_text("{not-json", encoding="utf-8")
+    store.insights_path(tva_root, record.id).write_text("{not-json", encoding="utf-8")
+    assert rules_session(record.id, root=tva_root).status == "ok"
+    report = store.read_json(store.rules_path(tva_root, record.id))
+    by_id = {row["rule"]: row for row in report["rules"]}
+    assert by_id["R-MAX10"]["status"] == "pass"
+    assert by_id["R-PLAYBOOK"]["status"] == "unverifiable"
+    assert by_id["R-SLTP"]["status"] == "unverifiable"
+
+
+def test_r_zone_uses_fills_when_evidence_missing() -> None:
+    fill = _trade(1, entry_s=200, exit_s=260, pnl=5)
+    zone = [_event("no_trade_zone", 120, "seg_061", "keine Trades")]
+    check = {
+        item.rule: item
+        for item in evaluate_rules(
+            [fill],
+            evidence=None,
+            session_events=zone,
+            session_start=T0,
+        )
+    }["R-ZONE"]
+    assert check.status == "violated"
 
 
 @pytest.mark.golden

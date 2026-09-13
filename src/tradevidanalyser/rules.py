@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import os
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
@@ -68,6 +68,7 @@ _ARRIVAL_RE = re.compile(
     re.I,
 )
 _3C_RE = re.compile(r"\b3c\b", re.I)
+_3C_NEGATED_RE = re.compile(r"\b(?:ohne|kein(?:e|en)?|without|no)\s+3c\b", re.I)
 _CT_RE = re.compile(r"gegen\s+den\s+trend|counter[- ]?trend|gegen\s+die\s+bewegung", re.I)
 
 
@@ -626,6 +627,7 @@ class EvidenceCtx:
     events: tuple[SessionEvent, ...]
     session_start: datetime | None
     alignment: Alignment | None
+    fills: tuple[RuleTrade, ...] = ()
 
 
 def _uniq(items: Iterable[str]) -> list[str]:
@@ -671,14 +673,76 @@ def _spoken_trades(ctx: EvidenceCtx) -> list[EvidenceTrade]:
     return [trade for trade in ctx.evidence.trades if _trade_has_speech(trade)]
 
 
-def _trade_speech_text(trade: EvidenceTrade, events: Sequence[SessionEvent]) -> str:
+def _has_3c(text: str) -> bool:
+    """True when speech names 3c as a confirmation, not a denial (ohne/kein 3c)."""
+    if not text:
+        return False
+    return bool(_3C_RE.search(_3C_NEGATED_RE.sub(" ", text)))
+
+
+def _aware(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _wall_to_video(
+    session_start: datetime,
+    wall: datetime,
+    alignment: Alignment | None,
+) -> float:
+    """Invert §3.5. Naive stamps are UTC (same convention as ``_as_dt``)."""
+    offset = alignment.offset_s if alignment is not None else 0.0
+    drift = alignment.drift_s_per_h if alignment is not None else 0.0
+    delta = (_aware(wall) - _aware(session_start)).total_seconds()
+    denom = 1.0 + float(drift) / 3600.0
+    if abs(denom) < 1e-12:
+        denom = 1.0
+    return (delta - float(offset)) / denom
+
+
+def _entry_video_t(trade: EvidenceTrade, ctx: EvidenceCtx) -> float:
+    """Fill entry in video time. Window pad is a fallback when fills are absent.
+
+    ``window.t0 + PRE_S`` is wrong when the window was clipped at t=0 or the
+    pad was not the default 180 s — prefer the fill clock whenever we have it.
+    """
+    if ctx.session_start is not None:
+        for fill in ctx.fills:
+            if fill.tva_trade_id == trade.tva_trade_id:
+                return _wall_to_video(ctx.session_start, fill.entry_timestamp, ctx.alignment)
+    return trade.window.t0 + EVIDENCE_PRE_S
+
+
+def _entry_points(ctx: EvidenceCtx) -> list[tuple[str, float]]:
+    """Video-time entries from fills when the session clock is known, else windows."""
+    if ctx.session_start is not None and ctx.fills:
+        return [
+            (
+                fill.tva_trade_id,
+                _wall_to_video(ctx.session_start, fill.entry_timestamp, ctx.alignment),
+            )
+            for fill in ctx.fills
+        ]
+    if ctx.evidence is None:
+        return []
+    return [(trade.tva_trade_id, _entry_video_t(trade, ctx)) for trade in ctx.evidence.trades]
+
+
+def _trade_speech_text(
+    trade: EvidenceTrade,
+    events: Sequence[SessionEvent],
+    *,
+    until: float | None = None,
+) -> str:
     parts: list[str] = []
     for name in STATED_FIELD_NAMES:
         cite = _stated_cite(trade, name)
         if cite is not None and cite.value:
             parts.append(cite.value)
+    t1 = trade.window.t1 if until is None else until
     for event in events:
-        if trade.window.t0 <= event.t <= trade.window.t1 and event.text:
+        if trade.window.t0 <= event.t <= t1 and event.text:
             parts.append(event.text)
     return " ".join(parts)
 
@@ -707,11 +771,13 @@ def _event_segs(
 
 
 def _alignment_too_low(ctx: EvidenceCtx) -> bool:
-    if ctx.alignment is not None and ctx.alignment.confidence < ALIGNMENT_LOW:
-        return True
+    if ctx.alignment is not None:
+        return ctx.alignment.confidence < ALIGNMENT_LOW
     if ctx.evidence is not None and ctx.evidence.trades:
-        if all(trade.alignment == "low" for trade in ctx.evidence.trades):
-            return True
+        return all(
+            trade.alignment == "low" or trade.alignment_confidence < ALIGNMENT_LOW
+            for trade in ctx.evidence.trades
+        )
     return False
 
 
@@ -791,6 +857,26 @@ def _eval_defined(ctx: EvidenceCtx) -> RuleCheck:
     return _pass_cited("R-DEFINED", evidence)
 
 
+def _cited_matching(
+    trade: EvidenceTrade,
+    ctx: EvidenceCtx,
+    predicate: Callable[[str], object],
+    *,
+    until: float,
+) -> list[str]:
+    segs: list[str] = []
+    for event in ctx.events:
+        if not (trade.window.t0 <= event.t <= until):
+            continue
+        if event.seg and predicate(event.text or ""):
+            segs.append(event.seg)
+    for name in STATED_FIELD_NAMES:
+        cite = _stated_cite(trade, name)
+        if cite is not None and cite.seg and predicate(cite.value or ""):
+            segs.append(cite.seg)
+    return _uniq(segs)
+
+
 def _eval_3c_ct(ctx: EvidenceCtx) -> RuleCheck:
     spoken = _spoken_trades(ctx)
     if not spoken:
@@ -799,33 +885,17 @@ def _eval_3c_ct(ctx: EvidenceCtx) -> RuleCheck:
     passed: list[str] = []
     segs: list[str] = []
     for trade in spoken:
-        text = _trade_speech_text(trade, ctx.events)
-        cited = _event_segs(
-            ctx.events,
-            pattern=_3C_RE,
-            t0=trade.window.t0,
-            t1=trade.window.t1,
-        )
-        for name in STATED_FIELD_NAMES:
-            cite = _stated_cite(trade, name)
-            if cite is not None and cite.seg and _3C_RE.search(cite.value or ""):
-                cited.append(cite.seg)
-        cited = _uniq(cited)
-        if _3C_RE.search(text):
+        entry_t = _entry_video_t(trade, ctx)
+        text = _trade_speech_text(trade, ctx.events, until=entry_t)
+        cited = _cited_matching(trade, ctx, _has_3c, until=entry_t)
+        if _has_3c(text):
             if cited:
                 segs.extend(cited)
                 passed.append(trade.tva_trade_id)
             continue
         if _CT_RE.search(text):
             violated.append(trade.tva_trade_id)
-            segs.extend(
-                _event_segs(
-                    ctx.events,
-                    pattern=_CT_RE,
-                    t0=trade.window.t0,
-                    t1=trade.window.t1,
-                )
-            )
+            segs.extend(_cited_matching(trade, ctx, _CT_RE.search, until=entry_t))
     evidence = {"segs": _uniq(segs), "trade_ids": violated, "passed": passed}
     if violated:
         return _check(
@@ -852,18 +922,9 @@ def _eval_arrival(ctx: EvidenceCtx) -> RuleCheck:
     passed: list[str] = []
     segs: list[str] = []
     for trade in spoken:
-        text = _trade_speech_text(trade, ctx.events)
-        cited = _event_segs(
-            ctx.events,
-            pattern=_ARRIVAL_RE,
-            t0=trade.window.t0,
-            t1=trade.window.t1,
-        )
-        for name in STATED_FIELD_NAMES:
-            cite = _stated_cite(trade, name)
-            if cite is not None and cite.seg and _ARRIVAL_RE.search(cite.value or ""):
-                cited.append(cite.seg)
-        cited = _uniq(cited)
+        entry_t = _entry_video_t(trade, ctx)
+        text = _trade_speech_text(trade, ctx.events, until=entry_t)
+        cited = _cited_matching(trade, ctx, _ARRIVAL_RE.search, until=entry_t)
         if _ARRIVAL_RE.search(text):
             if cited:
                 segs.extend(cited)
@@ -905,12 +966,15 @@ def _eval_hourly(ctx: EvidenceCtx) -> RuleCheck:
         )
     near: list[str] = []
     far: list[str] = []
+    far_hit = False
     for event in checkins:
-        bucket = near if HOURLY_MINUTE_LO <= _event_minute(event, ctx) <= HOURLY_MINUTE_HI else far
+        is_near = HOURLY_MINUTE_LO <= _event_minute(event, ctx) <= HOURLY_MINUTE_HI
+        if not is_near:
+            far_hit = True
         if event.seg:
-            bucket.append(event.seg)
+            (near if is_near else far).append(event.seg)
     evidence = {"segs": _uniq([*near, *far]), "near": near, "far": far}
-    if far:
+    if far_hit:
         return _check("R-HOURLY", "violated", evidence, "check-in not near xx:50")
     return _pass_cited("R-HOURLY", evidence)
 
@@ -934,13 +998,12 @@ def _eval_zone(ctx: EvidenceCtx) -> RuleCheck:
             "no no-trade zone declared",
         )
     overlaps: list[dict] = []
-    trades = ctx.evidence.trades if ctx.evidence is not None else []
     for event in zones:
-        for trade in trades:
-            if trade.window.t0 <= event.t <= trade.window.t1:
-                overlaps.append(
-                    {"tva_trade_id": trade.tva_trade_id, "seg": event.seg, "t": event.t}
-                )
+        for trade_id, entry_t in _entry_points(ctx):
+            # Pre-entry lookback only. The evidence window includes post-exit
+            # speech; a "keine Trades" after flatten is not an entry during a zone.
+            if entry_t - EVIDENCE_PRE_S - 1e-9 <= event.t <= entry_t + 1e-9:
+                overlaps.append({"tva_trade_id": trade_id, "seg": event.seg, "t": event.t})
     segs = _uniq(event.seg for event in zones if event.seg)
     evidence = {"segs": segs, "overlaps": overlaps}
     if overlaps:
@@ -962,10 +1025,6 @@ def _eval_bias(ctx: EvidenceCtx) -> RuleCheck:
     return _check("R-BIAS", "violated", evidence, "bias not re-evaluated")
 
 
-def _entry_video_t(trade: EvidenceTrade) -> float:
-    return trade.window.t0 + EVIDENCE_PRE_S
-
-
 def _eval_tilt(ctx: EvidenceCtx) -> RuleCheck:
     tilts = [event for event in ctx.events if event.kind == "tilt"]
     if not tilts:
@@ -978,14 +1037,12 @@ def _eval_tilt(ctx: EvidenceCtx) -> RuleCheck:
             "alignment confidence below threshold",
         )
     breaches: list[dict] = []
-    trades = ctx.evidence.trades if ctx.evidence is not None else []
     for event in tilts:
-        for trade in trades:
-            entry_t = _entry_video_t(trade)
+        for trade_id, entry_t in _entry_points(ctx):
             if event.t < entry_t <= event.t + TILT_COOLDOWN_S:
                 breaches.append(
                     {
-                        "tva_trade_id": trade.tva_trade_id,
+                        "tva_trade_id": trade_id,
                         "seg": event.seg,
                         "gap_s": _r(entry_t - event.t, 3),
                     }
@@ -1017,6 +1074,7 @@ def evaluate_rules(
         events=tuple(session_events or ()),
         session_start=session_start,
         alignment=alignment,
+        fills=tuple(ordered),
     )
     return [
         _eval_dll(ordered, cfg),
@@ -1155,14 +1213,21 @@ def _load_evidence(root: Path, session_id: str) -> Evidence | None:
     path = store.evidence_path(root, session_id)
     if not path.is_file():
         return None
-    return Evidence.model_validate(store.read_json(path))
+    try:
+        return Evidence.model_validate(store.read_json(path))
+    except (OSError, TypeError, ValueError):
+        # Fail closed: do not block deterministic rows on a bad evidence.json.
+        return None
 
 
 def _load_session_events(root: Path, session_id: str) -> list[SessionEvent]:
     path = store.insights_path(root, session_id)
     if not path.is_file():
         return []
-    return list(store.load_insights(root, session_id).session_events)
+    try:
+        return list(store.load_insights(root, session_id).session_events)
+    except (OSError, TypeError, ValueError):
+        return []
 
 
 def rules_session(
