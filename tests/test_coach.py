@@ -307,7 +307,7 @@ def test_grok_mock_is_still_citation_checked(tva_root: Path, monkeypatch: pytest
                                     },
                                     {
                                         "text": "Repeats across ten ledger rows.",
-                                        "cites": pack.row_ids[:10],
+                                        "cites": sorted(instance_cite_ids(pack))[:10],
                                         "question": "Name the playbook?",
                                     },
                                 ],
@@ -332,7 +332,7 @@ def test_grok_mock_is_still_citation_checked(tva_root: Path, monkeypatch: pytest
     assert result.provider == "grok"
     assert report is not None
     assert len(report.claims) == 1
-    assert report.claims[0].cites == pack.row_ids[:10]
+    assert report.claims[0].cites == sorted(instance_cite_ids(pack))[:10]
     assert any("fabricated" in gap for gap in report.gaps)
     assert report.experiment is not None
     assert report.experiment.stop_criterion
@@ -450,7 +450,6 @@ def test_utc_wallclock_uses_vienna_iso_week(tva_root: Path) -> None:
 def test_experiment_start_uses_vienna_today(tva_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _seed_ledger(tva_root, trades=3)
     monkeypatch.setattr("tradevidanalyser.coach.vienna_today", lambda: date(2026, 9, 14))
-    monkeypatch.setattr("tradevidanalyser.coach.date.today", lambda: date(2026, 9, 13))
     pack = gather_pack(tva_root, weeks=4, min_n=3)
     instances = sorted(instance_cite_ids(pack))
     draft = CoachDraft(
