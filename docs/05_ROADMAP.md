@@ -14,7 +14,7 @@ product decision, not a hidden dependency.
 | **TVA2** | Insights extract + headless API (`tva serve`) | TVA1 | PR-08…PR-10 landed; PR-11 Grok routine pack; fake providers default |
 | **TVA3** | Optional frames / clock OCR / chapter clips / opt-in VLM | TVA2 | PR-12…PR-15 landed (frames, OCR, redact/clips, opt-in VLM) |
 | **TVA4** | TradesViz executions join (broker-agnostic fills) | TVA2 | PR-16/17 landed (loader + mirror + recon passthrough) |
-| **TVA5** | Alignment + per-trade windows + rule scorecard | TVA4 | started (PR-18…PR-20 landed; evidence-backed rules later) |
+| **TVA5** | Alignment + per-trade windows + rule scorecard | TVA4 | started (PR-18…PR-21 landed; D4 stays parked) |
 | **TVA6** | Briefs + ThesisTester attribution + debrief/ledger | TVA5 | later |
 | **TVA7** | Coach loop: intent-tag proposals, experiments | TVA6 | later |
 | parked | Full-session Gemini pass; live fill → OBS chapters; viewer; TopstepX API as a *venue adapter* | — | parked |
@@ -97,10 +97,12 @@ No TopstepX API required. Exit: three mixed-venue days parse.
 
 **TVA5 — Align + rules.** Video clock ↔ filename/OCR wall clock
 (`tva align`, PR-18); per-trade evidence windows (`tva evidence`,
-PR-19); deterministic scorecard (`tva rules`, PR-20) from
-`trades.parquet` + `rules.yaml`. Evidence-backed rules are still later.
-**D4 stays parked:** `daily_loss_limit_usd` is null → R-DLL
-`unverifiable`. Do not hard-code $100 or $200.
+PR-19); scorecard (`tva rules`, PR-20/21) from `trades.parquet` +
+`rules.yaml` plus `evidence.json` / `insights.session_events`.
+Absent speech → `unverifiable`, never `pass`. R-SLTP stays
+`unverifiable` until a venue adapter exists (TradesViz has no order
+modifications). **D4 stays parked:** `daily_loss_limit_usd` is null →
+R-DLL `unverifiable`. Do not hard-code $100 or $200.
 
 **TVA6 — Context join.** Notion briefs (English) + DRC + ThesisTester
 `journal attribute|zones|triggers`. Optional `tva report` / publish.

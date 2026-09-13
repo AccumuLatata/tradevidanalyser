@@ -159,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p_rules = sub.add_parser(
         "rules",
-        help="deterministic scorecard from trades.parquet → rules.json",
+        help="rule scorecard from trades.parquet + optional evidence → rules.json",
     )
     p_rules.add_argument("session")
 
