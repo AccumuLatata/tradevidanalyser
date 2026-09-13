@@ -13,6 +13,7 @@ import httpx
 import pyarrow.parquet as pq
 
 from tradevidanalyser import store
+from tradevidanalyser.naming import VIENNA
 from tradevidanalyser.schema import (
     BriefContext,
     DrcContext,
@@ -30,6 +31,12 @@ ENV_LAB_DIR = "TVA_LAB_DIR"
 NOTION_VERSION = "2022-06-28"
 NOTION_API = "https://api.notion.com/v1"
 HTTP_TIMEOUT = 30.0
+NOTION_PAGE_SIZE = 100
+NOTION_MAX_PAGES = 50
+_NOTION_ID = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    r"|^[0-9a-fA-F]{32}$"
+)
 _MONTHS = (
     "Jan",
     "Feb",
@@ -112,16 +119,25 @@ def drc_title(day: date) -> str:
 
 
 def session_calendar_date(record: SessionRecord) -> date:
-    try:
-        return date.fromisoformat(record.id[:10])
-    except ValueError:
-        pass
+    """Vienna calendar date of the recording. Naive stamps are Vienna (align).
+
+    Prefer ``start_wallclock_vienna`` so a UTC-stored instant still maps to the
+    desk clock. Session-id ``YYYY-MM-DD_…`` is the fallback when the wallclock
+    is unreadable — never ``datetime.date()`` on a UTC value (that drops TZ).
+    """
     raw = record.recording.start_wallclock_vienna
     try:
         parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        parsed = None
+    if parsed is not None:
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=VIENNA)
+        return parsed.astimezone(VIENNA).date()
+    try:
+        return date.fromisoformat(record.id[:10])
     except ValueError as exc:
         raise ContextError(f"unreadable session date on {record.id!r}") from exc
-    return parsed.date()
 
 
 def _require_safe_session_id(session_id: str) -> str:
@@ -146,6 +162,10 @@ def _cell(value: object) -> str | None:
     if not text or text.lower() in {"none", "nan", "nat", "<na>"}:
         return None
     return text
+
+
+def _norm_title(text: str) -> str:
+    return " ".join((text or "").split())
 
 
 def _pick_labeled(page: NotionPage, aliases: tuple[str, ...]) -> str | None:
@@ -210,8 +230,9 @@ class FakeNotionClient:
     pages: list[NotionPage] = field(default_factory=list)
 
     def find_page(self, title: str) -> NotionPage | None:
+        want = _norm_title(title)
         for page in self.pages:
-            if page.title == title:
+            if _norm_title(page.title) == want:
                 return page
         return None
 
@@ -227,7 +248,10 @@ class LiveNotionClient:
         if not api_key.strip():
             raise ContextError("NOTION_API_KEY is unset")
         self._key = api_key.strip()
-        self._database_id = (database_id or "").strip() or None
+        raw_db = (database_id or "").strip()
+        if raw_db and _NOTION_ID.match(raw_db) is None:
+            raise ContextError("TVA_NOTION_JOURNAL_DB is not a Notion id")
+        self._database_id = raw_db or None
         self._client = client
 
     def _headers(self) -> dict[str, str]:
@@ -242,9 +266,13 @@ class LiveNotionClient:
         client = self._client or httpx.Client(timeout=HTTP_TIMEOUT)
         try:
             if self._database_id:
-                found = self._query_database(client, title)
-                if found is not None:
-                    return found
+                try:
+                    found = self._query_database(client, title)
+                    if found is not None:
+                        return found
+                except (ContextError, httpx.HTTPError):
+                    # Bad/unknown DB must not hide workspace search.
+                    pass
             return self._search_title(client, title)
         except httpx.HTTPError as exc:
             raise ContextError(f"Notion request failed: {exc}") from exc
@@ -252,39 +280,94 @@ class LiveNotionClient:
             if own:
                 client.close()
 
+    def _iter_pages(
+        self,
+        client: httpx.Client,
+        url: str,
+        *,
+        json_body: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+        method: str = "POST",
+    ) -> list[object]:
+        results: list[object] = []
+        cursor: str | None = None
+        for _ in range(NOTION_MAX_PAGES):
+            if method == "POST":
+                body = dict(json_body or {})
+                body["page_size"] = NOTION_PAGE_SIZE
+                if cursor:
+                    body["start_cursor"] = cursor
+                response = client.post(url, headers=self._headers(), json=body)
+            else:
+                query = dict(params or {})
+                query["page_size"] = NOTION_PAGE_SIZE
+                if cursor:
+                    query["start_cursor"] = cursor
+                response = client.get(url, headers=self._headers(), params=query)
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise ContextError("Notion returned a non-object")
+            chunk = payload.get("results") or []
+            if isinstance(chunk, list):
+                results.extend(chunk)
+            if not payload.get("has_more"):
+                break
+            nxt = payload.get("next_cursor")
+            if not nxt:
+                break
+            cursor = str(nxt)
+        return results
+
+    def _page_matches(self, page: NotionPage, title: str) -> bool:
+        if _norm_title(page.title) != _norm_title(title):
+            return False
+        if not self._database_id:
+            return True
+        if not page.database_id:
+            return True
+        return page.database_id.replace("-", "").lower() == self._database_id.replace(
+            "-", ""
+        ).lower()
+
     def _query_database(self, client: httpx.Client, title: str) -> NotionPage | None:
-        response = client.post(
-            f"{NOTION_API}/databases/{self._database_id}/query",
-            headers=self._headers(),
-            json={"page_size": 20},
-        )
-        response.raise_for_status()
-        payload = response.json()
-        if not isinstance(payload, dict):
-            raise ContextError("Notion database query returned a non-object")
-        for raw in payload.get("results") or []:
-            page = self._hydrate(client, raw)
-            if page is not None and page.title == title:
-                return page
+        url = f"{NOTION_API}/databases/{self._database_id}/query"
+        last_error: httpx.HTTPError | None = None
+        for prop in ("Name", "Title"):
+            try:
+                raws = self._iter_pages(
+                    client,
+                    url,
+                    json_body={
+                        "filter": {"property": prop, "title": {"equals": title}},
+                    },
+                )
+            except httpx.HTTPStatusError as exc:
+                last_error = exc
+                if exc.response is not None and exc.response.status_code in {400, 404}:
+                    continue
+                raise
+            for raw in raws:
+                page = self._hydrate(client, raw)
+                if page is not None and self._page_matches(page, title):
+                    return page
+            return None
+        if last_error is not None:
+            raise last_error
         return None
 
     def _search_title(self, client: httpx.Client, title: str) -> NotionPage | None:
-        response = client.post(
+        raws = self._iter_pages(
+            client,
             f"{NOTION_API}/search",
-            headers=self._headers(),
-            json={
+            json_body={
                 "query": title,
-                "page_size": 20,
                 "filter": {"value": "page", "property": "object"},
             },
         )
-        response.raise_for_status()
-        payload = response.json()
-        if not isinstance(payload, dict):
-            raise ContextError("Notion search returned a non-object")
-        for raw in payload.get("results") or []:
+        for raw in raws:
             page = self._hydrate(client, raw)
-            if page is not None and page.title == title:
+            if page is not None and self._page_matches(page, title):
                 return page
         return None
 
@@ -303,7 +386,7 @@ class LiveNotionClient:
         if isinstance(parent, dict):
             database_id = parent.get("database_id")
         return NotionPage(
-            title=title,
+            title=_norm_title(title),
             url=url,
             properties=props,
             body=body,
@@ -311,19 +394,18 @@ class LiveNotionClient:
         )
 
     def _page_body(self, client: httpx.Client, page_id: str) -> str:
-        response = client.get(
-            f"{NOTION_API}/blocks/{page_id}/children",
-            headers=self._headers(),
-            params={"page_size": 100},
-        )
-        if response.status_code == 404:
-            return ""
-        response.raise_for_status()
-        payload = response.json()
-        if not isinstance(payload, dict):
-            return ""
+        try:
+            blocks = self._iter_pages(
+                client,
+                f"{NOTION_API}/blocks/{page_id}/children",
+                method="GET",
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response is not None and exc.response.status_code == 404:
+                return ""
+            raise
         lines: list[str] = []
-        for block in payload.get("results") or []:
+        for block in blocks:
             if not isinstance(block, dict):
                 continue
             text = _block_text(block)
@@ -372,6 +454,10 @@ def _flatten_properties(props: object) -> dict[str, str]:
             select = value.get("select") or {}
             if isinstance(select, dict):
                 text = str(select.get("name") or "")
+        elif kind == "status":
+            status = value.get("status") or {}
+            if isinstance(status, dict):
+                text = str(status.get("name") or "")
         elif kind == "multi_select":
             names = [
                 str(item.get("name"))
@@ -381,6 +467,14 @@ def _flatten_properties(props: object) -> dict[str, str]:
             text = ", ".join(names)
         elif kind == "number" and value.get("number") is not None:
             text = str(value.get("number"))
+        elif kind == "formula":
+            formula = value.get("formula") or {}
+            if isinstance(formula, dict):
+                ftype = formula.get("type")
+                if ftype == "string" and formula.get("string"):
+                    text = str(formula.get("string"))
+                elif ftype == "number" and formula.get("number") is not None:
+                    text = str(formula.get("number"))
         elif kind == "url" and value.get("url"):
             text = str(value.get("url"))
         if text:
@@ -444,17 +538,39 @@ def _read_parquet_rows(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def _fill_key(row: dict[str, Any]) -> str | None:
+    return _cell(row.get("entry_fill_id")) or _cell(row.get("fill_id"))
+
+
 def _match_lab_row(trade: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any] | None:
-    fill = _cell(trade.get("entry_fill_id"))
+    """Join on ``entry_fill_id`` first; ``trade_id`` only as the documented mapping.
+
+    A first-row ``trade_id`` hit must not beat a later ``entry_fill_id`` hit, and
+    a conflicting lab ``entry_fill_id`` must not fall back to ``trade_id``.
+    """
+    fill = _fill_key(trade)
     trade_id = _cell(trade.get("trade_id"))
-    for row in rows:
-        lab_fill = _cell(row.get("entry_fill_id"))
-        lab_trade = _cell(row.get("trade_id"))
-        if fill and lab_fill and fill == lab_fill:
-            return row
-        if fill and lab_trade and fill == lab_trade:
-            return row
-        if trade_id and lab_trade and trade_id == lab_trade:
+    if fill:
+        for row in rows:
+            lab_fill = _fill_key(row)
+            if lab_fill and lab_fill == fill:
+                return row
+        for row in rows:
+            lab_trade = _cell(row.get("trade_id"))
+            if lab_trade and lab_trade == fill:
+                return row
+        for row in rows:
+            lab_fill = _fill_key(row)
+            if lab_fill and trade_id and lab_fill == trade_id:
+                return row
+    if trade_id:
+        for row in rows:
+            lab_trade = _cell(row.get("trade_id"))
+            lab_fill = _fill_key(row)
+            if not lab_trade or lab_trade != trade_id:
+                continue
+            if fill and lab_fill and lab_fill != fill:
+                continue
             return row
     return None
 
@@ -471,7 +587,7 @@ def _read_session_trades(root: Path, session_id: str) -> list[dict[str, Any]]:
             {
                 "tva_trade_id": tva_id,
                 "trade_id": _cell(row.get("trade_id")),
-                "entry_fill_id": _cell(row.get("entry_fill_id")),
+                "entry_fill_id": _fill_key(row),
             }
         )
     return out
@@ -529,27 +645,32 @@ def build_context(
     gaps: list[str] = []
     brief: BriefContext | None = None
     drc: DrcContext | None = None
+    # Live Notion without a key must fail the stage (not write brief:null).
+    client = notion if notion is not None else get_notion_client(notion_provider)
     try:
-        client = notion if notion is not None else get_notion_client(notion_provider)
+        macro = client.find_page(macro_brief_title(day))
+        ny = client.find_page(ny_brief_title(day))
+        brief = _brief_from_pages(macro, ny)
+        if brief is None:
+            gaps.append(f"brief not found for {brief_day_label(day)}")
+        else:
+            if macro is None:
+                gaps.append(f"{macro_brief_title(day)} not found")
+            if ny is None:
+                gaps.append(f"{ny_brief_title(day)} not found")
+            if not any(
+                (brief.bias_nq, brief.bias_es, brief.conviction, brief.kill_levels)
+            ):
+                gaps.append("brief has no quoted bias/conviction/kill levels")
+        drc_page = client.find_page(drc_title(day))
+        if drc_page is not None:
+            drc = _drc_from_page(drc_page)
+        else:
+            gaps.append(f"{drc_title(day)} not found")
     except ContextError as exc:
         gaps.append(str(exc))
-        client = None
-    if client is not None:
-        try:
-            macro = client.find_page(macro_brief_title(day))
-            ny = client.find_page(ny_brief_title(day))
-            brief = _brief_from_pages(macro, ny)
-            if brief is None:
-                gaps.append(f"brief not found for {brief_day_label(day)}")
-            drc_page = client.find_page(drc_title(day))
-            if drc_page is not None:
-                drc = _drc_from_page(drc_page)
-            else:
-                gaps.append(f"{drc_title(day)} not found")
-        except ContextError as exc:
-            gaps.append(str(exc))
-            brief = None
-            drc = None
+        brief = None
+        drc = None
     lab: LabContext | None = None
     resolved = resolve_lab_dir(lab_dir)
     if resolved is None:

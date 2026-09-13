@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from tradevidanalyser import config, store
 from tradevidanalyser.cli import main
 from tradevidanalyser.context import (
+    ENV_JOURNAL_DB,
     ENV_NOTION_KEY,
     ENV_NOTION_PROVIDER,
     FakeNotionClient,
@@ -24,6 +25,7 @@ from tradevidanalyser.context import (
     get_notion_client,
     macro_brief_title,
     ny_brief_title,
+    session_calendar_date,
 )
 from tradevidanalyser.doctor import run_doctor
 from tradevidanalyser.ingest import ingest
@@ -31,14 +33,18 @@ from tradevidanalyser.pipeline import extract_session, fills_session, transcribe
 from tradevidanalyser.schema import RecordingInfo, SessionRecord
 from tradevidanalyser.serve import ALLOWED_RUN_STAGES, create_app
 
-
-def _session(root: Path, session_id: str = "2026-09-11_143000") -> SessionRecord:
+def _session(
+    root: Path,
+    session_id: str = "2026-09-11_143000",
+    *,
+    start: str = "2026-09-11T14:30:00+02:00",
+) -> SessionRecord:
     record = SessionRecord(
         id=session_id,
         recording=RecordingInfo(
             path="recordings/2026-09-11 14-30-00.mp4",
             sha256="0" * 64,
-            start_wallclock_vienna="2026-09-11T14:30:00+02:00",
+            start_wallclock_vienna=start,
             duration_s=3600.0,
             filename="2026-09-11 14-30-00.mp4",
         ),
@@ -341,8 +347,260 @@ def test_live_without_key_does_not_construct_client(monkeypatch: pytest.MonkeyPa
 
 def test_doctor_notion_key_warns(tva_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(ENV_NOTION_KEY, raising=False)
+    monkeypatch.delenv(ENV_NOTION_PROVIDER, raising=False)
     ids = {item.id: item for item in run_doctor(tva_root).checks}
     assert ids["notion_key"].status == "warn"
+    assert ids["notion_provider"].status == "ok"
+
+
+def test_doctor_live_notion_without_key_fails(
+    tva_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(ENV_NOTION_KEY, raising=False)
+    monkeypatch.setenv(ENV_NOTION_PROVIDER, "notion")
+    report = run_doctor(tva_root)
+    ids = {item.id: item for item in report.checks}
+    assert ids["notion_key"].status == "warn"
+    assert ids["notion_provider"].status == "fail"
+    assert not report.ok
+
+
+def test_utc_wallclock_uses_vienna_calendar_date() -> None:
+    # 22:30 UTC on 11 Sep is 00:30 Vienna on 12 Sep.
+    record = SessionRecord(
+        id="2026-09-11_223000",
+        recording=RecordingInfo(
+            path="recordings/2026-09-11 22-30-00.mp4",
+            sha256="0" * 64,
+            start_wallclock_vienna="2026-09-11T22:30:00+00:00",
+            duration_s=3600.0,
+            filename="2026-09-11 22-30-00.mp4",
+        ),
+    )
+    assert session_calendar_date(record) == date(2026, 9, 12)
+    naive = record.model_copy(
+        update={
+            "recording": record.recording.model_copy(
+                update={"start_wallclock_vienna": "2026-09-12T00:30:00"}
+            )
+        }
+    )
+    assert session_calendar_date(naive) == date(2026, 9, 12)
+
+
+def test_utc_wallclock_selects_vienna_day_brief(tva_root: Path) -> None:
+    record = _session(
+        tva_root,
+        "2026-09-11_223000",
+        start="2026-09-11T22:30:00+00:00",
+    )
+    pages = [
+        NotionPage(title="11 Sep 2026 NY session Brief", url="https://notion.so/wrong"),
+        NotionPage(
+            title="12 Sep 2026 NY session Brief",
+            url="https://notion.so/ny",
+            properties={"Bias NQ": "long ONH"},
+        ),
+    ]
+    report = build_context(record, root=tva_root, notion=FakeNotionClient(pages))
+    assert report.brief is not None
+    assert report.brief.ny_url == "https://notion.so/ny"
+    assert report.brief.bias_nq == "long ONH"
+
+
+def test_lab_join_prefers_entry_fill_id_over_trade_id(
+    tva_root: Path, tmp_path: Path
+) -> None:
+    record = _session(tva_root)
+    _write_trades(
+        tva_root,
+        record.id,
+        [{"tva_trade_id": "T01", "trade_id": "jt-1", "entry_fill_id": "fill-a"}],
+    )
+    lab = tmp_path / "journal"
+    lab.mkdir()
+    _write_table(
+        lab / "attribution.parquet",
+        [
+            {
+                "trade_id": "jt-1",
+                "entry_fill_id": "fill-other",
+                "nearest_level_token": "WRONG",
+            },
+            {
+                "trade_id": "fill-a",
+                "nearest_level_token": "ALSO-WRONG",
+            },
+            {
+                "trade_id": "jt-9",
+                "entry_fill_id": "fill-a",
+                "nearest_level_token": "pdPOC",
+            },
+        ],
+    )
+    report = build_context(
+        record,
+        root=tva_root,
+        notion=FakeNotionClient(),
+        lab_dir=lab,
+    )
+    assert report.lab is not None
+    assert report.lab.per_trade["T01"].nearest_level_token == "pdPOC"
+
+
+def test_lab_join_skips_conflicting_fill_on_trade_id(
+    tva_root: Path, tmp_path: Path
+) -> None:
+    record = _session(tva_root)
+    _write_trades(
+        tva_root,
+        record.id,
+        [{"tva_trade_id": "T01", "trade_id": "jt-1", "entry_fill_id": "fill-a"}],
+    )
+    lab = tmp_path / "journal"
+    lab.mkdir()
+    _write_table(
+        lab / "attribution.parquet",
+        [
+            {
+                "trade_id": "jt-1",
+                "entry_fill_id": "fill-other",
+                "nearest_level_token": "WRONG",
+            }
+        ],
+    )
+    report = build_context(
+        record,
+        root=tva_root,
+        notion=FakeNotionClient(),
+        lab_dir=lab,
+    )
+    assert report.lab is not None
+    assert report.lab.per_trade["T01"].nearest_level_token is None
+    assert any("no lab row for T01" in gap for gap in report.gaps)
+
+
+def test_live_without_key_fails_build_context(
+    tva_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = _session(tva_root)
+    monkeypatch.delenv(ENV_NOTION_KEY, raising=False)
+    monkeypatch.setenv(ENV_NOTION_PROVIDER, "notion")
+    with pytest.raises(ValueError, match="NOTION_API_KEY"):
+        build_context(record, root=tva_root, notion_provider="notion")
+    assert not store.context_path(tva_root, record.id).is_file()
+
+
+def test_live_search_paginates_past_first_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(ENV_NOTION_KEY, "secret")
+    monkeypatch.setenv(ENV_NOTION_PROVIDER, "notion")
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(f"{request.method} {request.url.path}")
+        if request.url.path == "/v1/search":
+            body = request.read()
+            text = body.decode("utf-8")
+            if "start_cursor" not in text:
+                return httpx.Response(
+                    200,
+                    json={
+                        "results": [
+                            {
+                                "object": "page",
+                                "id": "page-0",
+                                "url": "https://notion.so/other",
+                                "properties": {
+                                    "Name": {
+                                        "type": "title",
+                                        "title": [{"plain_text": "10 Sep 2026 NY session Brief"}],
+                                    }
+                                },
+                            }
+                        ],
+                        "has_more": True,
+                        "next_cursor": "cur-2",
+                    },
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "object": "page",
+                            "id": "page-1",
+                            "url": "https://notion.so/ny",
+                            "properties": {
+                                "Name": {
+                                    "type": "title",
+                                    "title": [
+                                        {"plain_text": "11 Sep 2026 NY session Brief  "}
+                                    ],
+                                },
+                                "Bias NQ": {
+                                    "type": "status",
+                                    "status": {"name": "short dVWAP"},
+                                },
+                            },
+                        }
+                    ],
+                    "has_more": False,
+                },
+            )
+        if request.url.path.endswith("/children"):
+            return httpx.Response(200, json={"results": [], "has_more": False})
+        return httpx.Response(404, json={"message": "no"})
+
+    notion = get_notion_client("notion", client=httpx.Client(transport=httpx.MockTransport(handler)))
+    page = notion.find_page("11 Sep 2026 NY session Brief")
+    assert page is not None
+    assert page.properties["Bias NQ"] == "short dVWAP"
+    assert calls.count("POST /v1/search") >= 2
+
+
+def test_live_db_error_falls_back_to_search(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(ENV_NOTION_KEY, "secret")
+    monkeypatch.setenv(ENV_NOTION_PROVIDER, "notion")
+    monkeypatch.setenv(ENV_JOURNAL_DB, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/databases/" in request.url.path:
+            return httpx.Response(400, json={"message": "unknown property"})
+        if request.url.path == "/v1/search":
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "object": "page",
+                            "id": "page-1",
+                            "url": "https://notion.so/ny",
+                            "properties": {
+                                "Name": {
+                                    "type": "title",
+                                    "title": [{"plain_text": "11 Sep 2026 NY session Brief"}],
+                                }
+                            },
+                        }
+                    ]
+                },
+            )
+        if request.url.path.endswith("/children"):
+            return httpx.Response(200, json={"results": []})
+        return httpx.Response(404, json={"message": "no"})
+
+    notion = get_notion_client("notion", client=httpx.Client(transport=httpx.MockTransport(handler)))
+    page = notion.find_page("11 Sep 2026 NY session Brief")
+    assert page is not None
+    assert page.url == "https://notion.so/ny"
+
+
+def test_invalid_journal_db_is_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(ENV_NOTION_KEY, "secret")
+    monkeypatch.setenv(ENV_NOTION_PROVIDER, "notion")
+    monkeypatch.setenv(ENV_JOURNAL_DB, "../not-an-id")
+    with pytest.raises(ValueError, match="TVA_NOTION_JOURNAL_DB"):
+        get_notion_client("notion")
 
 
 @pytest.mark.golden

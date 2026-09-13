@@ -199,6 +199,20 @@ def run_doctor(root: Path) -> DoctorReport:
             ),
         )
     )
+    notion_provider = (os.environ.get("TVA_NOTION_PROVIDER") or "fake").strip().lower() or "fake"
+    if notion_provider in {"notion", "live"}:
+        if notion_key:
+            np_status, np_detail = "ok", f"TVA_NOTION_PROVIDER={notion_provider}"
+        else:
+            np_status, np_detail = (
+                "fail",
+                "TVA_NOTION_PROVIDER=notion but NOTION_API_KEY is unset",
+            )
+    elif notion_provider in {"fake", "test", "mock"}:
+        np_status, np_detail = "ok", f"TVA_NOTION_PROVIDER={notion_provider}"
+    else:
+        np_status, np_detail = "warn", f"TVA_NOTION_PROVIDER={notion_provider}"
+    checks.append(DoctorCheck(id="notion_provider", status=np_status, detail=np_detail))
 
     el_key = bool((os.environ.get("ELEVENLABS_API_KEY") or "").strip())
     checks.append(
