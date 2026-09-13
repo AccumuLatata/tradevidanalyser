@@ -124,6 +124,7 @@ Every stage is a CLI subcommand, idempotent, writing into
 | Evidence | `tva evidence <session>` | CLI (not a bot run stage) | `evidence.json` per-trade windows + cited stated fields | yes, optional |
 | Rules | `tva rules <session>` | CLI (not a bot run stage) | `rules.json` scorecard from `trades.parquet` plus `evidence.json` / `insights.session_events` | yes, optional |
 | Context | `tva context <session> [--lab-dir]` | CLI (not a bot run stage) | `context.json` briefs/DRC + lab join on `entry_fill_id` | yes, optional |
+| Report | `tva report <session>` | CLI (not a bot run stage) | `debrief.md` / `debrief.json` facts + cited prose | yes, optional |
 
 `tva run --latest` is the scheduler entry on the PC. `tva serve` is the
 Mac entry. Same package.
@@ -198,6 +199,11 @@ context:                         # PR-22; omit until `tva context`
         inferred_triggers_1m, zone_id}}} | null
   gaps: []
   # Notion fake by default; live needs NOTION_API_KEY. Lab parquet is read-only.
+debrief:                         # PR-23; omit until `tva report`
+  md / json, fixed section order: source · day · trades · rules ·
+  brief vs behaviour · observations · learnings · gaps
+  # facts from files; prose via ReportProvider (fake default, grok opt-in)
+  # every digit run in debrief.md is in trades.parquet / ocr.parquet / context.json
 
 provenance: {app_version, ffmpeg, models, created_at}
 ```
@@ -251,6 +257,9 @@ PR-16 consumes ThesisTester; it does not fork it.
   `entry_fill_id`. TradeVidAnalyser never computes levels.
 - Spoken setup names become *proposed* TradesViz tags (`proposed` until a
   human confirms). Tags stay intent, not evidence.
+- **Debrief (PR-23):** `tva report` reads `context.json`, `trades.parquet`,
+  `rules.json`, and `evidence.json`. Facts are rendered from those files.
+  Prose must cite ids. ThesisTester levels are never recomputed.
 
 Good reasons to do that join *eventually*:
 
@@ -285,6 +294,9 @@ couples the first useful API to a second repo and a journal export ritual.
   `TVA_API_TOKEN`; the process refuses to start without it. Clients send
   `Authorization: Bearer …`. Clips stay off unless `TVA_SERVE_MEDIA=1`.
 - Sunday audit (Question Bot): `GET /sessions?days=7` + `/health`.
+- `tva report` is CLI-only and is not a `POST /run` stage. The bot pack
+  still writes its Notion note from insights; it does not fetch
+  `debrief.md`.
 
 Copy-ready pack: [`TVA_GROK_ROUTINE_PACK.md`](TVA_GROK_ROUTINE_PACK.md)
 and [`examples/bot/`](../examples/bot/). Paste `SYSTEM.md` as the bot

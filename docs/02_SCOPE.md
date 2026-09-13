@@ -96,9 +96,9 @@ They wait until v1 is boring and reliable.
     and `journal attribute` / `zones` / `triggers` parquet next to spoken
     setup names. "He said ONH; the lab tagged pdPOC." Levels are never
     recomputed. Missing brief → `brief: null` + a gap.
-11. **Daily debrief page + coaching ledger + Notion publish** — Grok can
-    already write Notion; v1 just has to give it facts. A dedicated publish
-    command is optional later.
+11. **Daily debrief page + coaching ledger + Notion publish** — `tva report`
+    (PR-23) writes `debrief.md` / `debrief.json` from files plus cited
+    prose. Ledger and a dedicated Notion publish command stay later.
 12. **Intent-tag proposals back into TradesViz.**
 
 ## 5. Out of scope (all phases unless reopened)

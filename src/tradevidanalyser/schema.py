@@ -256,6 +256,24 @@ class SessionContext(BaseModel):
     gaps: list[str] = Field(default_factory=list)
 
 
+class DebriefSection(BaseModel):
+    id: str
+    title: str
+    kind: Literal["facts", "prose"]
+    body: str = ""
+    cites: list[str] = Field(default_factory=list)
+
+
+class DebriefReport(BaseModel):
+    schema_version: str = SCHEMA_VERSION
+    session_id: str
+    provider: str
+    model: str
+    prompt_version: str
+    sections: list[DebriefSection] = Field(default_factory=list)
+    gaps: list[str] = Field(default_factory=list)
+
+
 class DoctorCheck(BaseModel):
     id: str
     status: Literal["ok", "warn", "fail"]

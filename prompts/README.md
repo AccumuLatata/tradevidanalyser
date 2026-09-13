@@ -64,3 +64,19 @@ and `GeminiVlmProvider`. Fake ignores this file.
 
 `prompt_version` is `{stem}+{sha256[:12]}`. Off unless `TVA_VLM_PROVIDER`
 is set. Default Grok model `grok-4.6` (`TVA_VLM_MODEL`).
+
+## `debrief_v1.md`
+
+English system prompt for `GrokReportProvider` (`tva report`, PR-23).
+Fake report ignores this file.
+
+- Prose only: day paragraph, brief-vs-behaviour, observations, three
+  candidate learnings. The client renders source / trades / rules / gaps
+  from files.
+- Every span must cite an id from the user-supplied allow-list.
+- Every digit run in prose must already appear in `trades.parquet`,
+  `ocr.parquet`, or `context.json`.
+
+`prompt_version` on `debrief.json` is `{stem}+{sha256[:12]}` (Grok) or
+`debrief-fake-v1` (fake). Default model `grok-4.6` (`TVA_REPORT_MODEL`).
+Fake is the default (`TVA_REPORT_PROVIDER=fake`).
