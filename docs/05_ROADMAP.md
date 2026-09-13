@@ -15,7 +15,7 @@ product decision, not a hidden dependency.
 | **TVA3** | Optional frames / clock OCR / chapter clips / opt-in VLM | TVA2 | PR-12…PR-15 landed (frames, OCR, redact/clips, opt-in VLM) |
 | **TVA4** | TradesViz executions join (broker-agnostic fills) | TVA2 | PR-16/17 landed (loader + mirror + recon passthrough) |
 | **TVA5** | Alignment + per-trade windows + rule scorecard | TVA4 | landed (PR-18…PR-21; D4 stays parked) |
-| **TVA6** | Briefs + ThesisTester attribution + debrief/ledger | TVA5 | started (PR-22/23 landed; ledger later) |
+| **TVA6** | Briefs + ThesisTester attribution + debrief/ledger | TVA5 | started (PR-22/23/24 landed; publish later) |
 | **TVA7** | Coach loop: intent-tag proposals, experiments | TVA6 | later |
 | parked | Full-session Gemini pass; live fill → OBS chapters; viewer; TopstepX API as a *venue adapter* | — | parked |
 
@@ -111,9 +111,13 @@ parquet (`--lab-dir`). Join is `entry_fill_id` only — no level math.
 section order. Facts come from files; prose goes through a cited
 `ReportProvider` (`fake` default). Every digit run in the markdown
 must already appear in `trades.parquet`, `ocr.parquet`, or
-`context.json`. Ledger / publish stay later. The two repos share a
-machine when lab parquet is used (likely the Mac, where the study store
-already lives). Notion and Grok report are mocked in CI.
+`context.json`. `tva ledger add` / `tva rollup` (PR-24) keep a DuckDB
+ledger (`sessions`, `trades`, `rule_checks`, `events`) and render
+weekly/monthly adherence, violations, trades/hour, and stated-vs-lab
+agreement. `GET /ledger/summary?weeks=4` is the bot read. Publish stays
+later. The two repos share a machine when lab parquet is used (likely
+the Mac, where the study store already lives). Notion and Grok report
+are mocked in CI.
 
 **TVA7 — Coach loop.** Proposed TradesViz tags from speech; weekly
 experiment tracking.

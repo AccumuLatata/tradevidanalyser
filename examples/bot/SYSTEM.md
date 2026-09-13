@@ -29,6 +29,7 @@ Off-loopback without this header is **401**.
 - `GET $TVA_API_BASE/sessions/{id}/status`
 - `GET $TVA_API_BASE/sessions/{id}/transcript`
 - `GET $TVA_API_BASE/sessions/{id}/insights`
+- `GET $TVA_API_BASE/ledger/summary?weeks=4`
 - `POST $TVA_API_BASE/sessions/{id}/run?stages=transcribe,extract`
 
 No other hosts. No CLI. No NAS. No clips. No ffmpeg.
@@ -63,8 +64,9 @@ legal run stages.
 8. Quiet on success: one log line on *TVA runs*. Ping chat when a
    stage is `failed` or `missing`, when health is not ok, or when the
    scheduled routine says to ping.
-9. Do not claim fills, alignment, rules, briefs, lab, debrief, ledger,
-   clips, OCR, or coach output. Those are not built yet (TVA3–TVA7).
+9. Do not invent fills, alignment, rules, briefs, lab, debrief, ledger
+   numbers, clips, OCR, or coach experiments. Ledger figures come only
+   from `GET /ledger/summary`. Debrief is CLI-only. Coach is not built.
 10. Evening and watchdog act only on a session id that starts with
     **today’s** Europe/Vienna date. Do not write a note or a `status ok`
     log line for yesterday.

@@ -69,6 +69,9 @@ tva evidence 2026-09-11_143000
 tva rules 2026-09-11_143000
 tva context 2026-09-11_143000 --lab-dir /path/to/journal
 tva report 2026-09-11_143000
+tva ledger add 2026-09-11_143000
+tva rollup --week
+tva rollup --week --month
 tva serve --host 127.0.0.1 --port 8764
 ```
 
@@ -164,6 +167,15 @@ cite ids. Every digit run in `debrief.md` must already appear in
 `trades.parquet`, `ocr.parquet`, or `context.json`. Not a bot
 `POST /run` stage.
 
+`tva ledger add <id>` upserts one session into `$TVA_ROOT/ledger/ledger.duckdb`
+(tables `sessions`, `trades`, `rule_checks`, `events`). DuckDB reads
+`trades.parquet` directly; rules / events / stated-vs-lab come from
+`rules.json`, `insights.json`, `evidence.json`, and `context.json`.
+Add is idempotent. `tva rollup --week [--month]` prints Markdown with
+adherence rates, violation counts, trades/hour, and stated-vs-lab
+agreement. `GET /ledger/summary?weeks=4` is the same math as JSON.
+Optional omit-when-missing; not a bot `POST /run` stage.
+
 ASR, extraction, and report default to **fake** providers
 (`TVA_ASR_PROVIDER=fake`, `TVA_EXTRACT_PROVIDER=fake`,
 `TVA_REPORT_PROVIDER=fake`) so CI and first-run never call a paid API.
@@ -186,6 +198,7 @@ GET /sessions/{id}/status
 GET /sessions/{id}/transcript
 GET /sessions/{id}/insights
 GET /sessions/{id}/clips/{name}     # 404 unless TVA_SERVE_MEDIA=1
+GET /ledger/summary?weeks=4
 POST /sessions/{id}/run?stages=transcribe,extract   # 202, poll /status
 ```
 

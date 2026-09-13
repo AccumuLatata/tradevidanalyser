@@ -187,6 +187,14 @@ def run_doctor(root: Path) -> DoctorReport:
         )
     checks.append(DoctorCheck(id="journal", status=journal_status, detail=journal_detail))
 
+    try:
+        import duckdb
+
+        duck_status, duck_detail = "ok", f"duckdb {duckdb.__version__}"
+    except ImportError:
+        duck_status, duck_detail = "fail", "duckdb not installed (needed for tva ledger / rollup)"
+    checks.append(DoctorCheck(id="duckdb", status=duck_status, detail=duck_detail))
+
     notion_key = bool((os.environ.get("NOTION_API_KEY") or "").strip())
     checks.append(
         DoctorCheck(

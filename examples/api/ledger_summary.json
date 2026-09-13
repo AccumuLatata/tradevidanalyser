@@ -1,0 +1,30 @@
+{
+  "schema_version": "1",
+  "weeks": 4,
+  "sessions": 10,
+  "trades": 20,
+  "hours": 20.0,
+  "trades_per_hour": 1.0,
+  "adherence": {
+    "passed": 10,
+    "violated": 10,
+    "unverifiable": 0,
+    "rate": 0.5,
+    "by_rule": {
+      "R-MAX10": {"passed": 10, "violated": 0, "unverifiable": 0, "rate": 1.0},
+      "R-PLAYBOOK": {"passed": 0, "violated": 10, "unverifiable": 0, "rate": 0.0}
+    }
+  },
+  "violations": {
+    "total": 10,
+    "by_rule": {"R-PLAYBOOK": 10}
+  },
+  "stated_vs_lab": {
+    "agree": 10,
+    "disagree": 10,
+    "unverifiable": 0,
+    "rate": 0.5
+  },
+  "periods": [],
+  "markdown": ""
+}

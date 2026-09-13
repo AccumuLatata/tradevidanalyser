@@ -18,8 +18,9 @@ from pydantic import BaseModel, ConfigDict
 from tradevidanalyser import __version__, store
 from tradevidanalyser.doctor import run_doctor
 from tradevidanalyser.naming import VIENNA
+from tradevidanalyser.ledger import ledger_summary
 from tradevidanalyser.pipeline import extract_session, transcribe_session
-from tradevidanalyser.schema import Insights, SessionRecord, SessionStatus, Transcript
+from tradevidanalyser.schema import Insights, LedgerSummary, SessionRecord, SessionStatus, Transcript
 
 ENV_TOKEN = "TVA_API_TOKEN"
 ENV_SERVE_MEDIA = "TVA_SERVE_MEDIA"
@@ -214,6 +215,12 @@ def create_app(
             "stages": requested,
             "status": status.model_dump(mode="json"),
         }
+
+    @app.get("/ledger/summary", response_model=LedgerSummary)
+    def get_ledger_summary(
+        weeks: int = Query(default=4, ge=1, le=104, description="Trailing ISO weeks"),
+    ) -> dict:
+        return ledger_summary(app.state.root, weeks=weeks).model_dump(mode="json")
 
     return app
 

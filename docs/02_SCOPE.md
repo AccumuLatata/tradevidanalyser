@@ -98,7 +98,9 @@ They wait until v1 is boring and reliable.
     recomputed. Missing brief → `brief: null` + a gap.
 11. **Daily debrief page + coaching ledger + Notion publish** — `tva report`
     (PR-23) writes `debrief.md` / `debrief.json` from files plus cited
-    prose. Ledger and a dedicated Notion publish command stay later.
+    prose. `tva ledger add` / `tva rollup` (PR-24) write
+    `ledger/ledger.duckdb` and weekly/monthly Markdown. A dedicated
+    Notion publish command stays later.
 12. **Intent-tag proposals back into TradesViz.**
 
 ## 5. Out of scope (all phases unless reopened)

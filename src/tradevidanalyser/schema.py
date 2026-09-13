@@ -274,6 +274,59 @@ class DebriefReport(BaseModel):
     gaps: list[str] = Field(default_factory=list)
 
 
+class RuleTally(BaseModel):
+    passed: int = 0
+    violated: int = 0
+    unverifiable: int = 0
+    rate: float | None = None
+
+
+class AdherenceTally(BaseModel):
+    passed: int = 0
+    violated: int = 0
+    unverifiable: int = 0
+    rate: float | None = None
+    by_rule: dict[str, RuleTally] = Field(default_factory=dict)
+
+
+class ViolationTally(BaseModel):
+    total: int = 0
+    by_rule: dict[str, int] = Field(default_factory=dict)
+
+
+class StatedLabTally(BaseModel):
+    agree: int = 0
+    disagree: int = 0
+    unverifiable: int = 0
+    rate: float | None = None
+
+
+class LedgerPeriod(BaseModel):
+    kind: Literal["week", "month"]
+    id: str
+    sessions: int = 0
+    trades: int = 0
+    hours: float = 0.0
+    trades_per_hour: float | None = None
+    adherence: AdherenceTally = Field(default_factory=AdherenceTally)
+    violations: ViolationTally = Field(default_factory=ViolationTally)
+    stated_vs_lab: StatedLabTally = Field(default_factory=StatedLabTally)
+
+
+class LedgerSummary(BaseModel):
+    schema_version: str = SCHEMA_VERSION
+    weeks: int | None = None
+    sessions: int = 0
+    trades: int = 0
+    hours: float = 0.0
+    trades_per_hour: float | None = None
+    adherence: AdherenceTally = Field(default_factory=AdherenceTally)
+    violations: ViolationTally = Field(default_factory=ViolationTally)
+    stated_vs_lab: StatedLabTally = Field(default_factory=StatedLabTally)
+    periods: list[LedgerPeriod] = Field(default_factory=list)
+    markdown: str = ""
+
+
 class DoctorCheck(BaseModel):
     id: str
     status: Literal["ok", "warn", "fail"]
