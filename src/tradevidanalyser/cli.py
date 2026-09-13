@@ -15,6 +15,7 @@ from tradevidanalyser.align import alignment_result_dict
 from tradevidanalyser.pipeline import (
     align_session,
     clips_session,
+    context_session,
     evidence_session,
     extract_session,
     rules_session,
@@ -163,6 +164,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_rules.add_argument("session")
 
+    p_ctx = sub.add_parser(
+        "context",
+        help="Notion briefs/DRC + ThesisTester lab parquet → context.json",
+    )
+    p_ctx.add_argument("session")
+    p_ctx.add_argument(
+        "--lab-dir",
+        type=Path,
+        default=None,
+        help="ThesisTester journal output (attribution/zones/triggers parquet; no recompute)",
+    )
+
     p_serve = sub.add_parser("serve", help="HTTP API over TVA_ROOT")
     p_serve.add_argument("--host", default="127.0.0.1")
     p_serve.add_argument("--port", type=int, default=8764)
@@ -283,6 +296,10 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.cmd == "rules":
             result = rules_session(args.session, root=root)
+            _emit(result.as_dict(), as_json=True)
+            return 0
+        if args.cmd == "context":
+            result = context_session(args.session, root=root, lab_dir=args.lab_dir)
             _emit(result.as_dict(), as_json=True)
             return 0
         if args.cmd == "serve":

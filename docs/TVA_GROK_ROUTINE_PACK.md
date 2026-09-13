@@ -234,10 +234,11 @@ Gaps: `dropped uncited quote (seg_…)`.
 
 | Output | Milestone | Absent |
 |---|---|---|
-| keyframes, ROI OCR, chapter clips, VLM notes | **TVA3** | yes |
-| fills.parquet, trades.parquet | **TVA4** | yes |
-| alignment, per-trade evidence, rule scorecard | **TVA5** | yes |
-| briefs / DRC join, lab attribution, debrief, ledger | **TVA6** | yes |
+| keyframes, ROI OCR, chapter clips, VLM notes | **TVA3** | no |
+| fills.parquet, trades.parquet | **TVA4** | no |
+| alignment, per-trade evidence, rule scorecard | **TVA5** | no |
+| briefs / DRC join, lab attribution | **TVA6** | no (`tva context`; CLI only) |
+| debrief, ledger | **TVA6** | yes |
 | intent-tag proposals, coach experiments | **TVA7** | yes |
 
 Do not write “no trades today” from the tape. Do not grade the day. Do

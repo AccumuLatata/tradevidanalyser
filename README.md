@@ -67,6 +67,7 @@ tva align 2026-09-11_143000
 tva align 2026-09-11_143000 --manual-offset 1.8
 tva evidence 2026-09-11_143000
 tva rules 2026-09-11_143000
+tva context 2026-09-11_143000 --lab-dir /path/to/journal
 tva serve --host 127.0.0.1 --port 8764
 ```
 
@@ -144,6 +145,15 @@ until the desk sets it. PnL prefers `net_pnl_currency`, else
 `gross_pnl_currency` with a `fees_unknown` note. Deterministic fills
 rows never call a model; evidence-backed rows read already-written
 files. Not a bot `POST /run` stage.
+
+`tva context <id>` writes `context.json`: the day's Notion
+`<D Mon YYYY> Macro Brief` / `NY session Brief` / `DRC ddmmyyyy` (bias,
+conviction, kill levels quoted verbatim) plus ThesisTester
+`attribution` / `zones` / `triggers` parquet from `--lab-dir` (or
+`TVA_LAB_DIR`), joined on `entry_fill_id`. Missing brief → `brief: null`
++ a gap. Levels are never recomputed. Notion is fake by default
+(`TVA_NOTION_PROVIDER=fake`); live read needs `NOTION_API_KEY` and
+`TVA_NOTION_PROVIDER=notion`. Not a bot `POST /run` stage.
 
 ASR and extraction default to **fake** providers (`TVA_ASR_PROVIDER=fake`,
 `TVA_EXTRACT_PROVIDER=fake`) so CI and first-run never call a paid API.

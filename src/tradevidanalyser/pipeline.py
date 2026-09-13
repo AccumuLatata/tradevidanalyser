@@ -19,6 +19,7 @@ from tradevidanalyser.ocr import (
     write_ocr_parquet,
 )
 from tradevidanalyser.evidence import EvidenceResult, evidence_session as run_evidence
+from tradevidanalyser.context import ContextResult, context_session as run_context
 from tradevidanalyser.rules import RulesResult, rules_session as run_rules
 from tradevidanalyser.providers.asr import AsrError, get_asr_provider
 from tradevidanalyser.providers.extract import (
@@ -363,6 +364,23 @@ def rules_session(
     if not store.is_safe_path_name(session_id):
         raise ValueError(f"unsafe session id {session_id!r}")
     return run_rules(session_id, root=root, config_path=config_path)
+
+
+def context_session(
+    session_id: str,
+    *,
+    root: Path,
+    lab_dir: Path | None = None,
+    notion_provider: str | None = None,
+) -> ContextResult:
+    if not store.is_safe_path_name(session_id):
+        raise ValueError(f"unsafe session id {session_id!r}")
+    return run_context(
+        session_id,
+        root=root,
+        lab_dir=lab_dir,
+        notion_provider=notion_provider,
+    )
 
 
 def align_session(

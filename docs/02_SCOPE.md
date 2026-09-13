@@ -92,8 +92,10 @@ They wait until v1 is boring and reliable.
    `pass`. `daily_loss_limit_usd` stays null (D4 parked) so R-DLL is
    `unverifiable` until the desk sets $100 or $200 in `rules.yaml`.
    R-SLTP is always `unverifiable` (TradesViz has no order modifications).
-10. **ThesisTester join** — `journal attribute` / `zones` / `triggers` next
-    to spoken setup names. "He said ONH; the lab tagged pdPOC."
+10. **ThesisTester join** — `tva context` (PR-22) reads Notion briefs/DRC
+    and `journal attribute` / `zones` / `triggers` parquet next to spoken
+    setup names. "He said ONH; the lab tagged pdPOC." Levels are never
+    recomputed. Missing brief → `brief: null` + a gap.
 11. **Daily debrief page + coaching ledger + Notion publish** — Grok can
     already write Notion; v1 just has to give it facts. A dedicated publish
     command is optional later.
