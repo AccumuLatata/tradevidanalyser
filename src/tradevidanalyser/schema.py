@@ -327,6 +327,20 @@ class LedgerSummary(BaseModel):
     markdown: str = ""
 
 
+class PublishRecord(BaseModel):
+    schema_version: str = SCHEMA_VERSION
+    session_id: str
+    provider: str
+    page_id: str
+    page_url: str
+    title: str
+    tag: str = "Trades Summary"
+    summaries: str = ""
+    learnings: list[str] = Field(default_factory=list)
+    log_line: str = ""
+    created: bool = False
+
+
 class DoctorCheck(BaseModel):
     id: str
     status: Literal["ok", "warn", "fail"]

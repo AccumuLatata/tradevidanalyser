@@ -203,7 +203,7 @@ def run_doctor(root: Path) -> DoctorReport:
             detail=(
                 "NOTION_API_KEY set"
                 if notion_key
-                else "NOTION_API_KEY unset (needed for live tva context; fake is default)"
+                else "NOTION_API_KEY unset (needed for live tva context / tva publish --notion; fake is default)"
             ),
         )
     )

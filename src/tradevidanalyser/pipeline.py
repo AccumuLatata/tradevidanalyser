@@ -26,6 +26,7 @@ from tradevidanalyser.ledger import (
     add_session as run_ledger_add,
     rollup as run_rollup,
 )
+from tradevidanalyser.publish import PublishResult, publish_session as run_publish
 from tradevidanalyser.report import ReportResult, report_session as run_report
 from tradevidanalyser.rules import RulesResult, rules_session as run_rules
 from tradevidanalyser.providers.asr import AsrError, get_asr_provider
@@ -415,6 +416,20 @@ def rollup_ledger(
     month: str | None = None,
 ) -> RollupResult:
     return run_rollup(root, week=week, month=month)
+
+
+def publish_session(
+    session_id: str,
+    *,
+    root: Path,
+    notion: bool = False,
+    provider_name: str | None = None,
+) -> PublishResult:
+    if not store.is_safe_path_name(session_id):
+        raise ValueError(f"unsafe session id {session_id!r}")
+    return run_publish(
+        session_id, root=root, notion=notion, provider_name=provider_name
+    )
 
 
 def align_session(

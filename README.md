@@ -72,6 +72,7 @@ tva report 2026-09-11_143000
 tva ledger add 2026-09-11_143000
 tva rollup --week
 tva rollup --week --month
+tva publish 2026-09-11_143000 --notion
 tva serve --host 127.0.0.1 --port 8764
 ```
 
@@ -175,6 +176,15 @@ Add is idempotent. `tva rollup --week [--month]` prints Markdown with
 adherence rates, violation counts, trades/hour, and stated-vs-lab
 agreement. `GET /ledger/summary?weeks=4` is the same math as JSON.
 Optional omit-when-missing; not a bot `POST /run` stage.
+
+`tva publish <id> --notion` is **off without `--notion`**. It writes or
+updates one Trading Journal page titled `<D Mon YYYY> Session Debrief`
+(tag *Trades Summary*; `Summaries` = one sentence; `Learning 1–3` from
+the debrief) and prepends one line on *TVA runs*. Update is in place —
+no duplicate pages. Notion is fake by default (`TVA_NOTION_PROVIDER=fake`);
+live write needs `NOTION_API_KEY`, `TVA_NOTION_JOURNAL_DB`, and
+`TVA_NOTION_PROVIDER=notion`. The bot may keep writing its own note.
+Not a bot `POST /run` stage.
 
 ASR, extraction, and report default to **fake** providers
 (`TVA_ASR_PROVIDER=fake`, `TVA_EXTRACT_PROVIDER=fake`,

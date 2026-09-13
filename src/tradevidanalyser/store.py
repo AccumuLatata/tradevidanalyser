@@ -28,6 +28,7 @@ OPTIONAL_STAGES = frozenset(
         "context",
         "report",
         "ledger",
+        "publish",
     }
 )
 VISUAL_NOTES_NAME = "visual_notes.json"
@@ -93,10 +94,23 @@ def debrief_json_path(root: Path, session_id: str) -> Path:
     return config.session_dir(root, session_id) / "debrief.json"
 
 
+def publish_path(root: Path, session_id: str) -> Path:
+    return config.session_dir(root, session_id) / "publish.json"
+
+
+def notion_fake_path(root: Path) -> Path:
+    return root / "notion_fake.json"
+
+
+def drop_publish(root: Path, session_id: str) -> None:
+    publish_path(root, session_id).unlink(missing_ok=True)
+
+
 def drop_debrief(root: Path, session_id: str) -> None:
     """Remove both debrief artifacts so a half-written report cannot stay green."""
     debrief_md_path(root, session_id).unlink(missing_ok=True)
     debrief_json_path(root, session_id).unlink(missing_ok=True)
+    drop_publish(root, session_id)
 
 
 def drop_ledger_session(root: Path, session_id: str) -> None:
@@ -178,7 +192,7 @@ def list_frame_jpgs(root: Path, session_id: str) -> list[Path]:
 
 
 def invalidate_downstream(root: Path, session_id: str) -> None:
-    """Drop transcript/insights/frames/clips/fills/evidence/rules/context/report/ledger/alignment so a changed recording is not left looking complete."""
+    """Drop transcript/insights/frames/clips/fills/evidence/rules/context/report/publish/ledger/alignment so a changed recording is not left looking complete."""
     # Ledger first: a failed drop must not leave rows after the artifacts are gone.
     drop_ledger_session(root, session_id)
     transcript_path(root, session_id).unlink(missing_ok=True)
@@ -317,6 +331,9 @@ def _compute_status_locked(
 
     if session_recorded(root, session_id):
         stages["ledger"] = "ok"
+    # Publish is optional. Same omit-when-missing rule as report.
+    if publish_path(root, session_id).is_file():
+        stages["publish"] = "ok"
     path = status_path(root, session_id)
     previous: SessionStatus | None = None
     if path.is_file():
