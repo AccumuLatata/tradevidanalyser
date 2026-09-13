@@ -52,6 +52,7 @@ is **401**.
 | `GET /sessions/{id}/insights` | on demand | **404** if `insights.json` is absent (bundle uses `null`) |
 | `GET /sessions/{id}/transcript` | to verify a quote | **404** if absent; **only** source of quotes |
 | `POST /sessions/{id}/run?stages=transcribe,extract` | extract is `missing`, ingest is `ok`, nothing is `running` | **202** `{accepted, session_id, stages, status}`. **409** = already running → poll, do not POST again |
+| `GET /ledger/summary?weeks=4` | on demand | trailing ISO weeks: adherence, violations, trades/hour, stated-vs-lab. Empty ledger → zeros, not 404 |
 
 **Do not call:** CLI (`tva …`), NAS paths, `ffmpeg`, video files,
 `GET /sessions/{id}/clips/…` (gated; TVA3). Do not `POST` any other path.
@@ -239,7 +240,7 @@ Gaps: `dropped uncited quote (seg_…)`.
 | alignment, per-trade evidence, rule scorecard | **TVA5** | no |
 | briefs / DRC join, lab attribution | **TVA6** | no (`tva context`; CLI only) |
 | debrief | **TVA6** | no (`tva report`; CLI only) |
-| ledger | **TVA6** | yes |
+| ledger | **TVA6** | no (`tva ledger add` / `tva rollup`; `GET /ledger/summary`) |
 | intent-tag proposals, coach experiments | **TVA7** | yes |
 
 Do not write “no trades today” from the tape. Do not grade the day. Do

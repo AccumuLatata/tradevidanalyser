@@ -1248,10 +1248,12 @@ def rules_session(
         path = store.rules_path(root, session_id)
         path.unlink(missing_ok=True)
         store.drop_debrief(root, session_id)
+        store.drop_ledger_session(root, session_id)
         store.compute_status(root, session_id)
         return RulesResult(session_id=session_id, status="skipped", reason="no trades.parquet")
     store.write_json(store.rules_path(root, session_id), report.model_dump(mode="json"))
     store.drop_debrief(root, session_id)
+    store.drop_ledger_session(root, session_id)
     store.compute_status(root, session_id)
     return RulesResult(
         session_id=session_id,

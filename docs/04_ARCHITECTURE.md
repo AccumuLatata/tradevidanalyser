@@ -125,6 +125,7 @@ Every stage is a CLI subcommand, idempotent, writing into
 | Rules | `tva rules <session>` | CLI (not a bot run stage) | `rules.json` scorecard from `trades.parquet` plus `evidence.json` / `insights.session_events` | yes, optional |
 | Context | `tva context <session> [--lab-dir]` | CLI (not a bot run stage) | `context.json` briefs/DRC + lab join on `entry_fill_id` | yes, optional |
 | Report | `tva report <session>` | CLI (not a bot run stage) | `debrief.md` / `debrief.json` facts + cited prose | yes, optional |
+| Ledger | `tva ledger add` / `tva rollup --week [--month]` | `GET /ledger/summary?weeks=4` | `ledger/ledger.duckdb` + rollup Markdown | yes, optional |
 
 `tva run --latest` is the scheduler entry on the PC. `tva serve` is the
 Mac entry. Same package.
@@ -204,6 +205,10 @@ debrief:                         # PR-23; omit until `tva report`
   brief vs behaviour · observations · learnings · gaps
   # facts from files; prose via ReportProvider (fake default, grok opt-in)
   # every digit run in debrief.md is in trades.parquet / ocr.parquet / context.json
+ledger:                          # PR-24; omit until `tva ledger add`
+  duckdb tables: sessions, trades, rule_checks, events
+  # DuckDB reads trades.parquet; add is idempotent
+  # rollup: adherence, violations, trades/hour, stated-vs-lab
 
 provenance: {app_version, ffmpeg, models, created_at}
 ```
@@ -260,6 +265,9 @@ PR-16 consumes ThesisTester; it does not fork it.
 - **Debrief (PR-23):** `tva report` reads `context.json`, `trades.parquet`,
   `rules.json`, and `evidence.json`. Facts are rendered from those files.
   Prose must cite ids. ThesisTester levels are never recomputed.
+- **Ledger (PR-24):** `tva ledger add` copies one session into
+  `ledger/ledger.duckdb`. Trades come from `read_parquet`. Stated-vs-lab
+  compares `evidence.stated` to `context.lab` tokens (no level math).
 
 Good reasons to do that join *eventually*:
 
@@ -297,6 +305,8 @@ couples the first useful API to a second repo and a journal export ritual.
 - `tva report` is CLI-only and is not a `POST /run` stage. The bot pack
   still writes its Notion note from insights; it does not fetch
   `debrief.md`.
+- `GET /ledger/summary?weeks=4` is the ledger read. `tva ledger add` /
+  `tva rollup` stay CLI. Not a `POST /run` stage.
 
 Copy-ready pack: [`TVA_GROK_ROUTINE_PACK.md`](TVA_GROK_ROUTINE_PACK.md)
 and [`examples/bot/`](../examples/bot/). Paste `SYSTEM.md` as the bot

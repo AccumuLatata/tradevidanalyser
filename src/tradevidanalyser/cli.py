@@ -8,6 +8,8 @@ import os
 import sys
 from pathlib import Path
 
+import duckdb
+
 from tradevidanalyser import __version__, config, store
 from tradevidanalyser.doctor import run_doctor
 from tradevidanalyser.ingest import ingest
@@ -18,7 +20,9 @@ from tradevidanalyser.pipeline import (
     context_session,
     evidence_session,
     extract_session,
+    ledger_add,
     report_session,
+    rollup_ledger,
     rules_session,
     fills_session,
     frames_session,
@@ -184,6 +188,29 @@ def main(argv: list[str] | None = None) -> int:
     p_rep.add_argument("session")
     p_rep.add_argument("--provider", default=None, help="fake (default) or grok")
 
+    p_led = sub.add_parser("ledger", help="DuckDB coaching ledger")
+    led_sub = p_led.add_subparsers(dest="ledger_cmd", required=True)
+    p_add = led_sub.add_parser("add", help="upsert one session from Parquet / artifacts")
+    p_add.add_argument("session")
+
+    p_roll = sub.add_parser("rollup", help="weekly/monthly ledger markdown")
+    p_roll.add_argument(
+        "--week",
+        nargs="?",
+        const="latest",
+        default=None,
+        metavar="YYYY-Www",
+        help="ISO week (default latest when flag is present)",
+    )
+    p_roll.add_argument(
+        "--month",
+        nargs="?",
+        const="latest",
+        default=None,
+        metavar="YYYY-MM",
+        help="calendar month; combine with --week for both sections",
+    )
+
     p_serve = sub.add_parser("serve", help="HTTP API over TVA_ROOT")
     p_serve.add_argument("--host", default="127.0.0.1")
     p_serve.add_argument("--port", type=int, default=8764)
@@ -316,6 +343,24 @@ def main(argv: list[str] | None = None) -> int:
             )
             _emit(result.as_dict(), as_json=True)
             return 0
+        if args.cmd == "ledger":
+            if args.ledger_cmd == "add":
+                result = ledger_add(args.session, root=root)
+                _emit(result.as_dict(), as_json=True)
+                return 0
+            parser.error(f"unknown ledger command {args.ledger_cmd}")
+            return 2
+        if args.cmd == "rollup":
+            week = args.week
+            month = args.month
+            if week is None and month is None:
+                week = "latest"
+            result = rollup_ledger(root, week=week, month=month)
+            if args.json:
+                _emit(result.as_dict(), as_json=True)
+            else:
+                sys.stdout.write(result.markdown)
+            return 0
         if args.cmd == "serve":
             import uvicorn
 
@@ -327,7 +372,7 @@ def main(argv: list[str] | None = None) -> int:
             app = create_app(root, host=args.host)
             uvicorn.run(app, host=args.host, port=args.port, log_level="info")
             return 0
-    except (FileNotFoundError, ValueError, OSError, RuntimeError) as exc:
+    except (FileNotFoundError, ValueError, OSError, RuntimeError, duckdb.Error) as exc:
         _emit({"error": str(exc)}, as_json=True)
         return 1
     parser.error(f"unknown command {args.cmd}")

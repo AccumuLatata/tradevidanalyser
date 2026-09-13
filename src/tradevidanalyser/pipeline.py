@@ -20,6 +20,12 @@ from tradevidanalyser.ocr import (
 )
 from tradevidanalyser.evidence import EvidenceResult, evidence_session as run_evidence
 from tradevidanalyser.context import ContextResult, context_session as run_context
+from tradevidanalyser.ledger import (
+    LedgerAddResult,
+    RollupResult,
+    add_session as run_ledger_add,
+    rollup as run_rollup,
+)
 from tradevidanalyser.report import ReportResult, report_session as run_report
 from tradevidanalyser.rules import RulesResult, rules_session as run_rules
 from tradevidanalyser.providers.asr import AsrError, get_asr_provider
@@ -394,6 +400,21 @@ def report_session(
     if not store.is_safe_path_name(session_id):
         raise ValueError(f"unsafe session id {session_id!r}")
     return run_report(session_id, root=root, provider_name=provider_name)
+
+
+def ledger_add(session_id: str, *, root: Path) -> LedgerAddResult:
+    if not store.is_safe_path_name(session_id):
+        raise ValueError(f"unsafe session id {session_id!r}")
+    return run_ledger_add(session_id, root=root)
+
+
+def rollup_ledger(
+    root: Path,
+    *,
+    week: str | None = None,
+    month: str | None = None,
+) -> RollupResult:
+    return run_rollup(root, week=week, month=month)
 
 
 def align_session(
