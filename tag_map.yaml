@@ -1,0 +1,335 @@
+# Frozen desk tag → engine token map (TJ6). Data, not code.
+# Exact rows win before qualifier stripping. Desk owns additions; repo owns this file.
+# Closed-set + widget-maximal extras are covered exactly once: existing desk
+# short forms stay byte-stable; remaining anchors use engine-token keys;
+# new MAs use {tf}{len}{SMA|EMA}; other new partners use identity keys.
+# No parallel aliases. p30POC stays unmapped (not a rolling-POC alias).
+
+exact:
+  pdH:
+    token: pdHigh
+    class: level
+  pdLow:
+    token: pdLow
+    class: level
+  pdEQ:
+    token: pdEQ
+    class: level
+  pdH_RTH:
+    token: pRTH_High
+    class: level
+  pdVAL:
+    token: pdVAL
+    class: level
+  pwVAH:
+    token: pwVAH
+    class: level
+  dVWAP:
+    token: dVWAP
+    class: level
+  mVWAP:
+    token: mVWAP
+    class: level
+  4hVWAP:
+    token: VWAP_rolling_4h
+    class: level
+  p30VWAP:
+    token: prev30mVWAP
+    class: level
+  APOC:
+    token: APOC
+    class: level
+  pSettlement:
+    token: prevSettlement
+    class: level
+  dOpen:
+    token: dOpen
+    class: level
+  p30POC:
+    token: null
+    class: unmapped
+  5m21EMA:
+    token: EMA_21_5min
+    class: confirm
+  5m50SMA:
+    token: SMA_50_5min
+    class: confirm
+  1m9EMA:
+    token: EMA_9_1min
+    class: confirm
+  # Remaining Program B ANCHORS (engine-token desk keys).
+  pdPOC:
+    token: pdPOC
+    class: level
+  pdVAH:
+    token: pdVAH
+    class: level
+  pwPOC:
+    token: pwPOC
+    class: level
+  pwVAL:
+    token: pwVAL
+    class: level
+  pmPOC:
+    token: pmPOC
+    class: level
+  pmVAH:
+    token: pmVAH
+    class: level
+  pmVAL:
+    token: pmVAL
+    class: level
+  pAPOC:
+    token: pAPOC
+    class: level
+  ONH:
+    token: ONH
+    class: level
+  ONL:
+    token: ONL
+    class: level
+  pONH:
+    token: pONH
+    class: level
+  pONL:
+    token: pONL
+    class: level
+  AsiaHigh:
+    token: AsiaHigh
+    class: level
+  AsiaLow:
+    token: AsiaLow
+    class: level
+  LondonHigh:
+    token: LondonHigh
+    class: level
+  LondonLow:
+    token: LondonLow
+    class: level
+  OR_High:
+    token: OR_High
+    class: level
+  OR_Low:
+    token: OR_Low
+    class: level
+  pRTH_Low:
+    token: pRTH_Low
+    class: level
+  RTH_Open:
+    token: RTH_Open
+    class: level
+  pRTH_Open:
+    token: pRTH_Open
+    class: level
+  pdOpen:
+    token: pdOpen
+    class: level
+  wOpen:
+    token: wOpen
+    class: level
+  pwOpen:
+    token: pwOpen
+    class: level
+  mOpen:
+    token: mOpen
+    class: level
+  pmOpen:
+    token: pmOpen
+    class: level
+  pwHigh:
+    token: pwHigh
+    class: level
+  pwLow:
+    token: pwLow
+    class: level
+  pwEQ:
+    token: pwEQ
+    class: level
+  pmHigh:
+    token: pmHigh
+    class: level
+  pmLow:
+    token: pmLow
+    class: level
+  pmEQ:
+    token: pmEQ
+    class: level
+  dVWAP_RTH:
+    token: dVWAP_RTH
+    class: level
+  wVWAP:
+    token: wVWAP
+    class: level
+  dSinglePrint_30m_NearestAbove:
+    token: dSinglePrint_30m_NearestAbove
+    class: level
+  dSinglePrint_30m_NearestBelow:
+    token: dSinglePrint_30m_NearestBelow
+    class: level
+  pSinglePrint_30m_NearestAbove:
+    token: pSinglePrint_30m_NearestAbove
+    class: level
+  pSinglePrint_30m_NearestBelow:
+    token: pSinglePrint_30m_NearestBelow
+    class: level
+  # Remaining MA confirms (desk short form {tf}{len}{SMA|EMA}; 1m/5m/30m).
+  # Existing 5m21EMA / 5m50SMA / 1m9EMA stay above; no identity parallels.
+  1m9SMA:
+    token: SMA_9_1min
+    class: confirm
+  5m9SMA:
+    token: SMA_9_5min
+    class: confirm
+  30m9SMA:
+    token: SMA_9_30min
+    class: confirm
+  1m20SMA:
+    token: SMA_20_1min
+    class: confirm
+  5m20SMA:
+    token: SMA_20_5min
+    class: confirm
+  30m20SMA:
+    token: SMA_20_30min
+    class: confirm
+  1m21SMA:
+    token: SMA_21_1min
+    class: confirm
+  5m21SMA:
+    token: SMA_21_5min
+    class: confirm
+  30m21SMA:
+    token: SMA_21_30min
+    class: confirm
+  1m50SMA:
+    token: SMA_50_1min
+    class: confirm
+  30m50SMA:
+    token: SMA_50_30min
+    class: confirm
+  1m100SMA:
+    token: SMA_100_1min
+    class: confirm
+  5m100SMA:
+    token: SMA_100_5min
+    class: confirm
+  30m100SMA:
+    token: SMA_100_30min
+    class: confirm
+  1m200SMA:
+    token: SMA_200_1min
+    class: confirm
+  5m200SMA:
+    token: SMA_200_5min
+    class: confirm
+  30m200SMA:
+    token: SMA_200_30min
+    class: confirm
+  5m9EMA:
+    token: EMA_9_5min
+    class: confirm
+  30m9EMA:
+    token: EMA_9_30min
+    class: confirm
+  1m20EMA:
+    token: EMA_20_1min
+    class: confirm
+  5m20EMA:
+    token: EMA_20_5min
+    class: confirm
+  30m20EMA:
+    token: EMA_20_30min
+    class: confirm
+  1m21EMA:
+    token: EMA_21_1min
+    class: confirm
+  30m21EMA:
+    token: EMA_21_30min
+    class: confirm
+  1m50EMA:
+    token: EMA_50_1min
+    class: confirm
+  5m50EMA:
+    token: EMA_50_5min
+    class: confirm
+  30m50EMA:
+    token: EMA_50_30min
+    class: confirm
+  1m100EMA:
+    token: EMA_100_1min
+    class: confirm
+  5m100EMA:
+    token: EMA_100_5min
+    class: confirm
+  30m100EMA:
+    token: EMA_100_30min
+    class: confirm
+  1m200EMA:
+    token: EMA_200_1min
+    class: confirm
+  5m200EMA:
+    token: EMA_200_5min
+    class: confirm
+  30m200EMA:
+    token: EMA_200_30min
+    class: confirm
+  # Identity confirms: remaining rVWAP / rPOC / pivots (no 4hVWAP parallel).
+  VWAP_rolling_15min:
+    token: VWAP_rolling_15min
+    class: confirm
+  VWAP_rolling_30min:
+    token: VWAP_rolling_30min
+    class: confirm
+  VWAP_rolling_1h:
+    token: VWAP_rolling_1h
+    class: confirm
+  POC_rolling_30min:
+    token: POC_rolling_30min
+    class: confirm
+  POC_rolling_1h:
+    token: POC_rolling_1h
+    class: confirm
+  POC_rolling_4h:
+    token: POC_rolling_4h
+    class: confirm
+  Pivot_1m_High:
+    token: Pivot_1m_High
+    class: confirm
+  Pivot_1m_Low:
+    token: Pivot_1m_Low
+    class: confirm
+  Pivot_5m_High:
+    token: Pivot_5m_High
+    class: confirm
+  Pivot_5m_Low:
+    token: Pivot_5m_Low
+    class: confirm
+  Pivot_30m_High:
+    token: Pivot_30m_High
+    class: confirm
+  Pivot_30m_Low:
+    token: Pivot_30m_Low
+    class: confirm
+  Pivot_4h_High:
+    token: Pivot_4h_High
+    class: confirm
+  Pivot_4h_Low:
+    token: Pivot_4h_Low
+    class: confirm
+
+context:
+  - ITR
+  - ITR-C
+  - CTR
+  - CTR-R
+  - 3c
+  - touch
+  - DeltaNode
+  - GEX2
+  - 5mCOT
+  - 5mSFP
+
+qualifiers:
+  - _retest
+  - _SFP
+  - _RTH

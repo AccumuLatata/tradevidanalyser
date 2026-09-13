@@ -29,6 +29,7 @@ OPTIONAL_STAGES = frozenset(
         "report",
         "ledger",
         "publish",
+        "proposals",
     }
 )
 VISUAL_NOTES_NAME = "visual_notes.json"
@@ -98,12 +99,25 @@ def publish_path(root: Path, session_id: str) -> Path:
     return config.session_dir(root, session_id) / "publish.json"
 
 
+def proposals_path(root: Path, session_id: str) -> Path:
+    return config.session_dir(root, session_id) / "intent_proposals.json"
+
+
+def tradesviz_tags_path(root: Path, session_id: str) -> Path:
+    return config.session_dir(root, session_id) / "tradesviz_tags.csv"
+
+
 def notion_fake_path(root: Path) -> Path:
     return root / "notion_fake.json"
 
 
 def drop_publish(root: Path, session_id: str) -> None:
     publish_path(root, session_id).unlink(missing_ok=True)
+
+
+def drop_proposals(root: Path, session_id: str) -> None:
+    proposals_path(root, session_id).unlink(missing_ok=True)
+    tradesviz_tags_path(root, session_id).unlink(missing_ok=True)
 
 
 def drop_debrief(root: Path, session_id: str) -> None:
@@ -192,7 +206,7 @@ def list_frame_jpgs(root: Path, session_id: str) -> list[Path]:
 
 
 def invalidate_downstream(root: Path, session_id: str) -> None:
-    """Drop transcript/insights/frames/clips/fills/evidence/rules/context/report/publish/ledger/alignment so a changed recording is not left looking complete."""
+    """Drop transcript/insights/frames/clips/fills/evidence/rules/context/report/publish/proposals/ledger/alignment so a changed recording is not left looking complete."""
     # Ledger first: a failed drop must not leave rows after the artifacts are gone.
     drop_ledger_session(root, session_id)
     transcript_path(root, session_id).unlink(missing_ok=True)
@@ -205,6 +219,7 @@ def invalidate_downstream(root: Path, session_id: str) -> None:
     rules_path(root, session_id).unlink(missing_ok=True)
     context_path(root, session_id).unlink(missing_ok=True)
     drop_debrief(root, session_id)
+    drop_proposals(root, session_id)
     frames = frames_dir(root, session_id)
     if frames.is_dir():
         shutil.rmtree(frames)
@@ -334,6 +349,9 @@ def _compute_status_locked(
     # Publish is optional. Same omit-when-missing rule as report.
     if publish_path(root, session_id).is_file():
         stages["publish"] = "ok"
+    # Proposals are optional. Both artifacts required; either file alone is a half-stage.
+    if proposals_path(root, session_id).is_file() and tradesviz_tags_path(root, session_id).is_file():
+        stages["proposals"] = "ok"
     path = status_path(root, session_id)
     previous: SessionStatus | None = None
     if path.is_file():

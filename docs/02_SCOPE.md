@@ -102,7 +102,13 @@ They wait until v1 is boring and reliable.
     `ledger/ledger.duckdb` and weekly/monthly Markdown. `tva publish
     --notion` (PR-25) is optional and off by default; the bot may keep
     writing the Notion note itself.
-12. **Intent-tag proposals back into TradesViz.**
+12. **Intent-tag proposals back into TradesViz.** `tva proposals` (PR-26)
+    maps `stated.playbook` / `stated_levels` onto the ThesisTester
+    `tag_map.yaml` vocabulary and writes `intent_proposals.json` plus a
+    TradesViz manual-import `tradesviz_tags.csv`. `tva proposals confirm
+    <id>` toggles `proposed` ↔ `confirmed`. Unknown spoken words are
+    dropped, never invented. Tags stay intent, not evidence. Coach
+    experiments stay later (PR-27).
 
 ## 5. Out of scope (all phases unless reopened)
 

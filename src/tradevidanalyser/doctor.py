@@ -237,6 +237,15 @@ def run_doctor(root: Path) -> DoctorReport:
         np_status, np_detail = "warn", f"TVA_NOTION_PROVIDER={notion_provider}"
     checks.append(DoctorCheck(id="notion_provider", status=np_status, detail=np_detail))
 
+    try:
+        from tradevidanalyser.proposals import default_tag_map_path
+
+        tag_path = default_tag_map_path()
+        tag_status, tag_detail = "ok", str(tag_path)
+    except FileNotFoundError as exc:
+        tag_status, tag_detail = "warn", str(exc)
+    checks.append(DoctorCheck(id="tag_map", status=tag_status, detail=tag_detail))
+
     el_key = bool((os.environ.get("ELEVENLABS_API_KEY") or "").strip())
     checks.append(
         DoctorCheck(

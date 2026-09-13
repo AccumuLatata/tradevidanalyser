@@ -127,6 +127,7 @@ Every stage is a CLI subcommand, idempotent, writing into
 | Report | `tva report <session>` | CLI (not a bot run stage) | `debrief.md` / `debrief.json` facts + cited prose | yes, optional |
 | Ledger | `tva ledger add` / `tva rollup --week [--month]` | `GET /ledger/summary?weeks=4` | `ledger/ledger.duckdb` + rollup Markdown | yes, optional |
 | Publish | `tva publish <session> --notion` | CLI (off by default; not a bot run stage) | Trading Journal Session Debrief + *TVA runs* log line | yes, optional |
+| Proposals | `tva proposals <session>` / `tva proposals confirm <id>` | CLI (not a bot run stage) | `intent_proposals.json` + `tradesviz_tags.csv` | yes, optional |
 
 `tva run --latest` is the scheduler entry on the PC. `tva serve` is the
 Mac entry. Same package.
@@ -213,6 +214,11 @@ ledger:                          # PR-24; omit until `tva ledger add`
 publish:                         # PR-25; omit until `tva publish --notion`
   page_id / url / title / Summaries / Learning 1–3
   # off without --notion; fake Notion default; update in place
+proposals:                       # PR-26; omit until `tva proposals`
+  [{tva_trade_id, proposed_tags[], source_segs[], status: proposed|confirmed|rejected}]
+  # desk keys from ThesisTester tag_map.yaml only; unknown spoken words dropped
+  # tradesviz_tags.csv: date, symbol, side, price, quantity, tags, notes
+  # notes prefixed [TVA proposed]; confirm toggles proposed ↔ confirmed
 
 provenance: {app_version, ffmpeg, models, created_at}
 ```
@@ -265,7 +271,9 @@ PR-16 consumes ThesisTester; it does not fork it.
   `zones.parquet` / `triggers.parquet` names) and joins on
   `entry_fill_id`. TradeVidAnalyser never computes levels.
 - Spoken setup names become *proposed* TradesViz tags (`proposed` until a
-  human confirms). Tags stay intent, not evidence.
+  human confirms). `tva proposals` maps `stated.playbook` /
+  `stated_levels` onto ThesisTester `tag_map.yaml` desk keys (never
+  invented tags, never engine tokens). Tags stay intent, not evidence.
 - **Debrief (PR-23):** `tva report` reads `context.json`, `trades.parquet`,
   `rules.json`, and `evidence.json`. Facts are rendered from those files.
   Prose must cite ids. ThesisTester levels are never recomputed.
@@ -316,6 +324,8 @@ couples the first useful API to a second repo and a journal export ritual.
   `tva rollup` stay CLI. Not a `POST /run` stage.
 - `tva publish --notion` is CLI-only, off by default. The bot may keep
   writing its own Notion note from insights.
+- `tva proposals` / `tva proposals confirm` are CLI-only. Not a
+  `POST /run` stage. The bot does not import TradesViz tags.
 
 Copy-ready pack: [`TVA_GROK_ROUTINE_PACK.md`](TVA_GROK_ROUTINE_PACK.md)
 and [`examples/bot/`](../examples/bot/). Paste `SYSTEM.md` as the bot

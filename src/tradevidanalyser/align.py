@@ -254,6 +254,7 @@ def align_session(
     # Windows are alignment-dependent; keep evidence from pointing at the old clock.
     store.evidence_path(root, session_id).unlink(missing_ok=True)
     store.drop_debrief(root, session_id)
+    store.drop_proposals(root, session_id)
     store.drop_ledger_session(root, session_id)
     store.compute_status(root, session_id)
     return alignment

@@ -341,6 +341,23 @@ class PublishRecord(BaseModel):
     created: bool = False
 
 
+ProposalStatus = Literal["proposed", "confirmed", "rejected"]
+
+
+class IntentProposal(BaseModel):
+    tva_trade_id: str
+    proposed_tags: list[str] = Field(default_factory=list)
+    source_segs: list[str] = Field(default_factory=list)
+    status: ProposalStatus = "proposed"
+
+
+class IntentProposals(BaseModel):
+    schema_version: str = SCHEMA_VERSION
+    session_id: str
+    proposals: list[IntentProposal] = Field(default_factory=list)
+    gaps: list[str] = Field(default_factory=list)
+
+
 class DoctorCheck(BaseModel):
     id: str
     status: Literal["ok", "warn", "fail"]
