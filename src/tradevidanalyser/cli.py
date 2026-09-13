@@ -18,6 +18,7 @@ from tradevidanalyser.pipeline import (
     context_session,
     evidence_session,
     extract_session,
+    report_session,
     rules_session,
     fills_session,
     frames_session,
@@ -176,6 +177,13 @@ def main(argv: list[str] | None = None) -> int:
         help="ThesisTester journal output (attribution/zones/triggers parquet; no recompute)",
     )
 
+    p_rep = sub.add_parser(
+        "report",
+        help="debrief.md / debrief.json from files + cited ReportProvider",
+    )
+    p_rep.add_argument("session")
+    p_rep.add_argument("--provider", default=None, help="fake (default) or grok")
+
     p_serve = sub.add_parser("serve", help="HTTP API over TVA_ROOT")
     p_serve.add_argument("--host", default="127.0.0.1")
     p_serve.add_argument("--port", type=int, default=8764)
@@ -300,6 +308,12 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.cmd == "context":
             result = context_session(args.session, root=root, lab_dir=args.lab_dir)
+            _emit(result.as_dict(), as_json=True)
+            return 0
+        if args.cmd == "report":
+            result = report_session(
+                args.session, root=root, provider_name=args.provider
+            )
             _emit(result.as_dict(), as_json=True)
             return 0
         if args.cmd == "serve":

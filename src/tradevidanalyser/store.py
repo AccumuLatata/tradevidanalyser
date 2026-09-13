@@ -16,7 +16,18 @@ CONTACT_SHEET_NAME = "contact_sheet.jpg"
 # Optional CLI stages. Never emit "missing"; do not resurrect a stale
 # "failed" when the artifact is gone (PR-11 bot pack: ?status=missing,failed).
 OPTIONAL_STAGES = frozenset(
-    {"frames", "ocr", "clips", "vlm", "fills", "align", "evidence", "rules", "context"}
+    {
+        "frames",
+        "ocr",
+        "clips",
+        "vlm",
+        "fills",
+        "align",
+        "evidence",
+        "rules",
+        "context",
+        "report",
+    }
 )
 VISUAL_NOTES_NAME = "visual_notes.json"
 
@@ -71,6 +82,20 @@ def rules_path(root: Path, session_id: str) -> Path:
 
 def context_path(root: Path, session_id: str) -> Path:
     return config.session_dir(root, session_id) / "context.json"
+
+
+def debrief_md_path(root: Path, session_id: str) -> Path:
+    return config.session_dir(root, session_id) / "debrief.md"
+
+
+def debrief_json_path(root: Path, session_id: str) -> Path:
+    return config.session_dir(root, session_id) / "debrief.json"
+
+
+def drop_debrief(root: Path, session_id: str) -> None:
+    """Remove both debrief artifacts so a half-written report cannot stay green."""
+    debrief_md_path(root, session_id).unlink(missing_ok=True)
+    debrief_json_path(root, session_id).unlink(missing_ok=True)
 
 
 def status_path(root: Path, session_id: str) -> Path:
@@ -145,7 +170,7 @@ def list_frame_jpgs(root: Path, session_id: str) -> list[Path]:
 
 
 def invalidate_downstream(root: Path, session_id: str) -> None:
-    """Drop transcript/insights/frames/clips/fills/evidence/rules/context/alignment so a changed recording is not left looking complete."""
+    """Drop transcript/insights/frames/clips/fills/evidence/rules/context/report/alignment so a changed recording is not left looking complete."""
     transcript_path(root, session_id).unlink(missing_ok=True)
     insights_path(root, session_id).unlink(missing_ok=True)
     ocr_path(root, session_id).unlink(missing_ok=True)
@@ -155,6 +180,7 @@ def invalidate_downstream(root: Path, session_id: str) -> None:
     evidence_path(root, session_id).unlink(missing_ok=True)
     rules_path(root, session_id).unlink(missing_ok=True)
     context_path(root, session_id).unlink(missing_ok=True)
+    drop_debrief(root, session_id)
     frames = frames_dir(root, session_id)
     if frames.is_dir():
         shutil.rmtree(frames)
@@ -273,6 +299,9 @@ def _compute_status_locked(
     # Context is optional. Same omit-when-missing rule as frames/ocr/fills.
     if context_path(root, session_id).is_file():
         stages["context"] = "ok"
+    # Report is optional. Both artifacts required; either file alone is a half-stage.
+    if debrief_md_path(root, session_id).is_file() and debrief_json_path(root, session_id).is_file():
+        stages["report"] = "ok"
     path = status_path(root, session_id)
     previous: SessionStatus | None = None
     if path.is_file():

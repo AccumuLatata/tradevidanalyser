@@ -68,6 +68,7 @@ tva align 2026-09-11_143000 --manual-offset 1.8
 tva evidence 2026-09-11_143000
 tva rules 2026-09-11_143000
 tva context 2026-09-11_143000 --lab-dir /path/to/journal
+tva report 2026-09-11_143000
 tva serve --host 127.0.0.1 --port 8764
 ```
 
@@ -155,12 +156,23 @@ conviction, kill levels quoted verbatim) plus ThesisTester
 (`TVA_NOTION_PROVIDER=fake`); live read needs `NOTION_API_KEY` and
 `TVA_NOTION_PROVIDER=notion`. Not a bot `POST /run` stage.
 
-ASR and extraction default to **fake** providers (`TVA_ASR_PROVIDER=fake`,
-`TVA_EXTRACT_PROVIDER=fake`) so CI and first-run never call a paid API.
+`tva report <id>` writes `debrief.md` / `debrief.json` in a fixed
+section order (source · day · trades · rules · brief vs behaviour ·
+observations · learnings · gaps). Facts come from files. Prose goes
+through a `ReportProvider` (`fake` default, `grok` opt-in) that must
+cite ids. Every digit run in `debrief.md` must already appear in
+`trades.parquet`, `ocr.parquet`, or `context.json`. Not a bot
+`POST /run` stage.
+
+ASR, extraction, and report default to **fake** providers
+(`TVA_ASR_PROVIDER=fake`, `TVA_EXTRACT_PROVIDER=fake`,
+`TVA_REPORT_PROVIDER=fake`) so CI and first-run never call a paid API.
 WhisperX is the local adapter (`TVA_ASR_PROVIDER=whisperx`). Hosted fallback
 is Deepgram (`TVA_ASR_PROVIDER=deepgram`, audio only). Grok extract is opt-in
 (`TVA_EXTRACT_PROVIDER=grok`, `XAI_API_KEY`, optional `TVA_EXTRACT_MODEL`,
-default `grok-4.6`). The German prompt lives in
+default `grok-4.6`). Grok debrief prose is the same key
+(`TVA_REPORT_PROVIDER=grok`, optional `TVA_REPORT_MODEL`). The German
+prompt lives in
 [`prompts/insights_v1.de.md`](prompts/insights_v1.de.md).
 
 ## API (Grok)

@@ -77,7 +77,7 @@ def run_doctor(root: Path) -> DoctorReport:
             detail=(
                 "XAI_API_KEY set"
                 if xai
-                else "XAI_API_KEY unset (needed for TVA_EXTRACT_PROVIDER=grok / TVA_VLM_PROVIDER=grok)"
+                else "XAI_API_KEY unset (needed for TVA_EXTRACT_PROVIDER=grok / TVA_VLM_PROVIDER=grok / TVA_REPORT_PROVIDER=grok)"
             ),
         )
     )
@@ -199,6 +199,21 @@ def run_doctor(root: Path) -> DoctorReport:
             ),
         )
     )
+    report_provider = (os.environ.get("TVA_REPORT_PROVIDER") or "fake").strip().lower() or "fake"
+    if report_provider in {"grok", "xai"}:
+        if xai:
+            rp_status, rp_detail = "ok", f"TVA_REPORT_PROVIDER={report_provider}"
+        else:
+            rp_status, rp_detail = (
+                "fail",
+                "TVA_REPORT_PROVIDER=grok but XAI_API_KEY is unset",
+            )
+    elif report_provider in {"fake", "test"}:
+        rp_status, rp_detail = "ok", f"TVA_REPORT_PROVIDER={report_provider}"
+    else:
+        rp_status, rp_detail = "warn", f"TVA_REPORT_PROVIDER={report_provider}"
+    checks.append(DoctorCheck(id="report_provider", status=rp_status, detail=rp_detail))
+
     notion_provider = (os.environ.get("TVA_NOTION_PROVIDER") or "fake").strip().lower() or "fake"
     if notion_provider in {"notion", "live"}:
         if notion_key:

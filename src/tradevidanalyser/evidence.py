@@ -405,6 +405,7 @@ def evidence_session(
     if evidence is None:
         path = store.evidence_path(root, session_id)
         path.unlink(missing_ok=True)
+        store.drop_debrief(root, session_id)
         store.compute_status(root, session_id)
         return EvidenceResult(
             session_id=session_id,
@@ -416,6 +417,7 @@ def evidence_session(
         if problems:
             raise ValueError(problems[0][2])
     store.write_json(store.evidence_path(root, session_id), evidence.model_dump(mode="json"))
+    store.drop_debrief(root, session_id)
     store.compute_status(root, session_id)
     return EvidenceResult(
         session_id=session_id,

@@ -20,6 +20,7 @@ from tradevidanalyser.ocr import (
 )
 from tradevidanalyser.evidence import EvidenceResult, evidence_session as run_evidence
 from tradevidanalyser.context import ContextResult, context_session as run_context
+from tradevidanalyser.report import ReportResult, report_session as run_report
 from tradevidanalyser.rules import RulesResult, rules_session as run_rules
 from tradevidanalyser.providers.asr import AsrError, get_asr_provider
 from tradevidanalyser.providers.extract import (
@@ -183,6 +184,7 @@ def ocr_session(
     rows = ocr_frames(record, root=root, provider=provider, layout_id=layout_id)
     path = store.ocr_path(root, session_id)
     write_ocr_parquet(path, rows)
+    store.drop_debrief(root, session_id)
     store.compute_status(root, session_id)
     payload = ocr_result_dict(session_id, path, rows, provider)
     try:
@@ -381,6 +383,17 @@ def context_session(
         lab_dir=lab_dir,
         notion_provider=notion_provider,
     )
+
+
+def report_session(
+    session_id: str,
+    *,
+    root: Path,
+    provider_name: str | None = None,
+) -> ReportResult:
+    if not store.is_safe_path_name(session_id):
+        raise ValueError(f"unsafe session id {session_id!r}")
+    return run_report(session_id, root=root, provider_name=provider_name)
 
 
 def align_session(

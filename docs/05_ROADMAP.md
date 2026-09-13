@@ -15,7 +15,7 @@ product decision, not a hidden dependency.
 | **TVA3** | Optional frames / clock OCR / chapter clips / opt-in VLM | TVA2 | PR-12…PR-15 landed (frames, OCR, redact/clips, opt-in VLM) |
 | **TVA4** | TradesViz executions join (broker-agnostic fills) | TVA2 | PR-16/17 landed (loader + mirror + recon passthrough) |
 | **TVA5** | Alignment + per-trade windows + rule scorecard | TVA4 | landed (PR-18…PR-21; D4 stays parked) |
-| **TVA6** | Briefs + ThesisTester attribution + debrief/ledger | TVA5 | started (PR-22 context landed; debrief/ledger later) |
+| **TVA6** | Briefs + ThesisTester attribution + debrief/ledger | TVA5 | started (PR-22/23 landed; ledger later) |
 | **TVA7** | Coach loop: intent-tag proposals, experiments | TVA6 | later |
 | parked | Full-session Gemini pass; live fill → OBS chapters; viewer; TopstepX API as a *venue adapter* | — | parked |
 
@@ -104,12 +104,16 @@ Absent speech → `unverifiable`, never `pass`. R-SLTP stays
 modifications). **D4 stays parked:** `daily_loss_limit_usd` is null →
 R-DLL `unverifiable`. Do not hard-code $100 or $200.
 
-**TVA6 — Context join.** `tva context` (PR-22) reads Notion briefs
-(English) + DRC and ThesisTester `journal attribute|zones|triggers`
+**TVA6 — Context join + debrief.** `tva context` (PR-22) reads Notion
+briefs (English) + DRC and ThesisTester `journal attribute|zones|triggers`
 parquet (`--lab-dir`). Join is `entry_fill_id` only — no level math.
-Debrief / ledger / publish stay later. The two repos share a machine
-when lab parquet is used (likely the Mac, where the study store already
-lives). Notion is mocked in CI.
+`tva report` (PR-23) writes `debrief.md` / `debrief.json` in a fixed
+section order. Facts come from files; prose goes through a cited
+`ReportProvider` (`fake` default). Every digit run in the markdown
+must already appear in `trades.parquet`, `ocr.parquet`, or
+`context.json`. Ledger / publish stay later. The two repos share a
+machine when lab parquet is used (likely the Mac, where the study store
+already lives). Notion and Grok report are mocked in CI.
 
 **TVA7 — Coach loop.** Proposed TradesViz tags from speech; weekly
 experiment tracking.
