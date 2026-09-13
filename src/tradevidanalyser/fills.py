@@ -679,8 +679,7 @@ def ingest_fills(
         store.evidence_path(root, record.id).unlink(missing_ok=True)
         store.rules_path(root, record.id).unlink(missing_ok=True)
         store.context_path(root, record.id).unlink(missing_ok=True)
-        store.debrief_md_path(root, record.id).unlink(missing_ok=True)
-        store.debrief_json_path(root, record.id).unlink(missing_ok=True)
+        store.drop_debrief(root, record.id)
         store.compute_status(root, record.id)
         return FillsResult(
             session_id=record.id,
@@ -719,8 +718,7 @@ def ingest_fills(
     store.evidence_path(root, record.id).unlink(missing_ok=True)
     store.rules_path(root, record.id).unlink(missing_ok=True)
     store.context_path(root, record.id).unlink(missing_ok=True)
-    store.debrief_md_path(root, record.id).unlink(missing_ok=True)
-    store.debrief_json_path(root, record.id).unlink(missing_ok=True)
+    store.drop_debrief(root, record.id)
     store.compute_status(root, record.id)
     return FillsResult(
         session_id=record.id,

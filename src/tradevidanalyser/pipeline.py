@@ -184,6 +184,7 @@ def ocr_session(
     rows = ocr_frames(record, root=root, provider=provider, layout_id=layout_id)
     path = store.ocr_path(root, session_id)
     write_ocr_parquet(path, rows)
+    store.drop_debrief(root, session_id)
     store.compute_status(root, session_id)
     payload = ocr_result_dict(session_id, path, rows, provider)
     try:

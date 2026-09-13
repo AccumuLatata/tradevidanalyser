@@ -6,6 +6,7 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -13,6 +14,7 @@ import httpx
 import pyarrow.parquet as pq
 
 from tradevidanalyser import store
+from tradevidanalyser.naming import VIENNA
 from tradevidanalyser.providers.extract import default_prompt_path, prompt_version_for
 from tradevidanalyser.schema import (
     DebriefReport,
@@ -31,6 +33,10 @@ DEFAULT_GROK_MODEL = "grok-4.6"
 XAI_CHAT_URL = "https://api.x.ai/v1/chat/completions"
 HTTP_TIMEOUT = 3600.0
 DIGIT_RUN = re.compile(r"\d+")
+# Structured ids that must already be on the allow-list if they appear in prose.
+ID_IN_TEXT = re.compile(r"\b(?:T\d+|seg_\d+|R-[A-Z0-9]+(?:-[A-Z0-9]+)*)\b|clips/\S+")
+OCR_DIGIT_COLUMNS = ("text", "parsed")
+CONTEXT_SKIP_KEYS = frozenset({"schema_version"})
 SECTION_SPECS = (
     ("source", "Source", "facts"),
     ("day", "Day", "prose"),
@@ -134,12 +140,46 @@ def _require_safe_session_id(session_id: str) -> str:
     return session_id
 
 
-def _cell_text(value: object) -> str:
+def _is_missing(value: object) -> bool:
     if value is None:
+        return True
+    if isinstance(value, str) and not value.strip():
+        return True
+    try:
+        if value != value:  # NaN
+            return True
+    except TypeError:
+        pass
+    return False
+
+
+def _datetime_texts(value: datetime) -> list[str]:
+    texts: list[str] = []
+    try:
+        texts.append(value.isoformat())
+    except (TypeError, ValueError):
+        pass
+    aware = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    try:
+        texts.append(aware.astimezone(timezone.utc).isoformat())
+        texts.append(aware.astimezone(VIENNA).isoformat())
+    except (TypeError, ValueError):
+        pass
+    return texts
+
+
+def _cell_text(value: object) -> str:
+    if _is_missing(value):
         return ""
     if isinstance(value, bool):
         return ""
-    if hasattr(value, "isoformat") and not isinstance(value, str):
+    if isinstance(value, datetime):
+        aware = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+        try:
+            return aware.astimezone(VIENNA).isoformat()
+        except (TypeError, ValueError):
+            return str(value)
+    if isinstance(value, date):
         try:
             return value.isoformat()
         except (TypeError, ValueError):
@@ -149,32 +189,46 @@ def _cell_text(value: object) -> str:
     return str(value)
 
 
-def _harvest_value(value: object, into: set[str]) -> None:
-    if value is None or isinstance(value, bool):
+def _harvest_value(value: object, into: set[str], *, key: str | None = None) -> None:
+    if key in CONTEXT_SKIP_KEYS:
+        return
+    if _is_missing(value) or isinstance(value, bool):
         return
     if isinstance(value, (list, tuple)):
         for item in value:
             _harvest_value(item, into)
         return
     if isinstance(value, dict):
-        for item in value.values():
-            _harvest_value(item, into)
+        for child_key, item in value.items():
+            if child_key in CONTEXT_SKIP_KEYS:
+                continue
+            # Lab per_trade keys are tva_trade_ids (facts). Field names are not.
+            if key == "per_trade" and isinstance(child_key, str):
+                _harvest_value(child_key, into)
+            _harvest_value(item, into, key=str(child_key))
+        return
+    if isinstance(value, datetime):
+        for text in _datetime_texts(value):
+            into.update(DIGIT_RUN.findall(text))
         return
     into.update(DIGIT_RUN.findall(_cell_text(value)))
-    if isinstance(value, float):
-        into.update(DIGIT_RUN.findall(str(value)))
 
 
-def _read_parquet_cells(path: Path) -> list[object]:
+def _read_parquet_cells(path: Path, columns: tuple[str, ...] | None = None) -> list[object]:
     table = pq.read_table(path)
+    names = list(table.column_names)
+    if columns is not None:
+        names = [name for name in columns if name in names]
     cells: list[object] = []
-    for name in table.column_names:
+    for name in names:
         cells.extend(table.column(name).to_pylist())
     return cells
 
 
 def collect_allowed_runs(root: Path, session_id: str) -> set[str]:
     """Digit runs from trades.parquet, ocr.parquet, and context.json only."""
+    if not store.is_safe_path_name(session_id):
+        raise ValueError(f"unsafe session id {session_id!r}")
     allowed: set[str] = set()
     trades = store.trades_path(root, session_id)
     if trades.is_file():
@@ -182,11 +236,19 @@ def collect_allowed_runs(root: Path, session_id: str) -> set[str]:
             _harvest_value(cell, allowed)
     ocr = store.ocr_path(root, session_id)
     if ocr.is_file():
-        for cell in _read_parquet_cells(ocr):
+        for cell in _read_parquet_cells(ocr, columns=OCR_DIGIT_COLUMNS):
             _harvest_value(cell, allowed)
     context = store.context_path(root, session_id)
     if context.is_file():
-        allowed.update(DIGIT_RUN.findall(context.read_text(encoding="utf-8")))
+        raw = context.read_text(encoding="utf-8")
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            data = None
+        if isinstance(data, dict):
+            _harvest_value(data, allowed)
+        else:
+            allowed.update(DIGIT_RUN.findall(raw))
     return allowed
 
 
@@ -224,7 +286,10 @@ def _trade_rows(root: Path, session_id: str) -> list[dict[str, str]]:
     fallback = col("trade_id")
     rows: list[dict[str, str]] = []
     for index in range(n):
-        tva_id = _cell_text(ids[index]) or _cell_text(fallback[index]) or f"T{index + 1:02d}"
+        tva_id = _cell_text(ids[index]) or _cell_text(fallback[index])
+        net = col("net_pnl_currency")[index]
+        gross = col("gross_pnl_currency")[index]
+        pnl = net if not _is_missing(net) else gross
         rows.append(
             {
                 "tva_trade_id": tva_id,
@@ -232,7 +297,7 @@ def _trade_rows(root: Path, session_id: str) -> list[dict[str, str]]:
                 "instrument": _cell_text(col("instrument")[index]),
                 "entry": _cell_text(col("entry_price")[index]),
                 "exit": _cell_text(col("exit_price")[index]),
-                "pnl": _cell_text(col("net_pnl_currency")[index] or col("gross_pnl_currency")[index]),
+                "pnl": _cell_text(pnl),
             }
         )
     return rows
@@ -274,28 +339,37 @@ def _allowed_ids(
 ) -> list[str]:
     ids = [trade["tva_trade_id"] for trade in trades if trade["tva_trade_id"]]
     ids.extend(row["rule"] for row in rules)
-    ids.extend(("brief", "drc", "lab"))
     if context is not None:
+        if context.brief is not None:
+            ids.append("brief")
+        if context.drc is not None:
+            ids.append("drc")
+        if context.lab is not None:
+            ids.append("lab")
         ids.append(context.session_id)
     ids.append(record.id)
     if store.insights_path(root, record.id).is_file():
-        insights = store.load_insights(root, record.id)
-        for event in insights.session_events:
-            if event.seg:
-                ids.append(event.seg)
-        for field in (
-            insights.bias_statements,
-            insights.playbooks_mentioned,
-            insights.stated_levels,
-            insights.stated_stops_targets,
-            insights.checkins,
-            insights.tilt_markers,
-            insights.brief_refs,
-            insights.observations,
-        ):
-            for span in field:
-                if span.seg:
-                    ids.append(span.seg)
+        try:
+            insights = store.load_insights(root, record.id)
+        except (OSError, TypeError, ValueError):
+            insights = None
+        if insights is not None:
+            for event in insights.session_events:
+                if event.seg:
+                    ids.append(event.seg)
+            for field in (
+                insights.bias_statements,
+                insights.playbooks_mentioned,
+                insights.stated_levels,
+                insights.stated_stops_targets,
+                insights.checkins,
+                insights.tilt_markers,
+                insights.brief_refs,
+                insights.observations,
+            ):
+                for span in field:
+                    if span.seg:
+                        ids.append(span.seg)
     ids.extend(clips.values())
     seen: set[str] = set()
     out: list[str] = []
@@ -343,7 +417,7 @@ def gather_facts(record: SessionRecord, *, root: Path) -> ReportFacts:
     return ReportFacts(
         session_id=session_id,
         language=record.language,
-        trade_ids=[row["tva_trade_id"] for row in trades],
+        trade_ids=[row["tva_trade_id"] for row in trades if row["tva_trade_id"]],
         trades=trades,
         rules=rules,
         brief=brief,
@@ -356,11 +430,18 @@ def gather_facts(record: SessionRecord, *, root: Path) -> ReportFacts:
 
 def _keep_span(span: ProseSpan, facts: ReportFacts, gaps: list[str], label: str) -> ProseSpan | None:
     text = (span.text or "").strip()
-    cites = [cite for cite in span.cites if cite in facts.allowed_ids]
+    cites = [str(cite).strip() for cite in span.cites if str(cite).strip()]
     if not text:
         return None
     if not cites:
         gaps.append(f"dropped uncited {label}")
+        return None
+    if any(cite not in facts.allowed_ids for cite in cites):
+        gaps.append(f"dropped {label} with unknown cite")
+        return None
+    invented = [token for token in ID_IN_TEXT.findall(text) if token not in facts.allowed_ids]
+    if invented:
+        gaps.append(f"dropped {label} with invented id")
         return None
     if digit_audit(text, facts.allowed_runs):
         gaps.append(f"dropped {label} with digit not in trades/ocr/context")
@@ -369,7 +450,7 @@ def _keep_span(span: ProseSpan, facts: ReportFacts, gaps: list[str], label: str)
 
 
 def _fallback_learnings(facts: ReportFacts) -> list[ProseSpan]:
-    cite = facts.trade_ids[0] if facts.trade_ids else "brief"
+    cite = facts.trade_ids[0] if facts.trade_ids else facts.session_id
     if cite not in facts.allowed_ids:
         return []
     lines = [
@@ -391,13 +472,18 @@ class FakeReportProvider:
             day = ProseSpan(text=f"Reviewed the tape against {cite}.", cites=[cite])
             notes = ProseSpan(text=f"Notes recorded for {cite}.", cites=[cite])
         else:
-            day = ProseSpan(text="Reviewed available files.", cites=["brief"])
+            session_cite = facts.session_id if facts.session_id in facts.allowed_ids else ""
+            day = ProseSpan(
+                text="Reviewed available files.",
+                cites=[session_cite] if session_cite else [],
+            )
             notes = ProseSpan(text="", cites=[])
         brief_bits: list[str] = []
-        brief_cites = ["brief"]
-        if facts.brief.get("bias_nq"):
+        brief_cites: list[str] = []
+        if facts.brief.get("bias_nq") and "brief" in facts.allowed_ids:
             brief_bits.append(f"Brief NQ bias: {facts.brief['bias_nq']}.")
-        if cite and facts.lab.get(cite, {}).get("nearest_level_token"):
+            brief_cites.append("brief")
+        if cite and facts.lab.get(cite, {}).get("nearest_level_token") and "lab" in facts.allowed_ids:
             token = facts.lab[cite]["nearest_level_token"]
             brief_bits.append(f"{cite} lab token {token}.")
             brief_cites.append(cite)
@@ -500,23 +586,51 @@ def _spans_from(raw: object) -> list[ProseSpan]:
     return out
 
 
+def _message_content(message: dict[str, Any]) -> str:
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text") or item.get("content")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "".join(parts)
+    return ""
+
+
 def _payload_body(payload: object) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ReportError("Grok returned a non-object JSON body")
     choices = payload.get("choices")
-    if isinstance(choices, list) and choices:
-        message = choices[0].get("message") if isinstance(choices[0], dict) else None
-        content = message.get("content") if isinstance(message, dict) else None
-        if isinstance(content, str):
-            try:
-                body = json.loads(content)
-            except ValueError as exc:
-                raise ReportError("Grok JSON content is not an object") from exc
-            if isinstance(body, dict):
-                return body
-        if isinstance(content, dict):
-            return content
-    raise ReportError("Grok JSON content is not an object")
+    if not isinstance(choices, list) or not choices:
+        raise ReportError("Grok response has no choices")
+    first = choices[0]
+    if not isinstance(first, dict):
+        raise ReportError("Grok choice is not an object")
+    message = first.get("message")
+    if not isinstance(message, dict):
+        raise ReportError("Grok choice has no message")
+    content = message.get("content")
+    if isinstance(content, dict):
+        return content
+    raw = _message_content(message).strip()
+    if not raw:
+        refusal = message.get("refusal")
+        if refusal:
+            raise ReportError(f"Grok refused: {refusal}")
+        raise ReportError("Grok message content is empty")
+    try:
+        body = json.loads(raw)
+    except ValueError as exc:
+        raise ReportError("Grok JSON content is not an object") from exc
+    if not isinstance(body, dict):
+        raise ReportError("Grok JSON content is not an object")
+    return body
 
 
 def _prose_schema() -> dict[str, Any]:
@@ -743,6 +857,8 @@ def report_session(
     markdown = render_markdown(report)
     bad = digit_audit(markdown, collect_allowed_runs(root, session_id))
     if bad:
+        store.drop_debrief(root, session_id)
+        store.compute_status(root, session_id)
         raise ReportError("debrief.md digit not in trades/ocr/context: " + ", ".join(bad[:8]))
     store.debrief_md_path(root, session_id).write_text(markdown, encoding="utf-8")
     store.write_json(store.debrief_json_path(root, session_id), report.model_dump(mode="json"))

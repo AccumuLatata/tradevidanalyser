@@ -22,12 +22,15 @@ Return JSON with this shape:
 Rules:
 
 - `cites` must be a subset of `allowed_ids` from the user message
-  (trade ids, rule ids, segment ids, `brief`, `drc`, `lab`, clip names).
+  (trade ids, rule ids, segment ids, clip names, and `brief` / `drc` /
+  `lab` only when those objects exist). Unknown cites drop the span.
 - Every span must have at least one cite. Uncited prose is dropped.
+- Do not mention a trade id, segment id, rule id, or clip path that is
+  not in `allowed_ids`. Invented ids drop the span.
 - Every digit run (`/\d+/`) in `text` must already appear in
-  `allowed_digit_runs`. Those runs come from `trades.parquet`,
-  `ocr.parquet`, and `context.json` only. If you cannot support a
-  number, omit it.
+  `allowed_digit_runs`. Those runs come from trade cells, OCR `text` /
+  `parsed`, and context fact fields (not `schema_version`). If you
+  cannot support a number, omit it.
 - `learnings` must contain exactly three candidate process learnings.
   Do not grade outcome. Do not invent fills or levels.
 - English prose. German quotes stay verbatim if you use them, and only
