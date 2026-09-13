@@ -18,6 +18,8 @@ from tradevidanalyser.context import (
     ENV_NOTION_KEY,
     ENV_NOTION_PROVIDER,
     NOTION_API,
+    NOTION_MAX_PAGES,
+    NOTION_PAGE_SIZE,
     NOTION_VERSION,
     brief_day_label,
     session_calendar_date,
@@ -55,12 +57,14 @@ class PublishedPage:
     title: str
     properties: dict[str, str] = field(default_factory=dict)
     body: str = ""
+    archived: bool = False
+    database_id: str | None = None
 
 
 class PublishNotionClient(Protocol):
     name: str
 
-    def find_page(self, title: str) -> PublishedPage | None: ...
+    def find_page(self, title: str, *, database_only: bool = False) -> PublishedPage | None: ...
 
     def get_page(self, page_id: str) -> PublishedPage | None: ...
 
@@ -155,6 +159,18 @@ def _norm_title(text: str) -> str:
     return " ".join((text or "").split())
 
 
+def _titles_match(left: str, right: str) -> bool:
+    return _norm_title(left) == _norm_title(right)
+
+
+def _looks_like_notion_id(value: str) -> bool:
+    return bool(value) and _NOTION_ID.match(value.strip()) is not None
+
+
+def _page_usable(page: PublishedPage | None) -> bool:
+    return page is not None and not page.archived
+
+
 def _rich(text: str) -> list[dict[str, Any]]:
     return [{"type": "text", "text": {"content": (text or "")[:1900]}}]
 
@@ -169,15 +185,20 @@ class FakePublishClient:
     def _persist(self) -> None:
         _save_fake_pages(self._root, self._pages)
 
-    def find_page(self, title: str) -> PublishedPage | None:
+    def find_page(self, title: str, *, database_only: bool = False) -> PublishedPage | None:
         want = _norm_title(title)
         for page in self._pages.values():
-            if _norm_title(page.title) == want:
+            if page.archived:
+                continue
+            if _titles_match(page.title, want):
                 return page
         return None
 
     def get_page(self, page_id: str) -> PublishedPage | None:
-        return self._pages.get(page_id)
+        page = self._pages.get(page_id)
+        if page is None or page.archived:
+            return None
+        return page
 
     def create_debrief(self, payload: DebriefPayload) -> PublishedPage:
         existing = self.find_page(payload.title)
@@ -261,7 +282,7 @@ class LivePublishClient:
     def _client_ctx(self) -> httpx.Client:
         return self._client or httpx.Client(timeout=HTTP_TIMEOUT)
 
-    def find_page(self, title: str) -> PublishedPage | None:
+    def find_page(self, title: str, *, database_only: bool = False) -> PublishedPage | None:
         own = self._client is None
         client = self._client_ctx()
         try:
@@ -269,6 +290,8 @@ class LivePublishClient:
                 found = self._query_database(client, title)
                 if found is not None:
                     return found
+                if database_only:
+                    return None
             return self._search_title(client, title)
         except httpx.HTTPError as exc:
             raise PublishError(f"Notion request failed: {exc}") from exc
@@ -277,15 +300,22 @@ class LivePublishClient:
                 client.close()
 
     def get_page(self, page_id: str) -> PublishedPage | None:
+        if not _looks_like_notion_id(page_id):
+            return None
         own = self._client is None
         client = self._client_ctx()
         try:
-            response = client.get(f"{NOTION_API}/pages/{page_id}", headers=self._headers())
-            if response.status_code == 404:
+            response = client.get(
+                f"{NOTION_API}/pages/{page_id.strip()}", headers=self._headers()
+            )
+            if response.status_code in {400, 404}:
                 return None
             if response.status_code >= 400:
                 raise PublishError(f"Notion HTTP {response.status_code}: {response.text[:300]}")
-            return _page_from_raw(response.json())
+            page = _page_from_raw(response.json())
+            if not _page_usable(page):
+                return None
+            return page
         except httpx.HTTPError as exc:
             raise PublishError(f"Notion request failed: {exc}") from exc
         finally:
@@ -295,9 +325,27 @@ class LivePublishClient:
     def create_debrief(self, payload: DebriefPayload) -> PublishedPage:
         if not self._database_id:
             raise PublishError("TVA_NOTION_JOURNAL_DB is unset")
-        existing = self.find_page(payload.title)
+        existing = self.find_page(payload.title, database_only=True)
         if existing is not None:
-            return self.update_debrief(existing.page_id, payload)
+            patched = self._patch_debrief(existing.page_id, payload)
+            if patched is not None:
+                return patched
+        return self._post_debrief(payload)
+
+    def update_debrief(self, page_id: str, payload: DebriefPayload) -> PublishedPage:
+        patched = self._patch_debrief(page_id, payload)
+        if patched is not None:
+            return patched
+        existing = self.find_page(payload.title, database_only=bool(self._database_id))
+        if existing is not None and existing.page_id != page_id:
+            patched = self._patch_debrief(existing.page_id, payload)
+            if patched is not None:
+                return patched
+        return self._post_debrief(payload)
+
+    def _post_debrief(self, payload: DebriefPayload) -> PublishedPage:
+        if not self._database_id:
+            raise PublishError("TVA_NOTION_JOURNAL_DB is unset")
         own = self._client is None
         client = self._client_ctx()
         try:
@@ -319,18 +367,20 @@ class LivePublishClient:
             if own and self._client is None:
                 client.close()
 
-    def update_debrief(self, page_id: str, payload: DebriefPayload) -> PublishedPage:
+    def _patch_debrief(self, page_id: str, payload: DebriefPayload) -> PublishedPage | None:
+        if not _looks_like_notion_id(page_id):
+            return None
         own = self._client is None
         client = self._client_ctx()
         try:
             props = self._properties(client, payload)
             response = client.patch(
-                f"{NOTION_API}/pages/{page_id}",
+                f"{NOTION_API}/pages/{page_id.strip()}",
                 headers=self._headers(),
                 json={"properties": props},
             )
-            if response.status_code == 404:
-                return self.create_debrief(payload)
+            if response.status_code in {400, 404}:
+                return None
             if response.status_code >= 400:
                 raise PublishError(f"Notion HTTP {response.status_code}: {response.text[:300]}")
             page = _page_from_raw(response.json())
@@ -348,34 +398,27 @@ class LivePublishClient:
         if not page_id:
             found = self.find_page(RUNS_TITLE)
             page_id = found.page_id if found else None
-        if not page_id:
+        if not page_id or not _looks_like_notion_id(page_id):
             return None
         own = self._client is None
         client = self._client_ctx()
         try:
-            listed = client.get(
-                f"{NOTION_API}/blocks/{page_id}/children",
-                headers=self._headers(),
-                params={"page_size": 100},
-            )
-            if listed.status_code < 400:
-                payload = listed.json()
-                for block in payload.get("results") or []:
-                    if not isinstance(block, dict):
-                        continue
-                    kind = str(block.get("type") or "")
-                    data = block.get(kind) if kind else None
-                    text = ""
-                    if isinstance(data, dict):
-                        text = "".join(
-                            str(item.get("plain_text") or "")
-                            for item in (data.get("rich_text") or [])
-                            if isinstance(item, dict)
-                        )
-                    if _log_already_present(text, session_id):
-                        return page_id
+            try:
+                blocks = _iter_notion_results(
+                    client,
+                    f"{NOTION_API}/blocks/{page_id.strip()}/children",
+                    headers=self._headers(),
+                    method="GET",
+                )
+            except httpx.HTTPStatusError as exc:
+                if exc.response is not None and exc.response.status_code in {400, 404}:
+                    return None
+                raise
+            texts = [_block_plain_text(block) for block in blocks]
+            if _log_already_present("\n".join(texts), session_id):
+                return page_id
             response = client.post(
-                f"{NOTION_API}/blocks/{page_id}/children",
+                f"{NOTION_API}/blocks/{page_id.strip()}/children",
                 headers=self._headers(),
                 json={
                     "children": [
@@ -445,38 +488,51 @@ class LivePublishClient:
 
     def _query_database(self, client: httpx.Client, title: str) -> PublishedPage | None:
         url = f"{NOTION_API}/databases/{self._database_id}/query"
-        for prop in ("Name", "Title"):
-            response = client.post(
-                url,
-                headers=self._headers(),
-                json={"filter": {"property": prop, "title": {"equals": title}}, "page_size": 20},
-            )
-            if response.status_code in {400, 404}:
-                continue
-            if response.status_code >= 400:
-                raise PublishError(f"Notion HTTP {response.status_code}: {response.text[:300]}")
-            for raw in (response.json() or {}).get("results") or []:
+        title_key = self._property_names(client)[0]
+        props: list[str] = []
+        for prop in (title_key, "Name", "Title"):
+            if prop and prop not in props:
+                props.append(prop)
+        for prop in props:
+            try:
+                raws = _iter_notion_results(
+                    client,
+                    url,
+                    headers=self._headers(),
+                    json_body={"filter": {"property": prop, "title": {"equals": title}}},
+                )
+            except PublishError:
+                raise
+            except httpx.HTTPStatusError as exc:
+                if exc.response is not None and exc.response.status_code in {400, 404}:
+                    continue
+                raise PublishError(
+                    f"Notion HTTP {exc.response.status_code if exc.response is not None else '?'}: "
+                    f"{(exc.response.text[:300] if exc.response is not None else str(exc))}"
+                ) from exc
+            for raw in raws:
                 page = _page_from_raw(raw)
-                if page is not None and _norm_title(page.title) == _norm_title(title):
+                if _page_usable(page) and page is not None and _titles_match(page.title, title):
                     return page
             return None
         return None
 
     def _search_title(self, client: httpx.Client, title: str) -> PublishedPage | None:
-        response = client.post(
+        raws = _iter_notion_results(
+            client,
             f"{NOTION_API}/search",
             headers=self._headers(),
-            json={
+            json_body={
                 "query": title,
                 "filter": {"value": "page", "property": "object"},
-                "page_size": 20,
             },
         )
-        if response.status_code >= 400:
-            raise PublishError(f"Notion HTTP {response.status_code}: {response.text[:300]}")
-        for raw in (response.json() or {}).get("results") or []:
+        for raw in raws:
             page = _page_from_raw(raw)
-            if page is not None and _norm_title(page.title) == _norm_title(title):
+            if _page_usable(page) and page is not None and _titles_match(page.title, title):
+                if self._database_id and page.database_id:
+                    if _norm_id(page.database_id) != _norm_id(self._database_id):
+                        continue
                 return page
         return None
 
@@ -493,17 +549,79 @@ def _payload_props(payload: DebriefPayload) -> dict[str, str]:
 
 
 def _log_already_present(text: str, session_id: str) -> bool:
-    blob = text or ""
-    return session_id in blob and "publish" in blob.lower()
+    """True when a *TVA runs* line already records this session's publish."""
+    marker = f"session {session_id}"
+    for line in (text or "").splitlines():
+        compact = " ".join(line.split())
+        if marker in compact and "publish ok" in compact.lower():
+            return True
+    return False
+
+
+def _norm_id(value: str) -> str:
+    return value.replace("-", "").lower()
+
+
+def _block_plain_text(block: object) -> str:
+    if not isinstance(block, dict):
+        return ""
+    kind = str(block.get("type") or "")
+    data = block.get(kind) if kind else None
+    if not isinstance(data, dict):
+        return ""
+    return "".join(
+        str(item.get("plain_text") or "")
+        for item in (data.get("rich_text") or [])
+        if isinstance(item, dict)
+    )
+
+
+def _iter_notion_results(
+    client: httpx.Client,
+    url: str,
+    *,
+    headers: dict[str, str],
+    method: str = "POST",
+    json_body: dict[str, Any] | None = None,
+    params: dict[str, Any] | None = None,
+) -> list[object]:
+    results: list[object] = []
+    cursor: str | None = None
+    for _ in range(NOTION_MAX_PAGES):
+        if method == "POST":
+            body = dict(json_body or {})
+            body["page_size"] = NOTION_PAGE_SIZE
+            if cursor:
+                body["start_cursor"] = cursor
+            response = client.post(url, headers=headers, json=body)
+        else:
+            query = dict(params or {})
+            query["page_size"] = NOTION_PAGE_SIZE
+            if cursor:
+                query["start_cursor"] = cursor
+            response = client.get(url, headers=headers, params=query)
+        if response.status_code >= 400:
+            response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise PublishError("Notion returned a non-object")
+        chunk = payload.get("results") or []
+        if isinstance(chunk, list):
+            results.extend(chunk)
+        if not payload.get("has_more"):
+            break
+        nxt = payload.get("next_cursor")
+        if not nxt:
+            break
+        cursor = str(nxt)
+    return results
 
 
 def _page_from_raw(raw: object) -> PublishedPage | None:
-    if not isinstance(raw, dict) or raw.get("object") not in {None, "page"}:
-        if isinstance(raw, dict) and raw.get("id") and "properties" in raw:
-            pass
-        elif not (isinstance(raw, dict) and raw.get("id")):
-            return None
     if not isinstance(raw, dict):
+        return None
+    kind = raw.get("object")
+    if kind not in {None, "page"}:
         return None
     page_id = str(raw.get("id") or "")
     if not page_id:
@@ -520,10 +638,17 @@ def _page_from_raw(raw: object) -> PublishedPage | None:
                 )
                 if title:
                     break
+    parent = raw.get("parent") or {}
+    database_id = None
+    if isinstance(parent, dict) and parent.get("database_id"):
+        database_id = str(parent.get("database_id"))
+    archived = bool(raw.get("archived") or raw.get("in_trash"))
     return PublishedPage(
         page_id=page_id,
         url=str(raw.get("url") or ""),
         title=_norm_title(title),
+        archived=archived,
+        database_id=database_id,
     )
 
 
@@ -545,6 +670,8 @@ def _load_fake_pages(root: Path) -> dict[str, PublishedPage]:
             title=str(item.get("title") or ""),
             properties=dict(item.get("properties") or {}),
             body=str(item.get("body") or ""),
+            archived=bool(item.get("archived")),
+            database_id=str(item["database_id"]) if item.get("database_id") else None,
         )
         pages[page.page_id] = page
     return pages
@@ -561,6 +688,8 @@ def _save_fake_pages(root: Path, pages: dict[str, PublishedPage]) -> None:
                     "title": page.title,
                     "properties": page.properties,
                     "body": page.body,
+                    "archived": page.archived,
+                    "database_id": page.database_id,
                 }
                 for page in pages.values()
             ]
@@ -594,7 +723,38 @@ def _load_debrief(root: Path, session_id: str) -> DebriefReport:
     path = store.debrief_json_path(root, session_id)
     if not path.is_file():
         raise PublishError("debrief.json is missing; run tva report first")
-    return DebriefReport.model_validate(store.read_json(path))
+    report = DebriefReport.model_validate(store.read_json(path))
+    if report.session_id != session_id:
+        raise PublishError(
+            f"debrief.json session_id {report.session_id!r} does not match {session_id!r}"
+        )
+    return report
+
+
+def _saved_page_id(root: Path, session_id: str, *, title: str) -> str | None:
+    saved = store.publish_path(root, session_id)
+    if not saved.is_file():
+        return None
+    try:
+        raw = store.read_json(saved)
+    except (ValueError, OSError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    saved_session = str(raw.get("session_id") or "")
+    if saved_session and saved_session != session_id:
+        return None
+    saved_title = str(raw.get("title") or "")
+    if saved_title and not _titles_match(saved_title, title):
+        return None
+    page_id = str(raw.get("page_id") or "").strip()
+    return page_id or None
+
+
+def _page_matches_title(page: PublishedPage, title: str) -> bool:
+    if not page.title:
+        return True
+    return _titles_match(page.title, title)
 
 
 def publish_session(
@@ -618,21 +778,15 @@ def publish_session(
     report = _load_debrief(root, session_id)
     payload = payload_from_debrief(record, report)
     publisher = get_publish_client(provider_name, root=root, client=client)
-    existing_id = None
-    saved = store.publish_path(root, session_id)
-    if saved.is_file():
-        try:
-            existing_id = str(store.read_json(saved).get("page_id") or "") or None
-        except (ValueError, OSError):
-            existing_id = None
+    existing_id = _saved_page_id(root, session_id, title=payload.title)
     created = False
     page = None
     if existing_id:
-        page = publisher.get_page(existing_id)
-        if page is not None:
+        current = publisher.get_page(existing_id)
+        if _page_usable(current) and current is not None and _page_matches_title(current, payload.title):
             page = publisher.update_debrief(existing_id, payload)
     if page is None:
-        found = publisher.find_page(payload.title)
+        found = publisher.find_page(payload.title, database_only=True)
         if found is not None:
             page = publisher.update_debrief(found.page_id, payload)
         else:
