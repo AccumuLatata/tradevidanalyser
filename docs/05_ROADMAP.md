@@ -14,8 +14,8 @@ product decision, not a hidden dependency.
 | **TVA2** | Insights extract + headless API (`tva serve`) | TVA1 | PR-08…PR-10 landed; PR-11 Grok routine pack; fake providers default |
 | **TVA3** | Optional frames / clock OCR / chapter clips / opt-in VLM | TVA2 | PR-12…PR-15 landed (frames, OCR, redact/clips, opt-in VLM) |
 | **TVA4** | TradesViz executions join (broker-agnostic fills) | TVA2 | PR-16/17 landed (loader + mirror + recon passthrough) |
-| **TVA5** | Alignment + per-trade windows + rule scorecard | TVA4 | started (PR-18…PR-21 landed; D4 stays parked) |
-| **TVA6** | Briefs + ThesisTester attribution + debrief/ledger | TVA5 | later |
+| **TVA5** | Alignment + per-trade windows + rule scorecard | TVA4 | landed (PR-18…PR-21; D4 stays parked) |
+| **TVA6** | Briefs + ThesisTester attribution + debrief/ledger | TVA5 | started (PR-22 context landed; debrief/ledger later) |
 | **TVA7** | Coach loop: intent-tag proposals, experiments | TVA6 | later |
 | parked | Full-session Gemini pass; live fill → OBS chapters; viewer; TopstepX API as a *venue adapter* | — | parked |
 
@@ -104,10 +104,12 @@ Absent speech → `unverifiable`, never `pass`. R-SLTP stays
 modifications). **D4 stays parked:** `daily_loss_limit_usd` is null →
 R-DLL `unverifiable`. Do not hard-code $100 or $200.
 
-**TVA6 — Context join.** Notion briefs (English) + DRC + ThesisTester
-`journal attribute|zones|triggers`. Optional `tva report` / publish.
-This is the first time the two repos must be installed on the same
-machine (likely the Mac, where the study store already lives).
+**TVA6 — Context join.** `tva context` (PR-22) reads Notion briefs
+(English) + DRC and ThesisTester `journal attribute|zones|triggers`
+parquet (`--lab-dir`). Join is `entry_fill_id` only — no level math.
+Debrief / ledger / publish stay later. The two repos share a machine
+when lab parquet is used (likely the Mac, where the study store already
+lives). Notion is mocked in CI.
 
 **TVA7 — Coach loop.** Proposed TradesViz tags from speech; weekly
 experiment tracking.

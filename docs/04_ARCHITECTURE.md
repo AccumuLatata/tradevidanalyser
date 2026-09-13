@@ -123,7 +123,7 @@ Every stage is a CLI subcommand, idempotent, writing into
 | Align | `tva align <session> [--manual-offset s]` | CLI (not a bot run stage) | `session.alignment` (offset/drift/confidence/method/samples) | yes, optional |
 | Evidence | `tva evidence <session>` | CLI (not a bot run stage) | `evidence.json` per-trade windows + cited stated fields | yes, optional |
 | Rules | `tva rules <session>` | CLI (not a bot run stage) | `rules.json` scorecard from `trades.parquet` plus `evidence.json` / `insights.session_events` | yes, optional |
-| Context | `tva context <session>` | — | briefs + ThesisTester attribution | **later** |
+| Context | `tva context <session> [--lab-dir]` | CLI (not a bot run stage) | `context.json` briefs/DRC + lab join on `entry_fill_id` | yes, optional |
 
 `tva run --latest` is the scheduler entry on the PC. `tva serve` is the
 Mac entry. Same package.
@@ -191,7 +191,13 @@ rules:                           # PR-20/21; omit until `tva rules`
   # evidence-backed rows: evidence.json + session_events; absent speech →
   # unverifiable (never pass). R-SLTP always unverifiable (no order mods)
   # evidence-backed pass always cites a segment id
-context: null                    # later — briefs, DRC, lab
+context:                         # PR-22; omit until `tva context`
+  brief: {macro_url, ny_url, bias_nq, bias_es, conviction, kill_levels, quoted: true} | null
+  drc: {scores, url} | null
+  lab: {per_trade: {T01: {nearest_level_token, level_context, tag_alignment,
+        inferred_triggers_1m, zone_id}}} | null
+  gaps: []
+  # Notion fake by default; live needs NOTION_API_KEY. Lab parquet is read-only.
 
 provenance: {app_version, ffmpeg, models, created_at}
 ```
@@ -238,7 +244,11 @@ PR-16 consumes ThesisTester; it does not fork it.
 - **AMP Daily Statement PDF** is FCM money truth (fees, P&S). ThesisTester
   already owns `amp_statement`. Use it; do not re-parse the PDF.
 - **ThesisTester** `journal attribute|zones|triggers` supplies level tokens
-  and inferred triggers. TradeVidAnalyser never computes levels.
+  and inferred triggers. `tva context --lab-dir` reads
+  `journal_attribution.parquet` / `journal_zones.parquet` /
+  `journal_triggers.parquet` (also the short `attribution.parquet` /
+  `zones.parquet` / `triggers.parquet` names) and joins on
+  `entry_fill_id`. TradeVidAnalyser never computes levels.
 - Spoken setup names become *proposed* TradesViz tags (`proposed` until a
   human confirms). Tags stay intent, not evidence.
 

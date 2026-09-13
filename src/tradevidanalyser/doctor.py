@@ -187,6 +187,19 @@ def run_doctor(root: Path) -> DoctorReport:
         )
     checks.append(DoctorCheck(id="journal", status=journal_status, detail=journal_detail))
 
+    notion_key = bool((os.environ.get("NOTION_API_KEY") or "").strip())
+    checks.append(
+        DoctorCheck(
+            id="notion_key",
+            status="ok" if notion_key else "warn",
+            detail=(
+                "NOTION_API_KEY set"
+                if notion_key
+                else "NOTION_API_KEY unset (needed for live tva context; fake is default)"
+            ),
+        )
+    )
+
     el_key = bool((os.environ.get("ELEVENLABS_API_KEY") or "").strip())
     checks.append(
         DoctorCheck(

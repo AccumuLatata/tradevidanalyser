@@ -678,6 +678,7 @@ def ingest_fills(
         trades_file.unlink(missing_ok=True)
         store.evidence_path(root, record.id).unlink(missing_ok=True)
         store.rules_path(root, record.id).unlink(missing_ok=True)
+        store.context_path(root, record.id).unlink(missing_ok=True)
         store.compute_status(root, record.id)
         return FillsResult(
             session_id=record.id,
@@ -715,6 +716,7 @@ def ingest_fills(
     # would attach to the wrong trades.
     store.evidence_path(root, record.id).unlink(missing_ok=True)
     store.rules_path(root, record.id).unlink(missing_ok=True)
+    store.context_path(root, record.id).unlink(missing_ok=True)
     store.compute_status(root, record.id)
     return FillsResult(
         session_id=record.id,

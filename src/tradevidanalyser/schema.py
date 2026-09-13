@@ -220,6 +220,42 @@ class RulesReport(BaseModel):
     rules: list[RuleCheck] = Field(default_factory=list)
 
 
+class BriefContext(BaseModel):
+    macro_url: str | None = None
+    ny_url: str | None = None
+    bias_nq: str | None = None
+    bias_es: str | None = None
+    conviction: str | None = None
+    kill_levels: str | None = None
+    quoted: Literal[True] = True
+
+
+class DrcContext(BaseModel):
+    scores: dict[str, str] = Field(default_factory=dict)
+    url: str
+
+
+class LabTradeContext(BaseModel):
+    nearest_level_token: str | None = None
+    level_context: str | None = None
+    tag_alignment: str | None = None
+    inferred_triggers_1m: str | None = None
+    zone_id: str | None = None
+
+
+class LabContext(BaseModel):
+    per_trade: dict[str, LabTradeContext] = Field(default_factory=dict)
+
+
+class SessionContext(BaseModel):
+    schema_version: str = SCHEMA_VERSION
+    session_id: str
+    brief: BriefContext | None = None
+    drc: DrcContext | None = None
+    lab: LabContext | None = None
+    gaps: list[str] = Field(default_factory=list)
+
+
 class DoctorCheck(BaseModel):
     id: str
     status: Literal["ok", "warn", "fail"]
