@@ -26,6 +26,7 @@ from tradevidanalyser.ledger import (
     add_session as run_ledger_add,
     rollup as run_rollup,
 )
+from tradevidanalyser.coach import CoachResult, coach_session as run_coach
 from tradevidanalyser.proposals import (
     ProposalsResult,
     confirm_proposal as run_confirm_proposal,
@@ -446,6 +447,15 @@ def proposals_session(session_id: str, *, root: Path) -> ProposalsResult:
 
 def confirm_proposal(ident: str, *, root: Path) -> ProposalsResult:
     return run_confirm_proposal(ident, root=root)
+
+
+def coach_session(
+    *,
+    root: Path,
+    weeks: int = 4,
+    provider_name: str | None = None,
+) -> CoachResult:
+    return run_coach(root=root, weeks=weeks, provider_name=provider_name)
 
 
 def align_session(

@@ -107,8 +107,11 @@ They wait until v1 is boring and reliable.
     `tag_map.yaml` vocabulary and writes `intent_proposals.json` plus a
     TradesViz manual-import `tradesviz_tags.csv`. `tva proposals confirm
     <id>` toggles `proposed` ↔ `confirmed`. Unknown spoken words are
-    dropped, never invented. Tags stay intent, not evidence. Coach
-    experiments stay later (PR-27).
+    dropped, never invented. Tags stay intent, not evidence. `tva coach
+    --weeks 4` (PR-27) reads the ledger plus recent debriefs and writes
+    cited trend claims (≥ N ledger row ids per claim, N default 10) and
+    at most one experiment `{rule_change, start, stop_criterion}` on
+    `ledger.experiments`. `GET /coach/latest` is the bot read.
 
 ## 5. Out of scope (all phases unless reopened)
 

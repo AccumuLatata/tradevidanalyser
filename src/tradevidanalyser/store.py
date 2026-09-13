@@ -111,6 +111,18 @@ def notion_fake_path(root: Path) -> Path:
     return root / "notion_fake.json"
 
 
+def coach_dir(root: Path) -> Path:
+    return root / "coach"
+
+
+def coach_json_path(root: Path) -> Path:
+    return coach_dir(root) / "latest.json"
+
+
+def coach_md_path(root: Path) -> Path:
+    return coach_dir(root) / "latest.md"
+
+
 def drop_publish(root: Path, session_id: str) -> None:
     publish_path(root, session_id).unlink(missing_ok=True)
 
@@ -193,6 +205,16 @@ def is_safe_path_name(name: str) -> bool:
         and "/" not in name
         and "\\" not in name
     )
+
+
+def require_under_root(path: Path, root: Path) -> Path:
+    """Resolve ``path`` and refuse anything that escapes ``root`` (symlink hop)."""
+    resolved = path.expanduser().resolve()
+    try:
+        resolved.relative_to(root.expanduser().resolve())
+    except ValueError as exc:
+        raise ValueError(f"refusing path outside TVA_ROOT: {path}") from exc
+    return resolved
 
 
 def list_frame_jpgs(root: Path, session_id: str) -> list[Path]:

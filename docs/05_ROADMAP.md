@@ -16,7 +16,7 @@ product decision, not a hidden dependency.
 | **TVA4** | TradesViz executions join (broker-agnostic fills) | TVA2 | PR-16/17 landed (loader + mirror + recon passthrough) |
 | **TVA5** | Alignment + per-trade windows + rule scorecard | TVA4 | landed (PR-18…PR-21; D4 stays parked) |
 | **TVA6** | Briefs + ThesisTester attribution + debrief/ledger | TVA5 | landed (PR-22…25; publish optional / off by default) |
-| **TVA7** | Coach loop: intent-tag proposals, experiments | TVA6 | started (PR-26 landed; coach later) |
+| **TVA7** | Coach loop: intent-tag proposals, experiments | TVA6 | landed (PR-26/27) |
 | parked | Full-session Gemini pass; live fill → OBS chapters; viewer; TopstepX API as a *venue adapter* | — | parked |
 
 ---
@@ -124,7 +124,11 @@ the Mac, where the study store already lives).
 levels onto the ThesisTester `tag_map.yaml` vocabulary and writes
 `intent_proposals.json` plus a TradesViz manual-import
 `tradesviz_tags.csv`. `tva proposals confirm <id>` toggles status.
-Coach experiments stay later (PR-27).
+`tva coach --weeks 4` (PR-27) reads the ledger plus recent debriefs and
+writes cited claims (≥ N ledger row ids, N default 10) plus at most one
+`{rule_change, start, stop_criterion}` experiment on
+`ledger.experiments`. `GET /coach/latest` is the bot read. Fake coach
+is the default.
 
 ---
 

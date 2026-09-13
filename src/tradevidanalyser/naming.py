@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 VIENNA = ZoneInfo("Europe/Vienna")
+
+
+def vienna_today() -> date:
+    """Desk calendar date (Europe/Vienna). Never ``date.today()`` (host TZ)."""
+    return datetime.now(VIENNA).date()
 
 # OBS: 2026-09-11 14-30-00.mp4  (space or T; time with - or :)
 _OBS_NAME = re.compile(

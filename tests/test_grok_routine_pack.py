@@ -27,6 +27,7 @@ def test_pack_lists_real_endpoints() -> None:
         "/sessions/{id}/insights",
         "/sessions/{id}/run?stages=transcribe,extract",
         "/ledger/summary?weeks=4",
+        "/coach/latest",
     ):
         assert path in ALL, path
     assert "GET /sessions/{id}/clips" in PACK

@@ -53,6 +53,7 @@ is **401**.
 | `GET /sessions/{id}/transcript` | to verify a quote | **404** if absent; **only** source of quotes |
 | `POST /sessions/{id}/run?stages=transcribe,extract` | extract is `missing`, ingest is `ok`, nothing is `running` | **202** `{accepted, session_id, stages, status}`. **409** = already running → poll, do not POST again |
 | `GET /ledger/summary?weeks=4` | on demand | trailing ISO weeks: adherence, violations, trades/hour, stated-vs-lab. Empty ledger → zeros, not 404 |
+| `GET /coach/latest` | weekly review | claims cite ≥ N ledger row ids; at most one experiment. **404** if `tva coach` has not run |
 
 **Do not call:** CLI (`tva …`), NAS paths, `ffmpeg`, video files,
 `GET /sessions/{id}/clips/…` (gated; TVA3). Do not `POST` any other path.
@@ -125,7 +126,7 @@ the quote is not a substring, drop it — do not “fix” it. Same rule for
 | Put `TVA_API_TOKEN` in a page, log line, or screenshot | token is a secret |
 | Edit `insights.json` / `transcript.json` (or ask the API to) | facts are files the app owns |
 | Report `unverifiable` as pass or fail | it means “no evidence”, nothing more |
-| Claim TVA3–TVA7 outputs exist | see §7 |
+| Claim TVA3–TVA7 outputs exist | see §8 |
 | Write a note or a success log line for a session whose id is not **today** (Europe/Vienna) | that silences the 23:30 watchdog |
 
 Quiet on success: if stages are `ok` and a note was written, **do not**
@@ -231,7 +232,24 @@ Gaps: `dropped uncited quote (seg_…)`.
 
 ---
 
-## 7. Not yet (do not claim these exist)
+## 7. Coach (weekly)
+
+`tva coach --weeks 4` is CLI on the Mac. The bot may then
+`GET /coach/latest`. **404** means the review has not been written —
+omit, do not invent a claim or a stop criterion.
+
+- Every claim already cites ≥ N ledger row ids (`N` from config,
+  default 10). Do not add cites. Do not drop the floor.
+- At most one experiment: `{rule_change, start, stop_criterion}`.
+  Status is `running` until the stop criterion is met. Never append a
+  second experiment.
+- Do not grade P&L. Do not treat coach prose as fills or lab truth.
+- Not a `POST /run` stage. Evening and Sunday stay on
+  ingest/transcribe/extract.
+
+---
+
+## 8. Not yet (do not claim these exist)
 
 | Output | Milestone | Absent |
 |---|---|---|
@@ -243,7 +261,7 @@ Gaps: `dropped uncited quote (seg_…)`.
 | ledger | **TVA6** | no (`tva ledger add` / `tva rollup`; `GET /ledger/summary`) |
 | Notion Session Debrief publish | **TVA6** | no (`tva publish --notion`; off by default; bot may keep writing the note) |
 | intent-tag proposals | **TVA7** | no (`tva proposals`; CLI only; not a bot run stage) |
-| coach experiments | **TVA7** | yes |
+| coach claims + one experiment | **TVA7** | no (`GET /coach/latest`; `tva coach --weeks 4`; not a bot run stage) |
 
 Do not write “no trades today” from the tape. Do not grade the day. Do
 not mention AMP/TopstepX fills. Those pages stay with the bots that
@@ -251,7 +269,7 @@ already own them.
 
 ---
 
-## 8. Sunday audit
+## 9. Sunday audit
 
 Follow [`examples/bot/ROUTINE_SUNDAY_AUDIT.md`](../examples/bot/ROUTINE_SUNDAY_AUDIT.md).
 

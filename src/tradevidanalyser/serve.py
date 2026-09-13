@@ -18,9 +18,17 @@ from pydantic import BaseModel, ConfigDict
 from tradevidanalyser import __version__, store
 from tradevidanalyser.doctor import run_doctor
 from tradevidanalyser.naming import VIENNA
+from tradevidanalyser.coach import load_latest
 from tradevidanalyser.ledger import ledger_summary
 from tradevidanalyser.pipeline import extract_session, transcribe_session
-from tradevidanalyser.schema import Insights, LedgerSummary, SessionRecord, SessionStatus, Transcript
+from tradevidanalyser.schema import (
+    CoachReport,
+    Insights,
+    LedgerSummary,
+    SessionRecord,
+    SessionStatus,
+    Transcript,
+)
 
 ENV_TOKEN = "TVA_API_TOKEN"
 ENV_SERVE_MEDIA = "TVA_SERVE_MEDIA"
@@ -221,6 +229,13 @@ def create_app(
         weeks: int = Query(default=4, ge=1, le=104, description="Trailing ISO weeks"),
     ) -> dict:
         return ledger_summary(app.state.root, weeks=weeks).model_dump(mode="json")
+
+    @app.get("/coach/latest", response_model=CoachReport)
+    def get_coach_latest() -> dict:
+        report = load_latest(app.state.root)
+        if report is None:
+            raise HTTPException(status_code=404, detail="coach missing")
+        return report.model_dump(mode="json")
 
     return app
 
