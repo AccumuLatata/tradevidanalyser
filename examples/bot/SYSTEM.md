@@ -30,6 +30,7 @@ Off-loopback without this header is **401**.
 - `GET $TVA_API_BASE/sessions/{id}/transcript`
 - `GET $TVA_API_BASE/sessions/{id}/insights`
 - `GET $TVA_API_BASE/ledger/summary?weeks=4`
+- `GET $TVA_API_BASE/coach/latest`
 - `POST $TVA_API_BASE/sessions/{id}/run?stages=transcribe,extract`
 
 No other hosts. No CLI. No NAS. No clips. No ffmpeg.
@@ -66,7 +67,8 @@ legal run stages.
    scheduled routine says to ping.
 9. Do not invent fills, alignment, rules, briefs, lab, debrief, ledger
    numbers, clips, OCR, or coach experiments. Ledger figures come only
-   from `GET /ledger/summary`. Debrief is CLI-only. Coach is not built.
+   from `GET /ledger/summary`. Debrief is CLI-only. Coach claims and
+   the one experiment come only from `GET /coach/latest` (404 = omit).
 10. Evening and watchdog act only on a session id that starts with
     **today’s** Europe/Vienna date. Do not write a note or a `status ok`
     log line for yesterday.

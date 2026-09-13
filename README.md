@@ -75,6 +75,7 @@ tva rollup --week --month
 tva publish 2026-09-11_143000 --notion
 tva proposals 2026-09-11_143000
 tva proposals confirm T01
+tva coach --weeks 4
 tva serve --host 127.0.0.1 --port 8764
 ```
 
@@ -195,7 +196,16 @@ ThesisTester [`tag_map.yaml`](tag_map.yaml) vocabulary and writes
 notes prefixed `[TVA proposed]`). Unknown spoken words are dropped, never
 invented. `tva proposals confirm <id>` toggles `proposed` ↔ `confirmed`
 (`T01` when unique, or `session_id:T01`). Optional omit-when-missing;
-not a bot `POST /run` stage. Coach experiments stay later.
+not a bot `POST /run` stage.
+
+`tva coach --weeks 4` reads the DuckDB ledger plus the last N debriefs
+and writes `coach/latest.json` / `coach/latest.md`. Each claim must cite
+≥ N ledger row ids (`TVA_COACH_MIN_N`, default 10). At most one
+experiment `{rule_change, start, stop_criterion}` is appended to
+`ledger.experiments`. Fake coach is the default
+(`TVA_COACH_PROVIDER=fake`); `grok` needs `XAI_API_KEY`.
+`GET /coach/latest` is the bot read (404 until the CLI has run). Not a
+`POST /run` stage.
 
 ASR, extraction, and report default to **fake** providers
 (`TVA_ASR_PROVIDER=fake`, `TVA_EXTRACT_PROVIDER=fake`,
@@ -204,7 +214,8 @@ WhisperX is the local adapter (`TVA_ASR_PROVIDER=whisperx`). Hosted fallback
 is Deepgram (`TVA_ASR_PROVIDER=deepgram`, audio only). Grok extract is opt-in
 (`TVA_EXTRACT_PROVIDER=grok`, `XAI_API_KEY`, optional `TVA_EXTRACT_MODEL`,
 default `grok-4.6`). Grok debrief prose is the same key
-(`TVA_REPORT_PROVIDER=grok`, optional `TVA_REPORT_MODEL`). The German
+(`TVA_REPORT_PROVIDER=grok`, optional `TVA_REPORT_MODEL`). Grok coach is
+the same key (`TVA_COACH_PROVIDER=grok`, optional `TVA_COACH_MODEL`). The German
 prompt lives in
 [`prompts/insights_v1.de.md`](prompts/insights_v1.de.md).
 
@@ -220,6 +231,7 @@ GET /sessions/{id}/transcript
 GET /sessions/{id}/insights
 GET /sessions/{id}/clips/{name}     # 404 unless TVA_SERVE_MEDIA=1
 GET /ledger/summary?weeks=4
+GET /coach/latest
 POST /sessions/{id}/run?stages=transcribe,extract   # 202, poll /status
 ```
 

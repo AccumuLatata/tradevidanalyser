@@ -80,3 +80,18 @@ Fake report ignores this file.
 `prompt_version` on `debrief.json` is `{stem}+{sha256[:12]}` (Grok) or
 `debrief-fake-v1` (fake). Default model `grok-4.6` (`TVA_REPORT_MODEL`).
 Fake is the default (`TVA_REPORT_PROVIDER=fake`).
+
+## `coach_v1.md`
+
+English system prompt for `GrokCoachProvider` (`tva coach`, PR-27).
+Fake coach ignores this file.
+
+- Input is ledger row ids, trade/rule facts, and recent debrief
+  excerpts — never the raw tape.
+- Every claim must cite ≥ N allow-listed ledger row ids.
+- At most one experiment `{rule_change, start, stop_criterion}`.
+- Digit runs in prose must already appear in the fact pack.
+
+`prompt_version` on `coach/latest.json` is `{stem}+{sha256[:12]}` (Grok)
+or `coach-fake-v1` (fake). Default model `grok-4.6` (`TVA_COACH_MODEL`).
+Fake is the default (`TVA_COACH_PROVIDER=fake`).

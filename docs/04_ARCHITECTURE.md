@@ -128,6 +128,7 @@ Every stage is a CLI subcommand, idempotent, writing into
 | Ledger | `tva ledger add` / `tva rollup --week [--month]` | `GET /ledger/summary?weeks=4` | `ledger/ledger.duckdb` + rollup Markdown | yes, optional |
 | Publish | `tva publish <session> --notion` | CLI (off by default; not a bot run stage) | Trading Journal Session Debrief + *TVA runs* log line | yes, optional |
 | Proposals | `tva proposals <session>` / `tva proposals confirm <id>` | CLI (not a bot run stage) | `intent_proposals.json` + `tradesviz_tags.csv` | yes, optional |
+| Coach | `tva coach --weeks 4` | `GET /coach/latest` (not a bot run stage) | `coach/latest.json` + `coach/latest.md`; `ledger.experiments` | yes, optional |
 
 `tva run --latest` is the scheduler entry on the PC. `tva serve` is the
 Mac entry. Same package.
@@ -219,6 +220,11 @@ proposals:                       # PR-26; omit until `tva proposals`
   # desk keys from ThesisTester tag_map.yaml only; unknown spoken words dropped
   # tradesviz_tags.csv: date, symbol, side, price, quantity, tags, notes
   # notes prefixed [TVA proposed]; confirm toggles proposed ↔ confirmed
+coach:                           # PR-27; omit until `tva coach`
+  claims: [{text, cites[], question}]   # each cites ≥ N ledger row ids
+  experiment: {rule_change, start, stop_criterion, status} | null
+  # N from TVA_COACH_MIN_N (default 10); ≤ 1 experiment
+  # fake default; grok opt-in (XAI_API_KEY)
 
 provenance: {app_version, ffmpeg, models, created_at}
 ```
@@ -283,6 +289,10 @@ PR-16 consumes ThesisTester; it does not fork it.
 - **Publish (PR-25):** `tva publish --notion` writes one Trading Journal
   page (`<D Mon YYYY> Session Debrief`, tag *Trades Summary*) and one
   *TVA runs* log line. Idempotent update in place. Off by default.
+- **Coach (PR-27):** `tva coach --weeks 4` reads ledger rows plus the
+  last N debriefs. Each claim must cite ≥ N ledger row ids. At most one
+  experiment `{rule_change, start, stop_criterion}` is appended to
+  `ledger.experiments`. Fake provider default; Grok is opt-in.
 
 Good reasons to do that join *eventually*:
 
@@ -326,6 +336,9 @@ couples the first useful API to a second repo and a journal export ritual.
   writing its own Notion note from insights.
 - `tva proposals` / `tva proposals confirm` are CLI-only. Not a
   `POST /run` stage. The bot does not import TradesViz tags.
+- `GET /coach/latest` is the coach read. `tva coach --weeks 4` stays
+  CLI. Not a `POST /run` stage. 404 means the review has not been
+  written.
 
 Copy-ready pack: [`TVA_GROK_ROUTINE_PACK.md`](TVA_GROK_ROUTINE_PACK.md)
 and [`examples/bot/`](../examples/bot/). Paste `SYSTEM.md` as the bot

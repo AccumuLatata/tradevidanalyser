@@ -358,6 +358,36 @@ class IntentProposals(BaseModel):
     gaps: list[str] = Field(default_factory=list)
 
 
+ExperimentStatus = Literal["running", "stopped"]
+
+
+class CoachExperiment(BaseModel):
+    rule_change: str
+    start: str
+    stop_criterion: str
+    status: ExperimentStatus = "running"
+    id: str = ""
+
+
+class CoachClaim(BaseModel):
+    text: str
+    cites: list[str] = Field(default_factory=list)
+    question: str = ""
+
+
+class CoachReport(BaseModel):
+    schema_version: str = SCHEMA_VERSION
+    provider: str
+    model: str
+    prompt_version: str
+    weeks: int
+    min_citations: int
+    claims: list[CoachClaim] = Field(default_factory=list)
+    experiment: CoachExperiment | None = None
+    markdown: str = ""
+    gaps: list[str] = Field(default_factory=list)
+
+
 class DoctorCheck(BaseModel):
     id: str
     status: Literal["ok", "warn", "fail"]

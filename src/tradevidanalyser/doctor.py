@@ -77,7 +77,7 @@ def run_doctor(root: Path) -> DoctorReport:
             detail=(
                 "XAI_API_KEY set"
                 if xai
-                else "XAI_API_KEY unset (needed for TVA_EXTRACT_PROVIDER=grok / TVA_VLM_PROVIDER=grok / TVA_REPORT_PROVIDER=grok)"
+                else "XAI_API_KEY unset (needed for TVA_EXTRACT_PROVIDER=grok / TVA_VLM_PROVIDER=grok / TVA_REPORT_PROVIDER=grok / TVA_COACH_PROVIDER=grok)"
             ),
         )
     )
@@ -245,6 +245,21 @@ def run_doctor(root: Path) -> DoctorReport:
     except FileNotFoundError as exc:
         tag_status, tag_detail = "warn", str(exc)
     checks.append(DoctorCheck(id="tag_map", status=tag_status, detail=tag_detail))
+
+    coach_provider = (os.environ.get("TVA_COACH_PROVIDER") or "fake").strip().lower() or "fake"
+    if coach_provider in {"grok", "xai"}:
+        if xai:
+            cp_status, cp_detail = "ok", f"TVA_COACH_PROVIDER={coach_provider}"
+        else:
+            cp_status, cp_detail = (
+                "fail",
+                "TVA_COACH_PROVIDER=grok but XAI_API_KEY is unset",
+            )
+    elif coach_provider in {"fake", "test"}:
+        cp_status, cp_detail = "ok", f"TVA_COACH_PROVIDER={coach_provider}"
+    else:
+        cp_status, cp_detail = "warn", f"TVA_COACH_PROVIDER={coach_provider}"
+    checks.append(DoctorCheck(id="coach_provider", status=cp_status, detail=cp_detail))
 
     el_key = bool((os.environ.get("ELEVENLABS_API_KEY") or "").strip())
     checks.append(

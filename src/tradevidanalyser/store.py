@@ -111,6 +111,18 @@ def notion_fake_path(root: Path) -> Path:
     return root / "notion_fake.json"
 
 
+def coach_dir(root: Path) -> Path:
+    return root / "coach"
+
+
+def coach_json_path(root: Path) -> Path:
+    return coach_dir(root) / "latest.json"
+
+
+def coach_md_path(root: Path) -> Path:
+    return coach_dir(root) / "latest.md"
+
+
 def drop_publish(root: Path, session_id: str) -> None:
     publish_path(root, session_id).unlink(missing_ok=True)
 

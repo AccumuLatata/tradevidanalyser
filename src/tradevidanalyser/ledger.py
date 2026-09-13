@@ -7,7 +7,7 @@ import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -17,6 +17,7 @@ from tradevidanalyser import store
 from tradevidanalyser.context import session_calendar_date
 from tradevidanalyser.schema import (
     AdherenceTally,
+    CoachExperiment,
     LedgerPeriod,
     LedgerSummary,
     RuleTally,
@@ -223,6 +224,18 @@ def _ensure_schema(con: duckdb.DuckDBPyConnection) -> None:
             kind VARCHAR,
             seg VARCHAR,
             text VARCHAR
+        )
+        """
+    )
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS experiments (
+            id VARCHAR PRIMARY KEY,
+            rule_change VARCHAR,
+            start VARCHAR,
+            stop_criterion VARCHAR,
+            status VARCHAR,
+            created_at VARCHAR
         )
         """
     )
@@ -930,3 +943,244 @@ def ledger_summary(root: Path, *, weeks: int = 4) -> LedgerSummary:
     if weeks < 1:
         raise LedgerError("weeks must be >= 1")
     return build_summary(root, weeks=weeks)
+
+
+def window_session_ids(root: Path, *, weeks: int) -> list[str]:
+    if weeks < 1:
+        raise LedgerError("weeks must be >= 1")
+    path = ledger_db_path(root)
+    if not path.is_file() or path.stat().st_size == 0:
+        return []
+    with _LEDGER_LOCK:
+        try:
+            con = _connect(root, read_only=True)
+        except (duckdb.Error, LedgerError, ValueError):
+            return []
+        try:
+            return _session_ids_for(con, weeks=weeks)
+        except duckdb.Error as exc:
+            if _is_absent_ledger_error(exc):
+                return []
+            raise
+        finally:
+            con.close()
+
+
+def window_row_ids(root: Path, session_ids: list[str]) -> list[str]:
+    """Stable ledger row ids the coach may cite."""
+    if not session_ids:
+        return []
+    path = ledger_db_path(root)
+    if not path.is_file() or path.stat().st_size == 0:
+        return []
+    placeholders = ", ".join("?" for _ in session_ids)
+    ids: list[str] = []
+    seen: set[str] = set()
+
+    def add(item: str) -> None:
+        if item and item not in seen:
+            seen.add(item)
+            ids.append(item)
+
+    with _LEDGER_LOCK:
+        try:
+            con = _connect(root, read_only=True)
+        except (duckdb.Error, LedgerError, ValueError):
+            return []
+        try:
+            for session_id in session_ids:
+                add(session_id)
+            for table, extra in (
+                ("trades", "tva_trade_id"),
+                ("rule_checks", "rule"),
+                ("events", "seg"),
+            ):
+                try:
+                    rows = con.execute(
+                        f"SELECT session_id, {extra} FROM {table} "
+                        f"WHERE session_id IN ({placeholders})",
+                        session_ids,
+                    ).fetchall()
+                except duckdb.Error as exc:
+                    if _is_absent_ledger_error(exc):
+                        continue
+                    raise
+                for session_id, value in rows:
+                    if value:
+                        add(f"{session_id}:{value}")
+        except duckdb.Error as exc:
+            if _is_absent_ledger_error(exc):
+                return ids
+            raise
+        finally:
+            con.close()
+    return ids
+
+
+def window_trade_facts(root: Path, session_ids: list[str]) -> list[dict[str, Any]]:
+    if not session_ids:
+        return []
+    path = ledger_db_path(root)
+    if not path.is_file() or path.stat().st_size == 0:
+        return []
+    placeholders = ", ".join("?" for _ in session_ids)
+    with _LEDGER_LOCK:
+        try:
+            con = _connect(root, read_only=True)
+        except (duckdb.Error, LedgerError, ValueError):
+            return []
+        try:
+            rows = con.execute(
+                f"""
+                SELECT session_id, tva_trade_id, stated_setup, stated_playbook,
+                       lab_token, tag_alignment, stated_lab_agree
+                FROM trades
+                WHERE session_id IN ({placeholders})
+                ORDER BY session_id, tva_trade_id
+                """,
+                session_ids,
+            ).fetchall()
+        except duckdb.Error as exc:
+            if _is_absent_ledger_error(exc):
+                return []
+            raise
+        finally:
+            con.close()
+    facts: list[dict[str, Any]] = []
+    for row in rows:
+        facts.append(
+            {
+                "id": f"{row[0]}:{row[1]}",
+                "session_id": str(row[0]),
+                "tva_trade_id": str(row[1]),
+                "stated_setup": row[2],
+                "stated_playbook": row[3],
+                "lab_token": row[4],
+                "tag_alignment": row[5],
+                "stated_lab_agree": row[6],
+            }
+        )
+    return facts
+
+
+def window_rule_facts(root: Path, session_ids: list[str]) -> list[dict[str, Any]]:
+    if not session_ids:
+        return []
+    path = ledger_db_path(root)
+    if not path.is_file() or path.stat().st_size == 0:
+        return []
+    placeholders = ", ".join("?" for _ in session_ids)
+    with _LEDGER_LOCK:
+        try:
+            con = _connect(root, read_only=True)
+        except (duckdb.Error, LedgerError, ValueError):
+            return []
+        try:
+            rows = con.execute(
+                f"""
+                SELECT session_id, rule, status, reason
+                FROM rule_checks
+                WHERE session_id IN ({placeholders})
+                ORDER BY session_id, rule
+                """,
+                session_ids,
+            ).fetchall()
+        except duckdb.Error as exc:
+            if _is_absent_ledger_error(exc):
+                return []
+            raise
+        finally:
+            con.close()
+    return [
+        {
+            "id": f"{row[0]}:{row[1]}",
+            "session_id": str(row[0]),
+            "rule": str(row[1]),
+            "status": str(row[2] or ""),
+            "reason": row[3],
+        }
+        for row in rows
+    ]
+
+
+def _experiment_from_row(row: tuple[Any, ...]) -> CoachExperiment:
+    return CoachExperiment(
+        id=str(row[0] or ""),
+        rule_change=str(row[1] or ""),
+        start=str(row[2] or ""),
+        stop_criterion=str(row[3] or ""),
+        status=row[4] if row[4] in {"running", "stopped"} else "running",
+    )
+
+
+def list_experiments(root: Path) -> list[CoachExperiment]:
+    path = ledger_db_path(root)
+    if not path.is_file() or path.stat().st_size == 0:
+        return []
+    with _LEDGER_LOCK:
+        try:
+            con = _connect(root, read_only=True)
+        except (duckdb.Error, LedgerError, ValueError):
+            return []
+        try:
+            rows = con.execute(
+                "SELECT id, rule_change, start, stop_criterion, status "
+                "FROM experiments ORDER BY id"
+            ).fetchall()
+        except duckdb.Error as exc:
+            if _is_absent_ledger_error(exc) or "experiments" in str(exc).lower():
+                return []
+            raise
+        finally:
+            con.close()
+    return [_experiment_from_row(row) for row in rows]
+
+
+def running_experiment(root: Path) -> CoachExperiment | None:
+    for item in list_experiments(root):
+        if item.status == "running":
+            return item
+    return None
+
+
+def append_experiment(root: Path, experiment: CoachExperiment) -> CoachExperiment:
+    """Keep at most one running experiment. Existing running rows win."""
+    current = running_experiment(root)
+    if current is not None:
+        return current
+    if not experiment.rule_change.strip() or not experiment.stop_criterion.strip():
+        raise LedgerError("experiment needs rule_change and stop_criterion")
+    start = experiment.start.strip() or date.today().isoformat()
+    existing = list_experiments(root)
+    if existing:
+        return existing[0]
+    next_id = experiment.id.strip() or "E01"
+    created = datetime.now(tz=timezone.utc).replace(microsecond=0).isoformat()
+    with _LEDGER_LOCK:
+        con = _connect(root)
+        try:
+            with _txn(con):
+                con.execute(
+                    """
+                    INSERT INTO experiments
+                    (id, rule_change, start, stop_criterion, status, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        next_id,
+                        experiment.rule_change.strip(),
+                        start,
+                        experiment.stop_criterion.strip(),
+                        "running",
+                        created,
+                    ],
+                )
+        finally:
+            con.close()
+    return CoachExperiment(
+        id=next_id,
+        rule_change=experiment.rule_change.strip(),
+        start=start,
+        stop_criterion=experiment.stop_criterion.strip(),
+        status="running",
+    )

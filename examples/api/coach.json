@@ -1,0 +1,35 @@
+{
+  "schema_version": "1",
+  "provider": "fake",
+  "model": "none",
+  "prompt_version": "coach-fake-v1",
+  "weeks": 4,
+  "min_citations": 10,
+  "claims": [
+    {
+      "text": "The same process miss repeats across 10 ledger rows.",
+      "cites": [
+        "2026-09-11_143000:T01",
+        "2026-09-11_143000:T02",
+        "2026-09-11_143000:T03",
+        "2026-09-11_143000:T04",
+        "2026-09-11_143000:T05",
+        "2026-09-11_143000:T06",
+        "2026-09-11_143000:T07",
+        "2026-09-11_143000:T08",
+        "2026-09-11_143000:T09",
+        "2026-09-11_143000:T10"
+      ],
+      "question": "Name the playbook before the next entry?"
+    }
+  ],
+  "experiment": {
+    "rule_change": "State the playbook before entry (R-PLAYBOOK)",
+    "start": "2026-09-11",
+    "stop_criterion": "Stop after 10 sessions with R-PLAYBOOK pass or 4 weeks",
+    "status": "running",
+    "id": "E01"
+  },
+  "markdown": "# Coach\n",
+  "gaps": []
+}

@@ -20,6 +20,7 @@ from tradevidanalyser.pipeline import (
     context_session,
     evidence_session,
     extract_session,
+    coach_session,
     confirm_proposal,
     ledger_add,
     proposals_session,
@@ -241,6 +242,19 @@ def main(argv: list[str] | None = None) -> int:
         help="trade id when the first argument is confirm",
     )
 
+    p_coach = sub.add_parser(
+        "coach",
+        help="cited weekly claims + at most one ledger experiment",
+    )
+    p_coach.add_argument(
+        "--weeks",
+        type=int,
+        default=4,
+        metavar="N",
+        help="trailing ISO weeks of ledger rows (default 4)",
+    )
+    p_coach.add_argument("--provider", default=None, help="fake (default) or grok")
+
     p_serve = sub.add_parser("serve", help="HTTP API over TVA_ROOT")
     p_serve.add_argument("--host", default="127.0.0.1")
     p_serve.add_argument("--port", type=int, default=8764)
@@ -414,6 +428,12 @@ def main(argv: list[str] | None = None) -> int:
                         "or tva proposals confirm <id>"
                     )
                 result = proposals_session(args.ident, root=root)
+            _emit(result.as_dict(), as_json=True)
+            return 0
+        if args.cmd == "coach":
+            result = coach_session(
+                root=root, weeks=args.weeks, provider_name=args.provider
+            )
             _emit(result.as_dict(), as_json=True)
             return 0
         if args.cmd == "serve":
