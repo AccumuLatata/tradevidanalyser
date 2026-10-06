@@ -32,8 +32,9 @@ from tradevidanalyser.day_manifest import (
 )
 from tradevidanalyser.ledger import ledger_summary, window_session_ids, window_trade_facts
 from tradevidanalyser.flags import ENV_DAY_MANIFEST, ENV_PAUSE_GUARD
+from tradevidanalyser.fills_mirror import FILL_RECORD_COLUMNS
 from tradevidanalyser.ingest import SPLIT_GAP_S, ingest
-from tradevidanalyser.pipeline import fills_session
+from tradevidanalyser.pipeline import fills_session, publish_session as pipeline_publish
 from tradevidanalyser.schema import Evidence, RecordingInfo, RecordingPart, SessionRecord
 from tradevidanalyser.serve import create_app
 
@@ -743,3 +744,96 @@ def test_later_build_does_not_overwrite_enabled_from(
     csv = _write_csv(tmp_path / "exec.csv")
     assert build_day(tva_root, date(2026, 9, 15), executions=csv, venue="amp").written
     assert read_enabled_from(tva_root) == date(2026, 9, 14)
+
+
+def test_fingerprint_window_uses_csv_written_calendar_date(
+    tva_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _on(monkeypatch, ENV_DAY_MANIFEST)
+    _session(
+        tva_root,
+        "2026-09-14_093000",
+        start=datetime(2026, 9, 14, 9, 30, tzinfo=VIENNA),
+    )
+    _session(
+        tva_root,
+        "2026-09-14_140000",
+        start=datetime(2026, 9, 14, 14, 0, tzinfo=VIENNA),
+        sha256="b" * 64,
+    )
+    assert "csv_calendar_date" not in FILL_RECORD_COLUMNS
+    csv = _write_csv(
+        tmp_path / "exec.csv",
+        [
+            # civil D-1, UTC D-2 23:00 — UTC date would drop this
+            _csv_row("2026-09-13T01:00:00+0200", spread="plus02-in"),
+            # civil D+2, UTC D+1 23:00 — UTC date would keep this
+            _csv_row("2026-09-16T01:00:00+0200", spread="plus02-out"),
+            # civil D-2, UTC D-1 04:00 — UTC date would keep this
+            _csv_row("2026-09-12T23:00:00-0500", spread="minus05-out"),
+            # civil D+1, UTC D+2 04:00 — UTC date would drop this
+            _csv_row("2026-09-15T23:00:00-0500", spread="minus05-in"),
+            _csv_row("2026-09-14T10:00:00+0000", spread="utc-in"),
+        ],
+    )
+    result = build_day(tva_root, date(2026, 9, 14), executions=csv, venue="amp")
+    assert result.written
+    payload = load_current_day_json(tva_root, date(2026, 9, 14))
+    assert payload is not None
+    groups = {row["source_group_id"] for row in payload["fingerprint_inputs"]["fill_identities"]}
+    assert groups == {"plus02-in", "minus05-in", "utc-in"}
+    assert "plus02-out" not in groups
+    assert "minus05-out" not in groups
+    keys = payload["fingerprint_inputs"]["fill_identities"][0].keys()
+    assert "csv_calendar_date" not in keys
+    from tradevidanalyser.fills_mirror import load_tradesviz_executions
+
+    fills = load_tradesviz_executions(csv, profile="tradesviz_executions")
+    plus02 = next(fill for fill in fills if fill.source_group_id == "plus02-in")
+    assert plus02.csv_calendar_date == date(2026, 9, 13)
+    assert plus02.timestamp == datetime(2026, 9, 12, 23, 0, tzinfo=timezone.utc)
+    assert "20260912T230000Z" in plus02.fill_id
+
+
+def test_publish_lock_on_built_day_not_on_legacy_or_unbuilt(
+    tva_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _on(monkeypatch, ENV_DAY_MANIFEST)
+    a = _session(
+        tva_root,
+        "2026-09-14_093000",
+        start=datetime(2026, 9, 14, 9, 30, tzinfo=VIENNA),
+    )
+    b = _session(
+        tva_root,
+        "2026-09-14_140000",
+        start=datetime(2026, 9, 14, 14, 0, tzinfo=VIENNA),
+        sha256="b" * 64,
+    )
+    _write_debrief(tva_root, a.id)
+    enable_day_manifest(tva_root, date(2026, 9, 14))
+    assert not day_dir(tva_root, date(2026, 9, 14)).exists()
+    with pytest.raises(DayStale, match=DAY_STALE_ERROR):
+        pipeline_publish(a.id, root=tva_root, notion=True)
+    assert not day_dir(tva_root, date(2026, 9, 14)).exists()
+
+    lone = _session(
+        tva_root,
+        "2026-09-16_093000",
+        start=datetime(2026, 9, 16, 9, 30, tzinfo=VIENNA),
+        sha256="c" * 64,
+    )
+    _write_debrief(tva_root, lone.id)
+    pipeline_publish(lone.id, root=tva_root, notion=True)
+    assert not day_dir(tva_root, date(2026, 9, 16)).exists()
+
+    csv = _write_csv(tmp_path / "exec.csv")
+    assert build_day(tva_root, date(2026, 9, 14), executions=csv, venue="amp").written
+    lock = day_lock_path(tva_root, date(2026, 9, 14))
+    lock.write_text(f"{__import__('os').getpid()}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="gesperrt"):
+        pipeline_publish(a.id, root=tva_root, notion=True)
+    lock.unlink()
+    pipeline_publish(b.id, root=tva_root, notion=True)
+    assert not lock.exists()
+    assert day_dir(tva_root, date(2026, 9, 14)).is_dir()

@@ -191,9 +191,12 @@ def _unlink_if_pid(lock: Path, pid: int) -> bool:
         return False
 
 
-def try_acquire_lock(lock: Path) -> bool:
+def try_acquire_lock(lock: Path, *, create_parent: bool = True) -> bool:
     """Create ``lock`` with O_EXCL. Steal it only if the writer PID is dead."""
-    lock.parent.mkdir(parents=True, exist_ok=True)
+    if create_parent:
+        lock.parent.mkdir(parents=True, exist_ok=True)
+    elif not lock.parent.is_dir():
+        return False
     for _attempt in range(2):
         try:
             fd = os.open(os.fspath(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)

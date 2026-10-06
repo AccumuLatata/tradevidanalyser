@@ -455,12 +455,18 @@ def publish_session(
 ) -> PublishResult:
     if not store.is_safe_path_name(session_id):
         raise ValueError(f"unsafe session id {session_id!r}")
-    from tradevidanalyser.day_manifest import require_fresh_for_session
+    from tradevidanalyser.day_manifest import acquire_day_publish_lock, require_fresh_for_session
+    from tradevidanalyser.watch import release_lock
 
     require_fresh_for_session(root, session_id)
-    return run_publish(
-        session_id, root=root, notion=notion, provider_name=provider_name
-    )
+    lock = acquire_day_publish_lock(root, session_id)
+    try:
+        return run_publish(
+            session_id, root=root, notion=notion, provider_name=provider_name
+        )
+    finally:
+        if lock is not None:
+            release_lock(lock)
 
 
 def proposals_session(session_id: str, *, root: Path) -> ProposalsResult:

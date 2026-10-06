@@ -15,6 +15,7 @@ from typing import Any, Literal
 from tradevidanalyser import __version__, media, store
 from tradevidanalyser.day_audit import FillIdentity, fill_identity
 from tradevidanalyser.fills import load_fills, venue_from_hint
+from tradevidanalyser.fills_mirror import FillRecord
 from tradevidanalyser.flags import (
     active_flag_names,
     day_manifest_enabled,
@@ -438,12 +439,7 @@ def build_day(
                 raise DayManifestError(str(exc)) from exc
             raise
         del _loader
-        window = {day - timedelta(days=1), day, day + timedelta(days=1)}
-        identities = [
-            fill_identity(fill)
-            for fill in fills
-            if _csv_calendar_date(fill.timestamp) in window
-        ]
+        identities = csv_window_fill_identities(fills, day)
         identities.sort(key=_identity_sort)
         provider_name = (provider or "").strip()
         reconcile_text = str(reconcile_dir) if reconcile_dir is not None else ""
@@ -647,8 +643,47 @@ def _aware_start(record: SessionRecord) -> datetime:
     return start
 
 
-def _csv_calendar_date(ts: datetime) -> date:
-    return date(ts.year, ts.month, ts.day)
+def csv_calendar_date_for_fill(fill: FillRecord) -> date:
+    """CSV-written calendar date. No UTC/Vienna fallback (plan §2.1 / §3.4)."""
+    if fill.csv_calendar_date is None:
+        raise DayManifestError(
+            f"csv_calendar_date fehlt für Fill {fill.fill_id!r}"
+        )
+    return fill.csv_calendar_date
+
+
+def fill_in_csv_date_window(fill: FillRecord, day: date) -> bool:
+    """True when the CSV's own calendar date is in [D−1, D+1]."""
+    civil = csv_calendar_date_for_fill(fill)
+    return civil in {day - timedelta(days=1), day, day + timedelta(days=1)}
+
+
+def csv_window_fill_identities(fills: list[FillRecord], day: date) -> list[FillIdentity]:
+    """Identity keys of fills whose CSV-written date is in [D−1, D+1]."""
+    identities = [fill_identity(fill) for fill in fills if fill_in_csv_date_window(fill, day)]
+    identities.sort(key=_identity_sort)
+    return identities
+
+
+def acquire_day_publish_lock(root: Path, session_id: str) -> Path | None:
+    """Lock a built day-path day for ``tva publish``. Does not create ``days/<date>/``."""
+    if not day_manifest_enabled():
+        return None
+    if not store.is_safe_path_name(session_id):
+        raise ValueError(f"unsafe session id {session_id!r}")
+    if not store.session_json_path(root, session_id).is_file():
+        return None
+    record = store.load_session(root, session_id)
+    day = nominal_vienna_date(record)
+    folder = day_dir(root, day)
+    if not folder.is_dir():
+        return None
+    if not is_day_path(root, clips_for_day(root, day)):
+        return None
+    lock = day_lock_path(root, day)
+    if not try_acquire_lock(lock, create_parent=False):
+        raise DayManifestError(LOCK_ERROR)
+    return lock
 
 
 def _identity_sort(item: FillIdentity) -> tuple[Any, ...]:
