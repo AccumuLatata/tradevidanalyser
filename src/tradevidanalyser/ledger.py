@@ -28,6 +28,7 @@ from tradevidanalyser.schema import (
 
 SCHEMA_VERSION = "1"
 LEDGER_FILENAME = "ledger.duckdb"
+DAY_RULE_IDS = frozenset({"R-DLL", "R-MAX10", "R-3L30", "R-5M", "R-REENTRY"})
 WEEK_RE = re.compile(r"^(\d{4})-W(\d{2})$")
 MONTH_RE = re.compile(r"^(\d{4})-(\d{2})$")
 TOKEN_RE = re.compile(r"[a-z0-9]+")
@@ -240,6 +241,28 @@ def _ensure_schema(con: duckdb.DuckDBPyConnection) -> None:
         )
         """
     )
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS day_rollups (
+            day DATE PRIMARY KEY,
+            trade_count INTEGER,
+            hours DOUBLE,
+            trades_outside_clips INTEGER,
+            trades_per_hour_reason VARCHAR
+        )
+        """
+    )
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS day_rule_checks (
+            day DATE,
+            rule VARCHAR,
+            status VARCHAR,
+            reason VARCHAR,
+            PRIMARY KEY (day, rule)
+        )
+        """
+    )
 
 
 def session_recorded(root: Path, session_id: str) -> bool:
@@ -275,6 +298,77 @@ def drop_session(root: Path, session_id: str) -> None:
                 con.execute("DELETE FROM rule_checks WHERE session_id = ?", [session_id])
                 con.execute("DELETE FROM trades WHERE session_id = ?", [session_id])
                 con.execute("DELETE FROM sessions WHERE session_id = ?", [session_id])
+        finally:
+            con.close()
+
+
+def drop_day_rows(root: Path, day: date) -> None:
+    """Delete day_rollups and day_rule_checks for one Vienna day (PR-33 rollback)."""
+    path = ledger_db_path(root)
+    if not path.is_file() or path.stat().st_size == 0:
+        return
+    with _LEDGER_LOCK:
+        con = _connect(root)
+        try:
+            with _txn(con):
+                con.execute("DELETE FROM day_rule_checks WHERE day = ?", [day])
+                con.execute("DELETE FROM day_rollups WHERE day = ?", [day])
+        finally:
+            con.close()
+
+
+def upsert_day_rollup(
+    root: Path,
+    day: date,
+    *,
+    trade_count: int,
+    hours: float,
+    trades_outside_clips: int,
+    trades_per_hour_reason: str | None,
+) -> None:
+    with _LEDGER_LOCK:
+        con = _connect(root)
+        try:
+            with _txn(con):
+                con.execute(
+                    """
+                    INSERT OR REPLACE INTO day_rollups
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    [day, trade_count, hours, trades_outside_clips, trades_per_hour_reason],
+                )
+        finally:
+            con.close()
+
+
+def upsert_day_rule_checks(root: Path, day: date, checks: list[Any]) -> None:
+    with _LEDGER_LOCK:
+        con = _connect(root)
+        try:
+            with _txn(con):
+                con.execute("DELETE FROM day_rule_checks WHERE day = ?", [day])
+                for item in checks:
+                    con.execute(
+                        "INSERT OR REPLACE INTO day_rule_checks VALUES (?, ?, ?, ?)",
+                        [
+                            day,
+                            item.rule,
+                            item.status,
+                            item.reason,
+                        ],
+                    )
+        finally:
+            con.close()
+
+
+def replace_rule_checks(root: Path, session_id: str) -> int:
+    session_id = _require_safe_session_id(session_id)
+    with _LEDGER_LOCK:
+        con = _connect(root)
+        try:
+            with _txn(con):
+                con.execute("DELETE FROM rule_checks WHERE session_id = ?", [session_id])
+                return _insert_rules(con, root, session_id)
         finally:
             con.close()
 
@@ -652,6 +746,28 @@ def _session_ids_for(
     return [str(row[0]) for row in rows if row[1] in wanted]
 
 
+def _as_day(value: object) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
+def _day_tables_exist(con: duckdb.DuckDBPyConnection) -> bool:
+    try:
+        con.execute("SELECT 1 FROM day_rollups LIMIT 0")
+        con.execute("SELECT 1 FROM day_rule_checks LIMIT 0")
+        return True
+    except duckdb.Error:
+        return False
+
+
 def _summarize_ids(con: duckdb.DuckDBPyConnection, session_ids: list[str]) -> dict[str, Any]:
     if not session_ids:
         return {
@@ -672,15 +788,45 @@ def _summarize_ids(con: duckdb.DuckDBPyConnection, session_ids: list[str]) -> di
         f"SELECT COUNT(*) FROM trades WHERE session_id IN ({placeholders})",
         session_ids,
     ).fetchone()
-    rules = con.execute(
+    session_days = con.execute(
+        f"SELECT session_id, session_date FROM sessions WHERE session_id IN ({placeholders})",
+        session_ids,
+    ).fetchall()
+    by_session_day = {str(row[0]): _as_day(row[1]) for row in session_days}
+    day_dates: set[date] = set()
+    if _day_tables_exist(con):
+        present = [day for day in by_session_day.values() if day is not None]
+        if present:
+            day_ph = ", ".join("?" for _ in present)
+            found = con.execute(
+                f"SELECT day FROM day_rollups WHERE day IN ({day_ph})",
+                list(present),
+            ).fetchall()
+            day_dates = {day for row in found if (day := _as_day(row[0])) is not None}
+    detail = con.execute(
         f"""
-        SELECT rule, status, COUNT(*)
+        SELECT session_id, rule, status
         FROM rule_checks
         WHERE session_id IN ({placeholders})
-        GROUP BY rule, status
         """,
         session_ids,
     ).fetchall()
+    counts: dict[tuple[str, str], int] = {}
+    for session_id, rule, status in detail:
+        day = by_session_day.get(str(session_id))
+        if day in day_dates and str(rule) in DAY_RULE_IDS:
+            continue
+        key = (str(rule), str(status))
+        counts[key] = counts.get(key, 0) + 1
+    if day_dates:
+        day_ph = ", ".join("?" for _ in day_dates)
+        for rule, status in con.execute(
+            f"SELECT rule, status FROM day_rule_checks WHERE day IN ({day_ph})",
+            list(day_dates),
+        ).fetchall():
+            key = (str(rule), str(status))
+            counts[key] = counts.get(key, 0) + 1
+    rules = [(rule, status, n) for (rule, status), n in counts.items()]
     stated = con.execute(
         f"""
         SELECT stated_lab_agree, COUNT(*)

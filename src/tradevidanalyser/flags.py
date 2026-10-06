@@ -40,6 +40,10 @@ def exclusive_fills_enabled() -> bool:
     return env_flag(ENV_EXCLUSIVE_FILLS)
 
 
+def day_rules_enabled() -> bool:
+    return env_flag(ENV_DAY_RULES)
+
+
 def active_flag_names() -> list[str]:
     names = [
         ENV_PAUSE_GUARD,

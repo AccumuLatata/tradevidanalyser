@@ -305,6 +305,11 @@ def main(argv: list[str] | None = None) -> int:
     led_sub = p_led.add_subparsers(dest="ledger_cmd", required=True)
     p_add = led_sub.add_parser("add", help="upsert one session from Parquet / artifacts")
     p_add.add_argument("session")
+    p_drop_day = led_sub.add_parser(
+        "drop-day",
+        help="delete day_rollups and day_rule_checks for one Vienna day (PR-33 rollback)",
+    )
+    p_drop_day.add_argument("date", metavar="YYYY-MM-DD")
 
     p_roll = sub.add_parser("rollup", help="weekly/monthly ledger markdown")
     p_roll.add_argument(
@@ -568,6 +573,15 @@ def main(argv: list[str] | None = None) -> int:
             if args.ledger_cmd == "add":
                 result = ledger_add(args.session, root=root)
                 _emit(result.as_dict(), as_json=True)
+                return 0
+            if args.ledger_cmd == "drop-day":
+                from datetime import date as _date
+
+                from tradevidanalyser.ledger import drop_day_rows
+
+                day = _date.fromisoformat(args.date)
+                drop_day_rows(root, day)
+                _emit({"status": "ok", "deleted": day.isoformat()}, as_json=True)
                 return 0
             parser.error(f"unknown ledger command {args.ledger_cmd}")
             return 2

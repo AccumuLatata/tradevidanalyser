@@ -588,11 +588,13 @@ def test_cascade_rewrites_ledger_and_deletes_evidence(
         }
         trades = con.execute("SELECT count(*) FROM trades").fetchone()
         rules = con.execute("SELECT count(*) FROM rule_checks").fetchone()
+        day_rules = con.execute("SELECT count(*) FROM day_rule_checks").fetchone()
     finally:
         con.close()
     assert sessions == {a.id, b.id}
     assert trades is not None and trades[0] >= 2
-    assert rules is not None and rules[0] == 0
+    assert rules is not None and rules[0] == 30
+    assert day_rules is not None and day_rules[0] == 5
     _write_evidence(tva_root, a.id)
     _write_evidence(tva_root, b.id)
     build_day(tva_root, date(2026, 9, 14), executions=csv, venue="amp")
