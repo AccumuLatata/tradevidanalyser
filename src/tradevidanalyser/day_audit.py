@@ -136,6 +136,13 @@ def run_day_audit(
     reported_loader = (loader or "unknown").strip().lower() or "unknown"
     if reported_loader not in {"unknown", "mirror", "import"}:
         raise DayAuditError("loader must be unknown, mirror, or import")
+    prefer_import = {"mirror": False, "import": True}.get(reported_loader)
+
+    dest = audit_path(root)
+    existing = _existing_audit(dest)
+    _refuse_if_waived(existing)
+    clock_note = _preserved_clock_note(existing, clock_note)
+    visible_fills = _preserved_visible_fills(existing)
 
     sessions = _sessions_in_range(root, start, end)
     csv_fills: list[FillRecord] | None = None
@@ -146,7 +153,7 @@ def run_day_audit(
         if not path.is_file():
             raise DayAuditError(f"executions file not found: {path}")
         try:
-            _used_loader, csv_fills = load_fills(path)
+            _used_loader, csv_fills = load_fills(path, prefer_import=prefer_import)
         except Exception as exc:
             raise DayAuditError(str(exc)) from exc
         fills_match = FILLS_MATCH_OK
@@ -163,8 +170,8 @@ def run_day_audit(
         executions_path=csv_path,
         date_from=start,
         date_to=end,
+        visible_fills=visible_fills,
     )
-    dest = audit_path(root)
     dest.parent.mkdir(parents=True, exist_ok=True)
     store.write_json(dest, payload)
     return DayAuditResult(
@@ -190,21 +197,16 @@ def _build_payload(
     executions_path: str | None,
     date_from: date,
     date_to: date,
+    visible_fills: list[Any] | None = None,
 ) -> dict[str, Any]:
     parquet_by_session = _read_session_parquets(root, sessions)
-    parquet_identities: dict[str, set[FillIdentity]] = {}
-    trade_identities: dict[str, set[FillIdentity]] = {}
-    for sid, pack in parquet_by_session.items():
-        parquet_identities[sid] = pack["fill_identities"]
-        trade_identities[sid] = pack["trade_identities"]
-
     all_fill_ids: set[FillIdentity] = set()
     all_trade_ids: set[FillIdentity] = set()
-    other_instrument_ids: set[FillIdentity] = set()
-    for sid, pack in parquet_by_session.items():
+    parquet_other: list[FillIdentity] = []
+    for pack in parquet_by_session.values():
         all_fill_ids.update(pack["fill_identities"])
         all_trade_ids.update(pack["trade_identities"])
-        other_instrument_ids.update(pack["other_instrument"])
+        parquet_other.extend(pack["other_instrument"])
 
     missing_fills_sessions = [
         record.id for record in sessions if not store.fills_path(root, record.id).is_file()
@@ -220,16 +222,17 @@ def _build_payload(
             "in_existing_parquet": 0,
             "session_without_fills_run": len(missing_fills_sessions),
             "filtered_manual": 0,
-            "other_instrument": len(other_instrument_ids),
+            "other_instrument": len(parquet_other),
             "other_account": OTHER_ACCOUNT,
         }
         window_block = None
         shifts_block = None
     else:
         csv_identities = [fill_identity(fill) for fill in csv_fills]
-        other_instrument_ids.update(
-            ident for ident in csv_identities if ident.instrument not in KNOWN_INSTRUMENTS
-        )
+        csv_id_set = set(csv_identities)
+        other_instrument_n = sum(
+            1 for ident in csv_identities if ident.instrument not in KNOWN_INSTRUMENTS
+        ) + sum(1 for ident in parquet_other if ident not in csv_id_set)
         in_parquet = [ident for ident in csv_identities if ident in all_fill_ids]
         filtered_manual = [
             fill
@@ -242,7 +245,7 @@ def _build_payload(
             "in_existing_parquet": len(in_parquet),
             "session_without_fills_run": len(missing_fills_sessions),
             "filtered_manual": len(filtered_manual),
-            "other_instrument": len(other_instrument_ids),
+            "other_instrument": other_instrument_n,
             "other_account": OTHER_ACCOUNT,
         }
         window_counts = _window_counts(csv_fills, windows)
@@ -284,7 +287,7 @@ def _build_payload(
         "fills_match": fills_match,
         "executions": executions_path,
         "clock_note": clock_note,
-        "visible_fills": [],
+        "visible_fills": list(visible_fills or []),
         "sessions": session_rows,
         "sessions_without_fills_run": missing_fills_sessions,
         "unstitched_gaps": _unstitched_gaps(sessions),
@@ -362,13 +365,14 @@ def _read_session_parquets(root: Path, sessions: list[SessionRecord]) -> dict[st
         if not fills_file.is_file() and not trades_file.is_file():
             continue
         fill_ids: set[FillIdentity] = set()
-        other: set[FillIdentity] = set()
+        other: list[FillIdentity] = []
         venue: str | list[str] | None = None
         fills_n = 0
         if fills_file.is_file():
             table = pq.read_table(fills_file)
-            fill_ids = _identities_from_fills_table(table)
-            other = {ident for ident in fill_ids if ident.instrument not in KNOWN_INSTRUMENTS}
+            fill_list = _identities_from_fills_table(table)
+            fill_ids = set(fill_list)
+            other = [ident for ident in fill_list if ident.instrument not in KNOWN_INSTRUMENTS]
             venue = _venues_from_table(table)
             fills_n = table.num_rows
         trade_ids: set[FillIdentity] = set()
@@ -400,7 +404,7 @@ def _venues_from_table(table: Any) -> str | list[str] | None:
     return unique
 
 
-def _identities_from_fills_table(table: Any) -> set[FillIdentity]:
+def _identities_from_fills_table(table: Any) -> list[FillIdentity]:
     needed = (
         "timestamp",
         "side",
@@ -418,9 +422,9 @@ def _identities_from_fills_table(table: Any) -> set[FillIdentity]:
         )
     rows = table.select(list(needed)).to_pydict()
     n = len(rows["timestamp"])
-    out: set[FillIdentity] = set()
+    out: list[FillIdentity] = []
     for i in range(n):
-        out.add(
+        out.append(
             _identity(
                 timestamp=rows["timestamp"][i],
                 side=rows["side"][i],
@@ -448,8 +452,11 @@ def _identities_from_trades_table(table: Any) -> set[FillIdentity]:
         "source_group_id",
         "direction",
     )
-    if any(name not in table.column_names for name in needed):
-        return set()
+    missing = [name for name in needed if name not in table.column_names]
+    if missing:
+        raise DayAuditError(
+            "trades.parquet missing identity columns: " + ", ".join(missing)
+        )
     rows = table.select(list(needed)).to_pydict()
     n = len(rows["entry_timestamp"])
     out: set[FillIdentity] = set()
@@ -498,10 +505,10 @@ def _identity(
 ) -> FillIdentity:
     return FillIdentity(
         timestamp=_as_utc(timestamp),
-        side=str(side),
+        side=str(side).strip().lower(),
         price=float(price),
         qty=_opt_int(qty),
-        instrument=str(instrument),
+        instrument=str(instrument).strip().upper(),
         contract_month=_opt_str(contract_month),
         contract_year=_opt_int(contract_year),
         source_group_id=_opt_str(source_group_id),
@@ -633,9 +640,9 @@ def _latest_recording_path(root: Path, record: SessionRecord) -> Path | None:
             try:
                 _sid, start = parse_obs_filename(name)
             except FilenameError:
-                start = None
+                continue
             timed.append((start, Path(root) / rel))
-        timed.sort(key=lambda item: (item[0] is None, item[0] or datetime.min.replace(tzinfo=timezone.utc)))
+        timed.sort(key=lambda item: item[0])
         ordered = [path for _start, path in timed]
     if record.recording.path:
         fallback = Path(root) / record.recording.path
@@ -656,10 +663,10 @@ def _stitched_gap_s(record: SessionRecord) -> float | None:
         return None
     timed.sort(key=lambda item: item[0])
     gaps = [
-        abs((nxt - prev).total_seconds() - duration)
+        (nxt - prev).total_seconds() - duration
         for (prev, duration), (nxt, _) in zip(timed, timed[1:], strict=False)
     ]
-    return max(gaps) if gaps else None
+    return max(gaps, key=abs) if gaps else None
 
 
 def _part_starts(parts: list[RecordingPart]) -> list[tuple[datetime, float]]:
@@ -680,7 +687,7 @@ def _unstitched_gaps(sessions: list[SessionRecord]) -> list[dict[str, Any]]:
     for record in sessions:
         prefix = obs_name_prefix(record.recording.filename or record.recording.path or "")
         if prefix is None:
-            prefix = ""
+            continue
         by_prefix.setdefault(prefix, []).append(record)
     for prefix, group in by_prefix.items():
         ordered = sorted(group, key=lambda rec: (_nominal_start_utc(rec), rec.id))
@@ -702,3 +709,43 @@ def _unstitched_gaps(sessions: list[SessionRecord]) -> list[dict[str, Any]]:
             )
     rows.sort(key=lambda row: (row["left_session_id"], row["right_session_id"]))
     return rows
+
+
+def _existing_audit(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    try:
+        payload = store.read_json(path)
+    except (OSError, ValueError) as exc:
+        raise DayAuditError(f"cannot read existing {AUDIT_RELATIVE_PATH}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise DayAuditError(f"existing {AUDIT_RELATIVE_PATH} is not a JSON object")
+    return payload
+
+
+def _refuse_if_waived(existing: dict[str, Any] | None) -> None:
+    if existing is None:
+        return
+    if existing.get("tz_assumption") == TZ_ASSUMPTION_WAIVED:
+        raise DayAuditError(
+            f"{AUDIT_RELATIVE_PATH} has tz_assumption={TZ_ASSUMPTION_WAIVED}; "
+            "refusing to overwrite the CD11 waiver"
+        )
+
+
+def _preserved_visible_fills(existing: dict[str, Any] | None) -> list[Any]:
+    if existing is None:
+        return []
+    raw = existing.get("visible_fills")
+    return list(raw) if isinstance(raw, list) else []
+
+
+def _preserved_clock_note(
+    existing: dict[str, Any] | None, clock_note: str | None
+) -> str | None:
+    if clock_note is not None:
+        return clock_note
+    if existing is None:
+        return None
+    note = existing.get("clock_note")
+    return note if isinstance(note, str) and note else None

@@ -54,6 +54,13 @@ def canonical_json(payload: Any) -> str:
     )
 
 
+def json_files_equal(left: Path, right: Path) -> None:
+    a = json.loads(left.read_text(encoding="utf-8"))
+    b = json.loads(right.read_text(encoding="utf-8"))
+    if canonical_json(a) != canonical_json(b):
+        raise AssertionError(f"json differs: {left} vs {right}")
+
+
 def parquet_tables_equal(left: Path, right: Path) -> None:
     a = pq.read_table(left)
     b = pq.read_table(right)

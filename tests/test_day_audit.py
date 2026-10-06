@@ -15,6 +15,7 @@ from tradevidanalyser.day_audit import (
     TRUE_TIME_RULE,
     TZ_ASSUMPTION_CSV,
     TZ_ASSUMPTION_WAIVED,
+    DayAuditError,
     audit_path,
     fill_identity,
     run_day_audit,
@@ -447,3 +448,147 @@ def test_l0_snapshot_exists_without_days() -> None:
         ledger = json.loads((folder / "ledger.json").read_text(encoding="utf-8"))
         assert "sessions" in ledger
         assert "trades" in ledger
+
+
+def test_sessions_sorted_by_utc_not_ingest_order(tva_root: Path) -> None:
+    later = _session(
+        tva_root,
+        "2026-09-14_110000",
+        start="2026-09-14T11:00:00+02:00",
+    )
+    earlier = _session(
+        tva_root,
+        "2026-09-14_100000",
+        start="2026-09-14T10:00:00+02:00",
+    )
+    data = run_day_audit(
+        root=tva_root, date_from="2026-09-14", date_to="2026-09-14"
+    ).payload
+    assert [row["session_id"] for row in data["sessions"]] == [earlier.id, later.id]
+
+
+def test_unparseable_filename_is_not_empty_prefix(tva_root: Path) -> None:
+    _session(
+        tva_root,
+        "2026-09-14_100000",
+        start="2026-09-14T10:00:00+02:00",
+        duration_s=60.0,
+    )
+    _session(
+        tva_root,
+        "2026-09-14_100200",
+        start="2026-09-14T10:02:00+02:00",
+        duration_s=60.0,
+        filename="notes.mp4",
+        path="recordings/notes.mp4",
+    )
+    data = run_day_audit(
+        root=tva_root, date_from="2026-09-14", date_to="2026-09-14"
+    ).payload
+    assert data["unstitched_gaps"] == []
+
+
+def test_loader_flag_selects_load_fills(
+    tva_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _session(tva_root, "2026-09-14_100000", start="2026-09-14T10:00:00+02:00")
+    csv = _write_csv(
+        tmp_path / "emptyish.csv",
+        [_csv_row("2026-09-14T08:10:00+0000"), _csv_row("2026-09-14T08:10:10+0000", side="sell")],
+    )
+    seen: list[bool | None] = []
+
+    def fake_load(path, *, prefer_import=None):
+        seen.append(prefer_import)
+        from tradevidanalyser.fills import load_fills as real_load
+
+        return real_load(path, prefer_import=False)
+
+    monkeypatch.setattr("tradevidanalyser.day_audit.load_fills", fake_load)
+    run_day_audit(
+        root=tva_root,
+        date_from="2026-09-14",
+        date_to="2026-09-14",
+        executions=csv,
+        loader="mirror",
+    )
+    run_day_audit(
+        root=tva_root,
+        date_from="2026-09-14",
+        date_to="2026-09-14",
+        executions=csv,
+        loader="import",
+    )
+    run_day_audit(
+        root=tva_root,
+        date_from="2026-09-14",
+        date_to="2026-09-14",
+        executions=csv,
+        loader="unknown",
+    )
+    assert seen == [False, True, None]
+
+
+def test_refuses_to_overwrite_tz_assumption_waived(tva_root: Path) -> None:
+    _session(tva_root, "2026-09-14_100000", start="2026-09-14T10:00:00+02:00")
+    dest = audit_path(tva_root)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(
+        json.dumps({"tz_assumption": TZ_ASSUMPTION_WAIVED, "visible_fills": [{"n": 1}]}),
+        encoding="utf-8",
+    )
+    before = dest.read_text(encoding="utf-8")
+    stamp = dest.stat().st_mtime_ns
+    with pytest.raises(DayAuditError, match="waived"):
+        run_day_audit(root=tva_root, date_from="2026-09-14", date_to="2026-09-14")
+    assert dest.read_text(encoding="utf-8") == before
+    assert dest.stat().st_mtime_ns == stamp
+
+
+def test_re_run_preserves_visible_fills_and_clock_note(tva_root: Path) -> None:
+    _session(tva_root, "2026-09-14_100000", start="2026-09-14T10:00:00+02:00")
+    first = run_day_audit(
+        root=tva_root,
+        date_from="2026-09-14",
+        date_to="2026-09-14",
+        clock_note="ROI HH:MM:SS",
+    )
+    dest = audit_path(tva_root)
+    payload = json.loads(dest.read_text(encoding="utf-8"))
+    payload["visible_fills"] = [
+        {
+            "session_id": "2026-09-14_100000",
+            "video_t": 12.0,
+            "csv_timestamp": "2026-09-14T08:10:00+00:00",
+        }
+    ]
+    dest.write_text(json.dumps(payload), encoding="utf-8")
+    again = run_day_audit(root=tva_root, date_from="2026-09-14", date_to="2026-09-14")
+    data = json.loads(dest.read_text(encoding="utf-8"))
+    assert data["tz_assumption"] == TZ_ASSUMPTION_CSV
+    assert data["tz_assumption"] != TZ_ASSUMPTION_WAIVED
+    assert data["visible_fills"] == payload["visible_fills"]
+    assert data["clock_note"] == "ROI HH:MM:SS"
+    assert again.clock_note == first.clock_note
+
+
+def test_trades_missing_identity_columns_fail_closed(tva_root: Path) -> None:
+    record = _session(
+        tva_root, "2026-09-14_100000", start="2026-09-14T10:00:00+02:00"
+    )
+    pq.write_table(
+        pa.table({"trade_id": pa.array(["x"], type=pa.string())}),
+        store.trades_path(tva_root, record.id),
+    )
+    with pytest.raises(DayAuditError, match="trades.parquet missing identity columns"):
+        run_day_audit(root=tva_root, date_from="2026-09-14", date_to="2026-09-14")
+
+
+def test_l0_parity_helper_roundtrip() -> None:
+    from tests.l0_parity import json_files_equal, l0_variant_dir
+
+    ocr = l0_variant_dir("l0-ocr") / "session.json"
+    filename = l0_variant_dir("l0-filename") / "session.json"
+    json_files_equal(ocr, ocr)
+    with pytest.raises(AssertionError, match="json differs"):
+        json_files_equal(ocr, filename)
