@@ -248,7 +248,8 @@ def _ensure_schema(con: duckdb.DuckDBPyConnection) -> None:
             trade_count INTEGER,
             hours DOUBLE,
             trades_outside_clips INTEGER,
-            trades_per_hour_reason VARCHAR
+            trades_per_hour_reason VARCHAR,
+            trades_span_zero INTEGER
         )
         """
     )
@@ -263,6 +264,19 @@ def _ensure_schema(con: duckdb.DuckDBPyConnection) -> None:
         )
         """
     )
+    _add_column_if_missing(con, "day_rollups", "trades_span_zero", "INTEGER")
+
+
+def _add_column_if_missing(
+    con: duckdb.DuckDBPyConnection, table: str, column: str, decl: str
+) -> None:
+    try:
+        rows = con.execute(f"PRAGMA table_info('{table}')").fetchall()
+    except duckdb.Error:
+        return
+    names = {str(row[1]) for row in rows}
+    if column not in names:
+        con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
 def session_recorded(root: Path, session_id: str) -> bool:
@@ -325,6 +339,7 @@ def upsert_day_rollup(
     hours: float,
     trades_outside_clips: int,
     trades_per_hour_reason: str | None,
+    trades_span_zero: int = 0,
 ) -> None:
     with _LEDGER_LOCK:
         con = _connect(root)
@@ -333,9 +348,16 @@ def upsert_day_rollup(
                 con.execute(
                     """
                     INSERT OR REPLACE INTO day_rollups
-                    VALUES (?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?)
                     """,
-                    [day, trade_count, hours, trades_outside_clips, trades_per_hour_reason],
+                    [
+                        day,
+                        trade_count,
+                        hours,
+                        trades_outside_clips,
+                        trades_per_hour_reason,
+                        trades_span_zero,
+                    ],
                 )
         finally:
             con.close()
@@ -458,9 +480,7 @@ def _sql_col(name: str, available: set[str], cast: str) -> str:
     return "NULL"
 
 
-def _read_trades_from_parquet(
-    con: duckdb.DuckDBPyConnection, root: Path, session_id: str
-) -> int:
+def _read_trades_from_parquet(con: duckdb.DuckDBPyConnection, root: Path, session_id: str) -> int:
     path = store.trades_path(root, session_id)
     if not path.is_file():
         return 0
@@ -497,9 +517,7 @@ def _read_trades_from_parquet(
         """,
         [session_id],
     )
-    row = con.execute(
-        "SELECT COUNT(*) FROM trades WHERE session_id = ?", [session_id]
-    ).fetchone()
+    row = con.execute("SELECT COUNT(*) FROM trades WHERE session_id = ?", [session_id]).fetchone()
     return int(row[0]) if row else 0
 
 
@@ -594,9 +612,7 @@ def add_session(session_id: str, *, root: Path) -> LedgerAddResult:
     session_id = _require_safe_session_id(session_id)
     record = store.load_session(root, session_id)
     if record.id != session_id:
-        raise ValueError(
-            f"session.json id {record.id!r} does not match directory {session_id!r}"
-        )
+        raise ValueError(f"session.json id {record.id!r} does not match directory {session_id!r}")
     day = session_calendar_date(record)
     hours = (record.recording.duration_s or 0.0) / 3600.0
     with _LEDGER_LOCK:
@@ -683,9 +699,7 @@ def _tally_rules(rows: list[tuple[Any, ...]]) -> AdherenceTally:
 
 
 def _tally_violations(adherence: AdherenceTally) -> ViolationTally:
-    by_rule = {
-        rule: tally.violated for rule, tally in adherence.by_rule.items() if tally.violated
-    }
+    by_rule = {rule: tally.violated for rule, tally in adherence.by_rule.items() if tally.violated}
     return ViolationTally(total=adherence.violated, by_rule=by_rule)
 
 
@@ -740,9 +754,7 @@ def _session_ids_for(
         latest_day = date.fromisoformat(str(latest_day)[:10])
     last_week = iso_week_id(latest_day)
     wanted = {shift_iso_week(last_week, delta) for delta in range(1 - weeks, 1)}
-    rows = con.execute(
-        "SELECT session_id, iso_week FROM sessions ORDER BY session_id"
-    ).fetchall()
+    rows = con.execute("SELECT session_id, iso_week FROM sessions ORDER BY session_id").fetchall()
     return [str(row[0]) for row in rows if row[1] in wanted]
 
 
@@ -768,7 +780,12 @@ def _day_tables_exist(con: duckdb.DuckDBPyConnection) -> bool:
         return False
 
 
-def _summarize_ids(con: duckdb.DuckDBPyConnection, session_ids: list[str]) -> dict[str, Any]:
+def _summarize_ids(
+    con: duckdb.DuckDBPyConnection,
+    session_ids: list[str],
+    *,
+    root: Path | None = None,
+) -> dict[str, Any]:
     if not session_ids:
         return {
             "sessions": 0,
@@ -778,6 +795,10 @@ def _summarize_ids(con: duckdb.DuckDBPyConnection, session_ids: list[str]) -> di
             "adherence": _empty_adherence(),
             "violations": ViolationTally(),
             "stated_vs_lab": StatedLabTally(),
+            "trades_per_hour_reason": None,
+            "hours_basis": None,
+            "trades_span_zero": None,
+            "trades_outside_clips": None,
         }
     placeholders = ", ".join("?" for _ in session_ids)
     sess = con.execute(
@@ -839,6 +860,22 @@ def _summarize_ids(con: duckdb.DuckDBPyConnection, session_ids: list[str]) -> di
     n_sessions = int(sess[0]) if sess else 0
     hours = float(sess[1]) if sess else 0.0
     n_trades = int(trades[0]) if trades else 0
+    reason = None
+    hours_basis = None
+    span_zero = None
+    outside = None
+    from tradevidanalyser.flags import trading_hours_enabled
+
+    if trading_hours_enabled() and root is not None:
+        hours, n_trades, reason, hours_basis, span_zero, outside = _hours_from_day_rollups(
+            con,
+            root,
+            session_ids,
+            by_session_day,
+            day_dates,
+            default_hours=hours,
+            default_trades=n_trades,
+        )
     adherence = _tally_rules(rules)
     return {
         "sessions": n_sessions,
@@ -848,13 +885,146 @@ def _summarize_ids(con: duckdb.DuckDBPyConnection, session_ids: list[str]) -> di
         "adherence": adherence,
         "violations": _tally_violations(adherence),
         "stated_vs_lab": _tally_stated_lab(stated),
+        "trades_per_hour_reason": reason,
+        "hours_basis": hours_basis,
+        "trades_span_zero": span_zero,
+        "trades_outside_clips": outside,
     }
 
 
+def _hours_from_day_rollups(
+    con: duckdb.DuckDBPyConnection,
+    root: Path,
+    session_ids: list[str],
+    by_session_day: dict[str, date | None],
+    day_dates: set[date],
+    *,
+    default_hours: float,
+    default_trades: int,
+) -> tuple[float, int, str | None, str | None, int | None, int | None]:
+    from tradevidanalyser.day_hours import (
+        BASIS_DURATION,
+        BASIS_FILL_SPAN,
+        BASIS_MIXED,
+        period_hours_reason,
+    )
+    from tradevidanalyser.day_manifest import day_state
+
+    stale: set[date] = set()
+    day_path: set[date] = set()
+    for day in {item for item in by_session_day.values() if item is not None}:
+        kind = day_state(root, day).kind
+        if kind in {"stale", "missing"}:
+            stale.add(day)
+        elif day in day_dates and kind in {"current", "current_incomplete"}:
+            day_path.add(day)
+    if not day_path and not stale:
+        return default_hours, default_trades, None, BASIS_DURATION, None, None
+    if (
+        not day_path
+        and stale
+        and not any(by_session_day.get(sid) not in stale for sid in session_ids)
+    ):
+        return 0.0, 0, None, None, None, None
+    legacy_ids = [
+        sid
+        for sid in session_ids
+        if by_session_day.get(sid) not in day_path and by_session_day.get(sid) not in stale
+    ]
+    hours = 0.0
+    trades = 0
+    span_zero = 0
+    outside = 0
+    entitled_cores = 0
+    if day_path:
+        rows = _select_day_rollups(con, day_path)
+        for _day, trade_count, day_hours, day_outside, _reason, day_span_zero in rows:
+            trades += int(trade_count or 0)
+            hours += float(day_hours or 0.0)
+            outside += int(day_outside or 0)
+            span_zero += int(day_span_zero or 0)
+            if _reason != "paused_clip":
+                entitled_cores += 1
+        if entitled_cores == 0 and rows:
+            entitled_cores = 0
+        elif rows:
+            entitled_cores = max(entitled_cores, 1)
+    if legacy_ids:
+        ph = ", ".join("?" for _ in legacy_ids)
+        sess = con.execute(
+            f"SELECT COALESCE(SUM(hours), 0) FROM sessions WHERE session_id IN ({ph})",
+            legacy_ids,
+        ).fetchone()
+        traded = con.execute(
+            f"SELECT COUNT(*) FROM trades WHERE session_id IN ({ph})",
+            legacy_ids,
+        ).fetchone()
+        hours += float(sess[0]) if sess else 0.0
+        trades += int(traded[0]) if traded else 0
+        entitled_cores += 1
+    if day_path and legacy_ids:
+        basis: str | None = BASIS_MIXED
+    elif day_path:
+        basis = BASIS_FILL_SPAN
+    else:
+        basis = BASIS_DURATION
+    reason = period_hours_reason(
+        entitled_cores=entitled_cores,
+        hours=hours,
+        trades_span_zero=span_zero,
+        trades_outside_clips=outside,
+        hours_basis=basis,
+    )
+    return hours, trades, reason, basis, span_zero, outside
+
+
+def _select_day_rollups(
+    con: duckdb.DuckDBPyConnection, days: set[date]
+) -> list[tuple[date | None, int, float, int, str | None, int]]:
+    day_ph = ", ".join("?" for _ in days)
+    params = list(days)
+    try:
+        rows = con.execute(
+            f"""
+            SELECT day, trade_count, hours, trades_outside_clips,
+                   trades_per_hour_reason, trades_span_zero
+            FROM day_rollups WHERE day IN ({day_ph})
+            """,
+            params,
+        ).fetchall()
+    except duckdb.Error:
+        rows = con.execute(
+            f"""
+            SELECT day, trade_count, hours, trades_outside_clips,
+                   trades_per_hour_reason, 0
+            FROM day_rollups WHERE day IN ({day_ph})
+            """,
+            params,
+        ).fetchall()
+    out: list[tuple[date | None, int, float, int, str | None, int]] = []
+    for row in rows:
+        out.append(
+            (
+                _as_day(row[0]),
+                int(row[1] or 0),
+                float(row[2] or 0.0),
+                int(row[3] or 0),
+                str(row[4]) if row[4] is not None else None,
+                int(row[5] or 0),
+            )
+        )
+    return out
+
+
 def _period(
-    con: duckdb.DuckDBPyConnection, kind: str, period_id: str, session_ids: list[str]
+    con: duckdb.DuckDBPyConnection,
+    kind: str,
+    period_id: str,
+    session_ids: list[str],
+    *,
+    root: Path | None = None,
 ) -> LedgerPeriod:
-    stats = _summarize_ids(con, session_ids)
+    stats = _summarize_ids(con, session_ids, root=root)
     return LedgerPeriod(kind=kind, id=period_id, **stats)  # type: ignore[arg-type]
 
 
@@ -962,18 +1132,18 @@ def build_summary(
             periods: list[LedgerPeriod] = []
             if week is not None:
                 ids = _session_ids_for(con, week=week)
-                stats = _summarize_ids(con, ids)
-                periods.append(_period(con, "week", week, ids))
+                stats = _summarize_ids(con, ids, root=root)
+                periods.append(_period(con, "week", week, ids, root=root))
                 summary = LedgerSummary(weeks=None, periods=periods, **stats)
             elif month is not None:
                 ids = _session_ids_for(con, month=month)
-                stats = _summarize_ids(con, ids)
-                periods.append(_period(con, "month", month, ids))
+                stats = _summarize_ids(con, ids, root=root)
+                periods.append(_period(con, "month", month, ids, root=root))
                 summary = LedgerSummary(weeks=None, periods=periods, **stats)
             else:
                 window = 4 if weeks is None else weeks
                 ids = _session_ids_for(con, weeks=window)
-                stats = _summarize_ids(con, ids)
+                stats = _summarize_ids(con, ids, root=root)
                 week_ids: list[str] = []
                 if ids:
                     rows = con.execute(
@@ -994,7 +1164,13 @@ def build_summary(
                             week_ids.append(week_id)
                 for week_id in week_ids:
                     periods.append(
-                        _period(con, "week", week_id, _session_ids_for(con, week=week_id))
+                        _period(
+                            con,
+                            "week",
+                            week_id,
+                            _session_ids_for(con, week=week_id),
+                            root=root,
+                        )
                     )
                 summary = LedgerSummary(weeks=window, periods=periods, **stats)
         except duckdb.Error as exc:
@@ -1019,8 +1195,10 @@ def rollup(
     chosen_week = week
     chosen_month = month
     path = ledger_db_path(root)
-    if path.is_file() and path.stat().st_size > 0 and (
-        chosen_week == "latest" or chosen_month == "latest"
+    if (
+        path.is_file()
+        and path.stat().st_size > 0
+        and (chosen_week == "latest" or chosen_month == "latest")
     ):
         with _LEDGER_LOCK:
             try:
@@ -1048,9 +1226,7 @@ def rollup(
         month_summary = build_summary(root, month=chosen_month)
         periods = [*week_summary.periods, *month_summary.periods]
         if not any(period.kind == "month" and period.id == chosen_month for period in periods):
-            periods.append(
-                LedgerPeriod(kind="month", id=chosen_month, **_summarize_ids_empty())
-            )
+            periods.append(LedgerPeriod(kind="month", id=chosen_month, **_summarize_ids_empty()))
         summary = LedgerSummary(
             weeks=None,
             sessions=week_summary.sessions,
@@ -1061,6 +1237,10 @@ def rollup(
             violations=week_summary.violations,
             stated_vs_lab=week_summary.stated_vs_lab,
             periods=periods,
+            trades_per_hour_reason=week_summary.trades_per_hour_reason,
+            hours_basis=week_summary.hours_basis,
+            trades_span_zero=week_summary.trades_span_zero,
+            trades_outside_clips=week_summary.trades_outside_clips,
         )
         summary.markdown = render_markdown(summary)
         return RollupResult(status="ok", markdown=summary.markdown, summary=summary)
@@ -1082,6 +1262,10 @@ def _summarize_ids_empty() -> dict[str, Any]:
         "adherence": _empty_adherence(),
         "violations": ViolationTally(),
         "stated_vs_lab": StatedLabTally(),
+        "trades_per_hour_reason": None,
+        "hours_basis": None,
+        "trades_span_zero": None,
+        "trades_outside_clips": None,
     }
 
 
@@ -1289,8 +1473,7 @@ def _experiment_from_row(row: tuple[Any, ...]) -> CoachExperiment:
 def _list_experiments_con(con: duckdb.DuckDBPyConnection) -> list[CoachExperiment]:
     try:
         rows = con.execute(
-            "SELECT id, rule_change, start, stop_criterion, status "
-            "FROM experiments ORDER BY id"
+            "SELECT id, rule_change, start, stop_criterion, status FROM experiments ORDER BY id"
         ).fetchall()
     except duckdb.Error as exc:
         if _is_absent_ledger_error(exc) or "experiments" in str(exc).lower():

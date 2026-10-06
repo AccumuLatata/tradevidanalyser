@@ -9,7 +9,7 @@ from pathlib import Path
 from tradevidanalyser import store
 from tradevidanalyser.day_fills import DayOwnership
 from tradevidanalyser.day_manifest import day_dir, load_current_day_json, nominal_vienna_date
-from tradevidanalyser.flags import day_rules_enabled
+from tradevidanalyser.flags import day_rules_enabled, trading_hours_enabled
 from tradevidanalyser.rules import (
     RulesConfig,
     RulesResult,
@@ -60,21 +60,35 @@ def apply_day_rules(
 
     drop_day_rows(root, day)
     upsert_day_rule_checks(root, day, day_checks)
-    entitled = sum(
-        1 for trade in ownership.trades if ownership.fill_owner.get(trade.entry_fill_id)
-    )
-    outside = sum(
-        1 for trade in ownership.trades if ownership.fill_owner.get(trade.entry_fill_id) is None
-    )
-    hours = sum(float(record.recording.duration_s or 0.0) for record in clips) / 3600.0
-    upsert_day_rollup(
-        root,
-        day,
-        trade_count=entitled,
-        hours=hours,
-        trades_outside_clips=outside,
-        trades_per_hour_reason=None,
-    )
+    if trading_hours_enabled():
+        from tradevidanalyser.day_hours import compute_day_hours
+
+        metrics = compute_day_hours(root, day, ownership, clips)
+        upsert_day_rollup(
+            root,
+            day,
+            trade_count=metrics.trade_count,
+            hours=metrics.hours,
+            trades_outside_clips=metrics.trades_outside_clips,
+            trades_per_hour_reason=metrics.reason,
+            trades_span_zero=metrics.trades_span_zero,
+        )
+    else:
+        entitled = sum(
+            1 for trade in ownership.trades if ownership.fill_owner.get(trade.entry_fill_id)
+        )
+        outside = sum(
+            1 for trade in ownership.trades if ownership.fill_owner.get(trade.entry_fill_id) is None
+        )
+        hours = sum(float(record.recording.duration_s or 0.0) for record in clips) / 3600.0
+        upsert_day_rollup(
+            root,
+            day,
+            trade_count=entitled,
+            hours=hours,
+            trades_outside_clips=outside,
+            trades_per_hour_reason=None,
+        )
     backup_root = build_dir / "cascade_backup"
     for record in clips:
         _backup_rules(root, record.id, backup_root / record.id)
@@ -204,4 +218,3 @@ def _load_session_events(root: Path, session_id: str) -> list[SessionEvent]:
         return list(store.load_insights(root, session_id).session_events)
     except (OSError, TypeError, ValueError):
         return []
-

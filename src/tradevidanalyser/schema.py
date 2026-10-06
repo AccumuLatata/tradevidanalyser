@@ -316,6 +316,19 @@ class StatedLabTally(BaseModel):
     rate: float | None = None
 
 
+def _omit_hours_meta(payload: dict) -> dict:
+    """Drop reason / basis / span keys when they would break L0 identity (§2.6)."""
+    if payload.get("trades_per_hour_reason") is None:
+        payload.pop("trades_per_hour_reason", None)
+    if payload.get("hours_basis") in (None, "duration"):
+        payload.pop("hours_basis", None)
+    if not payload.get("trades_span_zero"):
+        payload.pop("trades_span_zero", None)
+    if not payload.get("trades_outside_clips"):
+        payload.pop("trades_outside_clips", None)
+    return payload
+
+
 class LedgerPeriod(BaseModel):
     kind: Literal["week", "month"]
     id: str
@@ -326,6 +339,14 @@ class LedgerPeriod(BaseModel):
     adherence: AdherenceTally = Field(default_factory=AdherenceTally)
     violations: ViolationTally = Field(default_factory=ViolationTally)
     stated_vs_lab: StatedLabTally = Field(default_factory=StatedLabTally)
+    trades_per_hour_reason: str | None = None
+    hours_basis: str | None = None
+    trades_span_zero: int | None = None
+    trades_outside_clips: int | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_null_hours_meta(self, handler):  # type: ignore[no-untyped-def]
+        return _omit_hours_meta(handler(self))
 
 
 class LedgerSummary(BaseModel):
@@ -342,6 +363,14 @@ class LedgerSummary(BaseModel):
     markdown: str = ""
     incomplete_days: list[dict] = Field(default_factory=list)
     legacy_unbuilt_days: list[str] = Field(default_factory=list)
+    trades_per_hour_reason: str | None = None
+    hours_basis: str | None = None
+    trades_span_zero: int | None = None
+    trades_outside_clips: int | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_null_hours_meta(self, handler):  # type: ignore[no-untyped-def]
+        return _omit_hours_meta(handler(self))
 
 
 class PublishRecord(BaseModel):
