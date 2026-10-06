@@ -404,12 +404,29 @@ def test_l0_rules_json_matches_snapshot_with_four_set(
     json_files_equal(store.rules_path(tva_root, L0_SESSION), src / "rules.json")
     assert not (tva_root / "days").exists()
     rules_session(L0_SESSION, root=tva_root)
+    json_files_equal(store.rules_path(tva_root, L0_SESSION), src / "rules.json")
     session = _rules(tva_root, L0_SESSION)
     assert session["R-DLL"]["reason"] == "daily_loss_limit_usd is unset (D4)"
     assert session["R-MAX10"]["status"] == "pass"
     assert session["R-MAX10"]["reason"] != day_rule_reason(date(2026, 5, 14))
     assert session["R-CLOSE"]["reason"] == "flat_by is unset"
     assert session["R-PLAYBOOK"]["status"] == "pass"
+
+
+def test_tva_rules_legacy_unbuilt_stays_per_session(
+    tva_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Flags on without enabled_from/build: treat as legacy, do not invent a day reason (§2.1)."""
+    _four_on(monkeypatch)
+    a, _b = _two_clips(tva_root)
+    src = L0_DIR / "l0-ocr"
+    shutil.copy2(src / "trades.parquet", store.trades_path(tva_root, a.id))
+    shutil.copy2(src / "evidence.json", store.evidence_path(tva_root, a.id))
+    rules_session(a.id, root=tva_root)
+    session = _rules(tva_root, a.id)
+    assert session["R-MAX10"]["reason"] != day_rule_reason(DAY)
+    assert session["R-MAX10"]["status"] == "pass"
+    assert not (tva_root / "days").exists()
 
 
 def test_tva_rules_writes_both_or_stale(

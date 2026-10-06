@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
@@ -529,20 +530,24 @@ def _signature_from_existing(root: Path, session_id: str) -> dict[str, Any]:
 def _signatures_match(left: dict[str, Any] | None, right: dict[str, Any] | None) -> bool:
     if left is None or right is None:
         return False
-    left_fills = {_identity_key(item) for item in left.get("fill_identities") or [] if isinstance(item, dict)}
-    right_fills = {_identity_key(item) for item in right.get("fill_identities") or [] if isinstance(item, dict)}
+    left_fills = Counter(
+        _identity_key(item) for item in left.get("fill_identities") or [] if isinstance(item, dict)
+    )
+    right_fills = Counter(
+        _identity_key(item) for item in right.get("fill_identities") or [] if isinstance(item, dict)
+    )
     if left_fills != right_fills:
         return False
-    left_trades = {
+    left_trades = Counter(
         (str(item.get("tva_trade_id") or ""), _identity_key(item.get("entry") or {}))
         for item in left.get("trade_ids") or []
         if isinstance(item, dict)
-    }
-    right_trades = {
+    )
+    right_trades = Counter(
         (str(item.get("tva_trade_id") or ""), _identity_key(item.get("entry") or {}))
         for item in right.get("trade_ids") or []
         if isinstance(item, dict)
-    }
+    )
     return left_trades == right_trades
 
 
@@ -559,11 +564,16 @@ def _identity_key(payload: object) -> tuple[Any, ...]:
         price_n = round(float(price or 0.0), 6)
     except (TypeError, ValueError):
         price_n = 0.0
+    qty = payload.get("qty")
+    try:
+        qty_n: Any = None if qty is None else float(qty)
+    except (TypeError, ValueError):
+        qty_n = qty
     return (
         ts,
         str(payload.get("side") or ""),
         price_n,
-        payload.get("qty"),
+        qty_n,
         str(payload.get("instrument") or ""),
         payload.get("contract_month"),
         payload.get("contract_year"),

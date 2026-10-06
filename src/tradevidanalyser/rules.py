@@ -1347,10 +1347,13 @@ def build_rules_report(
 
 
 def _session_on_day_path(root: Path, record: SessionRecord) -> bool:
-    from tradevidanalyser.day_manifest import clips_for_day, is_day_path, nominal_vienna_date
+    """True only for a built day path. legacy / legacy_unbuilt stay per-session (§2.1)."""
+    from tradevidanalyser.day_manifest import day_state, nominal_vienna_date
 
-    day = nominal_vienna_date(record)
-    return is_day_path(root, clips_for_day(root, day))
+    return day_state(root, nominal_vienna_date(record)).kind in {
+        "current",
+        "current_incomplete",
+    }
 
 
 def _load_evidence(root: Path, session_id: str) -> Evidence | None:

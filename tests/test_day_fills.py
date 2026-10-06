@@ -11,6 +11,7 @@ import pytest
 from tradevidanalyser import config, store
 from tradevidanalyser.day_fills import (
     NEAR_BOUNDARY_EPS_S,
+    _signatures_match,
     clip_has_core,
     core_interval,
 )
@@ -881,3 +882,25 @@ def test_corrupt_legacy_neighbor_parquet_fails_closed(
     )
     with pytest.raises(DayManifestError, match="unlesbar"):
         build_day(tva_root, date(2026, 9, 15), executions=csv, venue="amp")
+
+
+def test_signatures_match_keeps_duplicate_identities() -> None:
+    identity = {
+        "timestamp": "2026-09-14T07:05:00+00:00",
+        "side": "buy",
+        "price": 21000.0,
+        "qty": 1,
+        "instrument": "MNQ",
+        "contract_month": "M",
+        "contract_year": 2026,
+        "source_group_id": "g1",
+    }
+    one = {"fill_identities": [identity], "trade_ids": []}
+    two = {"fill_identities": [identity, identity], "trade_ids": []}
+    assert _signatures_match(one, one)
+    assert not _signatures_match(one, two)
+    qty_float = {**identity, "qty": 1.0}
+    assert _signatures_match(
+        {"fill_identities": [identity], "trade_ids": []},
+        {"fill_identities": [qty_float], "trade_ids": []},
+    )
