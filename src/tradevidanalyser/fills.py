@@ -367,8 +367,15 @@ def fills_table(fills: list[FillRecord], *, venue: str) -> pa.Table:
     return table.select(list(TVA_FILL_COLUMNS)) if rows else _empty_fills_table()
 
 
-def trades_table(trades: list[JournalTrade], *, venue: str) -> pa.Table:
-    ids = assign_tva_trade_ids(trades)
+def trades_table(
+    trades: list[JournalTrade],
+    *,
+    venue: str,
+    tva_trade_ids: list[str] | None = None,
+) -> pa.Table:
+    ids = tva_trade_ids if tva_trade_ids is not None else assign_tva_trade_ids(trades)
+    if len(ids) != len(trades):
+        raise FillsError("tva_trade_ids length must match trades")
     rows = [trade_to_dict(trade) for trade in trades]
     for row, tva_id in zip(rows, ids, strict=True):
         row["venue"] = venue
@@ -658,6 +665,21 @@ def ingest_fills(
     prefer_import: bool | None = None,
     reconcile_dir: Path | None = None,
 ) -> FillsResult:
+    from tradevidanalyser.day_fills import ingest_fills_exclusive
+    from tradevidanalyser.flags import exclusive_fills_enabled
+
+    if exclusive_fills_enabled():
+        exclusive = ingest_fills_exclusive(
+            record,
+            executions,
+            root=root,
+            venue=venue,
+            include_manual=include_manual,
+            prefer_import=prefer_import,
+            reconcile_dir=reconcile_dir,
+        )
+        if exclusive is not None:
+            return exclusive
     csv_path = Path(executions)
     chosen_venue = venue_from_hint(csv_path, venue)
     try:

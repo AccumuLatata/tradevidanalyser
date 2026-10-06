@@ -344,6 +344,10 @@ def build_evidence(
             else entry_t
         )
         t0, t1 = _window_bounds(entry_t, exit_t, pre_s=pre, post_s=post, duration_s=duration)
+        if _exit_outside_clip(record, root, exit_ts):
+            t1 = _r(duration, 3) if duration > 0 else t1
+            if t1 < t0:
+                t1 = t0
         window_segs = segments_in_window(segments, t0, t1)
         window_tx = Transcript(
             provider=transcript.provider if transcript else "none",
@@ -356,6 +360,8 @@ def build_evidence(
         gaps = list(stated_pass.gaps)
         if not _has_window_speech(window_segs) and NO_SPEECH_GAP not in gaps:
             gaps.append(NO_SPEECH_GAP)
+        if _exit_outside_clip(record, root, exit_ts) and "exit_outside_clip" not in gaps:
+            gaps.append("exit_outside_clip")
         trades.append(
             EvidenceTrade(
                 tva_trade_id=tva_id,
@@ -394,6 +400,20 @@ def _pause_clock_resolution(record: SessionRecord, root: Path) -> int | None:
 
 def _has_window_speech(segments: list[TranscriptSegment]) -> bool:
     return any((seg.text or "").strip() for seg in segments)
+
+
+def _exit_outside_clip(record: SessionRecord, root: Path, exit_ts: datetime | None) -> bool:
+    from tradevidanalyser.day_manifest import clips_for_day, is_day_path, nominal_end_utc, nominal_vienna_date
+    from tradevidanalyser.flags import exclusive_fills_enabled
+
+    if exit_ts is None or not exclusive_fills_enabled():
+        return False
+    day = nominal_vienna_date(record)
+    if not is_day_path(root, clips_for_day(root, day)):
+        return False
+    end = nominal_end_utc(record)
+    instant = exit_ts if exit_ts.tzinfo is not None else exit_ts.replace(tzinfo=timezone.utc)
+    return instant.astimezone(timezone.utc) >= end
 
 
 def evidence_session(
