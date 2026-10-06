@@ -14,8 +14,10 @@ from tradevidanalyser import store
 from tradevidanalyser.day_audit import FillIdentity, audit_path, fill_identity
 from tradevidanalyser.day_manifest import (
     DayManifestError,
+    LOCK_ERROR,
     TZ_ASSUMPTION_CSV,
     clips_for_day,
+    day_lock_path,
     is_day_path,
     load_current_day_json,
     nominal_end_utc,
@@ -25,6 +27,7 @@ from tradevidanalyser.day_manifest import (
 from tradevidanalyser.fills import (
     FillsError,
     FillsResult,
+    assign_tva_trade_ids,
     fills_table,
     load_fills,
     pair_fills,
@@ -36,7 +39,8 @@ from tradevidanalyser.fills_mirror import FillRecord, JournalTrade
 from tradevidanalyser.flags import exclusive_fills_enabled, pause_guard_enabled
 from tradevidanalyser.naming import VIENNA
 from tradevidanalyser.pause_guard import key_matches, load_pause_check
-from tradevidanalyser.schema import alignment_is_invalid, SessionRecord
+from tradevidanalyser.schema import IntentProposal, IntentProposals, SessionRecord, alignment_is_invalid
+from tradevidanalyser.watch import release_lock, try_acquire_lock
 
 NEAR_BOUNDARY_EPS_S = 10.0
 FILLS_MISMATCH_ERROR = (
@@ -74,11 +78,10 @@ class OutsideFill:
 
 
 @dataclass
-class OwnedFill:
-    fill: FillRecord
-    session_id: str
-    overlap: list[str] = field(default_factory=list)
-    near_boundary: list[str] = field(default_factory=list)
+class ExclusiveBuildResult:
+    cascade: dict[str, str]
+    remaps: list[dict[str, Any]]
+    discarded: list[dict[str, Any]]
 
 
 @dataclass
@@ -177,7 +180,7 @@ def assign_day_ownership(
     cores_all = cores_d + _cores_of(root, neighbors)
     assigned: dict[str, list[FillRecord]] = {record.id: [] for record in clips}
     outside: list[OutsideFill] = []
-    overlap: dict[str, list[str]] = {record.id: [] for record in clips}
+    overlap = _geometric_overlap(cores_all, clip_ids={record.id for record in clips})
     near_boundary: dict[str, list[dict[str, Any]]] = {record.id: [] for record in clips}
     claimed_legacy: list[FillIdentity] = []
     fill_owner: dict[str, str | None] = {}
@@ -204,7 +207,7 @@ def assign_day_ownership(
         assigned[chosen.session_id].append(fill)
         fill_owner[fill.fill_id] = chosen.session_id
         if others:
-            overlap[chosen.session_id] = sorted(set(overlap[chosen.session_id] + others))
+            overlap[chosen.session_id] = sorted(set(overlap.get(chosen.session_id, []) + others))
         if near:
             for session_id in near:
                 near_boundary[session_id].append(fill_identity(fill).as_dict())
@@ -213,8 +216,6 @@ def assign_day_ownership(
     pairing_fills.extend(item.fill for item in outside)
     pairing_fills.sort(key=lambda fill: (_utc(fill.timestamp), fill.fill_id))
     trades = pair_fills(pairing_fills, include_manual=include_manual, loader=loader)
-    from tradevidanalyser.fills import assign_tva_trade_ids
-
     tva_ids = assign_tva_trade_ids(trades)
     session_trades: dict[str, list[tuple[JournalTrade, str]]] = {record.id: [] for record in clips}
     for trade, tva_id in zip(trades, tva_ids, strict=True):
@@ -253,11 +254,12 @@ def apply_exclusive_build(
     venue: str,
     previous: dict[str, Any] | None,
     build_dir: Path,
-) -> dict[str, str]:
+) -> ExclusiveBuildResult:
     """Write parquets, run cascade, rewrite ledger. Returns cascade per session."""
     prev_own = _previous_signatures(previous)
     cascade: dict[str, str] = {}
     discarded: list[dict[str, Any]] = []
+    remaps: list[dict[str, Any]] = []
     carry: dict[str, list[dict[str, Any]]] = {}
     for session_id, signature in ownership.signatures.items():
         changed = session_id not in prev_own or prev_own[session_id] != signature
@@ -277,10 +279,16 @@ def apply_exclusive_build(
         from tradevidanalyser.ledger import add_session
 
         add_session(session_id, root=root)
-        discarded.extend(_remap_proposals(root, session_id, ownership, carry.get(session_id) or []))
+        mapped, dropped = _remap_proposals(
+            root, session_id, ownership, carry.get(session_id) or []
+        )
+        remaps.extend(mapped)
+        discarded.extend(dropped)
+    if remaps:
+        store.write_json(build_dir / "proposal_remaps.json", remaps)
     if discarded:
         store.write_json(build_dir / "proposals_discarded.json", discarded)
-    return cascade
+    return ExclusiveBuildResult(cascade=cascade, remaps=remaps, discarded=discarded)
 
 
 def ingest_fills_exclusive(
@@ -300,46 +308,56 @@ def ingest_fills_exclusive(
     clips = clips_for_day(root, day)
     if not is_day_path(root, clips):
         return None
-    payload = load_current_day_json(root, day)
-    if payload is None:
-        raise FillsError("Tag veraltet, tva day build ausführen")
-    csv_path = Path(executions)
-    chosen_venue = venue_from_hint(csv_path, venue)
+    lock = day_lock_path(root, day)
+    if not try_acquire_lock(lock):
+        raise FillsError(LOCK_ERROR)
     try:
-        loader, fills = load_fills(csv_path, prefer_import=prefer_import)
-    except Exception as exc:
-        raise FillsError(str(exc)) from exc
-    if not _options_and_identities_match(
-        payload,
-        fills,
-        day,
-        venue=chosen_venue,
-        include_manual=include_manual,
-        reconcile_dir=str(reconcile_dir) if reconcile_dir is not None else "",
-        provider="",
-    ):
-        raise FillsError(FILLS_MISMATCH_ERROR)
-    ownership = assign_day_ownership(
-        root, day, fills, include_manual=include_manual, loader=loader
-    )
-    stored = _previous_signatures(payload)
-    if stored and stored != ownership.signatures:
-        raise FillsError(FILLS_MISMATCH_ERROR)
-    _write_session_parquets(root, ownership, venue=chosen_venue)
-    store.compute_status(root, record.id)
-    assigned = ownership.assigned.get(record.id, [])
-    session_trades = ownership.session_trades.get(record.id, [])
-    return FillsResult(
-        session_id=record.id,
-        loader=loader,
-        venue=chosen_venue,
-        fills=len(assigned),
-        trades=len(session_trades),
-        path="fills.parquet" if assigned else "",
-        trades_path="trades.parquet" if session_trades else "",
-        include_manual=include_manual,
-        status="ok",
-    )
+        payload = load_current_day_json(root, day)
+        if payload is None:
+            raise FillsError("Tag veraltet, tva day build ausführen")
+        csv_path = Path(executions)
+        chosen_venue = venue_from_hint(csv_path, venue)
+        try:
+            loader, fills = load_fills(csv_path, prefer_import=prefer_import)
+        except Exception as exc:
+            raise FillsError(str(exc)) from exc
+        if not _options_and_identities_match(
+            payload,
+            fills,
+            day,
+            venue=chosen_venue,
+            include_manual=include_manual,
+            reconcile_dir=str(reconcile_dir) if reconcile_dir is not None else "",
+            provider="",
+        ):
+            raise FillsError(FILLS_MISMATCH_ERROR)
+        try:
+            ownership = assign_day_ownership(
+                root, day, fills, include_manual=include_manual, loader=loader
+            )
+        except DayManifestError as exc:
+            raise FillsError(str(exc)) from exc
+        stored = _previous_signatures(payload)
+        if stored and stored != ownership.signatures:
+            raise FillsError(FILLS_MISMATCH_ERROR)
+        _write_session_parquets(root, ownership, venue=chosen_venue)
+        for clip in clips:
+            store.compute_status(root, clip.id)
+        assigned = ownership.assigned.get(record.id, [])
+        session_trades = ownership.session_trades.get(record.id, [])
+        return FillsResult(
+            session_id=record.id,
+            loader=loader,
+            venue=chosen_venue,
+            fills=len(assigned),
+            trades=len(session_trades),
+            path="fills.parquet" if assigned else "",
+            trades_path="trades.parquet" if session_trades else "",
+            include_manual=include_manual,
+            status="ok",
+        )
+    finally:
+        release_lock(lock)
 
 
 def _options_and_identities_match(
@@ -383,6 +401,19 @@ def _candidate_fills(
         if vienna_fill_date(ts) == day or in_core:
             out.append(fill)
     return out
+
+
+def _geometric_overlap(cores: list[Core], *, clip_ids: set[str]) -> dict[str, list[str]]:
+    """Other session ids whose cores overlap a clip of D (plan §2.3 clip field)."""
+    overlap: dict[str, list[str]] = {session_id: [] for session_id in clip_ids}
+    for index, left in enumerate(cores):
+        for right in cores[index + 1 :]:
+            if left.start < right.end and right.start < left.end:
+                if left.session_id in overlap:
+                    overlap[left.session_id].append(right.session_id)
+                if right.session_id in overlap:
+                    overlap[right.session_id].append(left.session_id)
+    return {key: sorted(set(values)) for key, values in overlap.items()}
 
 
 def _cores_of(root: Path, records: list[SessionRecord]) -> list[Core]:
@@ -439,13 +470,13 @@ def _legacy_neighbor_identities(root: Path, neighbors: list[SessionRecord]) -> s
 
 
 def _identities_from_parquet(path: Path) -> list[FillIdentity]:
-    from tradevidanalyser.day_audit import _identities_from_fills_table
+    from tradevidanalyser.day_audit import DayAuditError, _identities_from_fills_table
 
-    table = pq.read_table(path)
     try:
+        table = pq.read_table(path)
         return _identities_from_fills_table(table)
-    except Exception:
-        return []
+    except (DayAuditError, OSError, ValueError) as exc:
+        raise DayManifestError(f"Legacy-Nachbar fills.parquet unlesbar: {path}") from exc
 
 
 def _write_session_parquets(root: Path, ownership: DayOwnership, *, venue: str) -> None:
@@ -459,9 +490,12 @@ def _write_session_parquets(root: Path, ownership: DayOwnership, *, venue: str) 
             continue
         write_table(fills_file, fills_table(fills, venue=venue))
         paired = ownership.session_trades.get(session_id, [])
-        trades = [item[0] for item in paired]
-        ids = [item[1] for item in paired]
-        write_table(trades_file, trades_table(trades, venue=venue, tva_trade_ids=ids))
+        if not paired:
+            trades_file.unlink(missing_ok=True)
+        else:
+            trades = [item[0] for item in paired]
+            ids = [item[1] for item in paired]
+            write_table(trades_file, trades_table(trades, venue=venue, tva_trade_ids=ids))
         store.compute_status(root, session_id)
 
 
@@ -533,24 +567,26 @@ def _remap_proposals(
     session_id: str,
     ownership: DayOwnership,
     carried: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     if not carried:
-        return []
+        return [], []
     by_entry = {
         _canon(_entry_identity(trade).as_dict()): tva_id
         for trade, tva_id in ownership.session_trades.get(session_id, [])
     }
     kept: list[dict[str, Any]] = []
+    remaps: list[dict[str, Any]] = []
     discarded: list[dict[str, Any]] = []
     for item in carried:
         identity = item.get("fill_identity")
         new_id = by_entry.get(_canon(identity if isinstance(identity, dict) else {}))
+        old_id = item.get("tva_trade_id")
         if new_id is None:
             discarded.append(
                 {
                     "session_id": session_id,
                     "reason": PROPOSAL_DISCARD,
-                    "old_tva_trade_id": item.get("tva_trade_id"),
+                    "old_tva_trade_id": old_id,
                     "fill_identity": identity,
                 }
             )
@@ -561,28 +597,37 @@ def _remap_proposals(
                 "status": item.get("status"),
                 "proposed_tags": item.get("proposed_tags") or [],
                 "source_segs": item.get("source_segs") or [],
-                "previous_tva_trade_id": item.get("tva_trade_id"),
+                "previous_tva_trade_id": old_id,
             }
         )
+        if old_id != new_id:
+            remaps.append(
+                {
+                    "session_id": session_id,
+                    "old_tva_trade_id": old_id,
+                    "new_tva_trade_id": new_id,
+                }
+            )
     if kept:
-        store.write_json(
-            store.proposals_path(root, session_id),
-            {
-                "schema_version": "1",
-                "session_id": session_id,
-                "proposals": [
-                    {
-                        "tva_trade_id": item["tva_trade_id"],
-                        "proposed_tags": item["proposed_tags"],
-                        "source_segs": item["source_segs"],
-                        "status": item["status"],
-                    }
-                    for item in kept
-                ],
-                "gaps": [],
-            },
+        from tradevidanalyser.proposals import write_tradesviz_csv
+
+        report = IntentProposals(
+            schema_version="1",
+            session_id=session_id,
+            proposals=[
+                IntentProposal(
+                    tva_trade_id=str(item["tva_trade_id"]),
+                    proposed_tags=list(item["proposed_tags"]),
+                    source_segs=list(item["source_segs"]),
+                    status="confirmed" if item["status"] == "confirmed" else "rejected",
+                )
+                for item in kept
+            ],
+            gaps=[],
         )
-    return discarded
+        store.write_json(store.proposals_path(root, session_id), report.model_dump(mode="json"))
+        write_tradesviz_csv(root, session_id, report)
+    return remaps, discarded
 
 
 def _trade_entry_identities(path: Path) -> dict[str, FillIdentity]:

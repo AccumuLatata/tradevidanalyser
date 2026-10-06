@@ -479,7 +479,7 @@ def build_day(
             build_id = new_ulid()
             dest = day_dir(root, day) / "builds" / build_id / "day.json"
             dest.parent.mkdir(parents=True, exist_ok=True)
-            cascade = apply_exclusive_build(
+            built = apply_exclusive_build(
                 root,
                 day,
                 ownership,
@@ -489,7 +489,7 @@ def build_day(
             )
             for row in clip_rows:
                 session_id = str(row["session_id"])
-                row["cascade"] = cascade.get(session_id, "unchanged")
+                row["cascade"] = built.cascade.get(session_id, "unchanged")
                 row["overlap"] = ownership.overlap.get(session_id, [])
                 row["near_boundary"] = ownership.near_boundary.get(session_id, [])
             outside = [item.as_dict() for item in ownership.outside]
@@ -500,11 +500,17 @@ def build_day(
             )
             ownership_store = ownership.as_store()
             tz_assumption = tz_assumption_for_build(root)
+            claimed_legacy = [item.as_dict() for item in ownership.claimed_legacy]
+            proposal_remaps = list(built.remaps)
+            proposals_discarded = list(built.discarded)
         else:
             build_id = new_ulid()
             dest = day_dir(root, day) / "builds" / build_id / "day.json"
             dest.parent.mkdir(parents=True, exist_ok=True)
             tz_assumption = TZ_ASSUMPTION_CSV
+            claimed_legacy = []
+            proposal_remaps = []
+            proposals_discarded = []
         payload = {
             "schema_version": SCHEMA_VERSION,
             "date": day.isoformat(),
@@ -517,8 +523,15 @@ def build_day(
             "trades_outside_clips": trades_outside,
             "ownership": ownership_store,
         }
+        if exclusive_fills_enabled():
+            payload["claimed_by_legacy_neighbor"] = claimed_legacy
+            payload["proposal_remaps"] = proposal_remaps
+            payload["proposals_discarded"] = proposals_discarded
         store.write_json(dest, payload)
         _replace_current(root, day, build_id)
+        if exclusive_fills_enabled():
+            for record in clips:
+                store.compute_status(root, record.id)
         return DayBuildResult(
             date=day,
             status="ok",

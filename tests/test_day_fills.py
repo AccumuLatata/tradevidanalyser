@@ -15,6 +15,7 @@ from tradevidanalyser.day_fills import (
     core_interval,
 )
 from tradevidanalyser.day_manifest import (
+    DayManifestError,
     build_day,
     day_state,
     load_current_day_json,
@@ -658,6 +659,9 @@ def test_claimed_by_legacy_neighbor(
     assert payload is not None
     mid = datetime.fromisoformat("2026-09-14T22:45:00+00:00")
     assert not any(datetime.fromisoformat(item["timestamp"]) == mid for item in payload["outside"])
+    claimed = payload["claimed_by_legacy_neighbor"]
+    assert claimed
+    assert any(datetime.fromisoformat(item["timestamp"]) == mid for item in claimed)
     assert store.fills_path(tva_root, legacy.id).is_file()
     assert not _identities(tva_root, nxt_a.id)
 
@@ -690,3 +694,188 @@ def test_waived_tz_assumption_copied(
     payload = load_current_day_json(tva_root, date(2026, 9, 14))
     assert payload is not None
     assert payload["tz_assumption"] == "waived"
+
+
+def test_geometric_overlap_without_fill_in_overlap(
+    tva_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _four_on(monkeypatch)
+    a = _session(
+        tva_root,
+        "2026-09-14_090000",
+        start=datetime(2026, 9, 14, 9, 0, tzinfo=VIENNA),
+        duration_s=1200.0,
+    )
+    b = _session(
+        tva_root,
+        "2026-09-14_091000",
+        start=datetime(2026, 9, 14, 9, 10, tzinfo=VIENNA),
+        duration_s=600.0,
+        sha256="b" * 64,
+        filename="other 2026-09-14 09-10-00.mp4",
+    )
+    csv = _write_csv(
+        tmp_path / "e.csv",
+        _round_turn("2026-09-14T07:01:00+0000", "2026-09-14T07:02:00+0000", spread="early"),
+    )
+    build_day(tva_root, date(2026, 9, 14), executions=csv, venue="amp")
+    payload = load_current_day_json(tva_root, date(2026, 9, 14))
+    assert payload is not None
+    by_id = {row["session_id"]: row for row in payload["clips"]}
+    assert b.id in by_id[a.id]["overlap"]
+    assert a.id in by_id[b.id]["overlap"]
+
+
+def test_exclusive_build_status_is_not_missing(
+    tva_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _four_on(monkeypatch)
+    a = _session(
+        tva_root,
+        "2026-09-14_090000",
+        start=datetime(2026, 9, 14, 9, 0, tzinfo=VIENNA),
+        duration_s=600.0,
+    )
+    _session(
+        tva_root,
+        "2026-09-14_110000",
+        start=datetime(2026, 9, 14, 11, 0, tzinfo=VIENNA),
+        duration_s=600.0,
+        sha256="b" * 64,
+    )
+    csv = _write_csv(
+        tmp_path / "e.csv",
+        _round_turn("2026-09-14T07:05:00+0000", "2026-09-14T07:06:00+0000", spread="g1"),
+    )
+    build_day(tva_root, date(2026, 9, 14), executions=csv, venue="amp")
+    persisted = store.read_json(store.status_path(tva_root, a.id))
+    assert persisted["day_state"] == "current_incomplete"
+    assert store.compute_status(tva_root, a.id).day_state == "current_incomplete"
+
+
+def test_cross_clip_round_turn_is_one_trade(
+    tva_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _four_on(monkeypatch)
+    a = _session(
+        tva_root,
+        "2026-09-14_090000",
+        start=datetime(2026, 9, 14, 9, 0, tzinfo=VIENNA),
+        duration_s=600.0,
+    )
+    b = _session(
+        tva_root,
+        "2026-09-14_110000",
+        start=datetime(2026, 9, 14, 11, 0, tzinfo=VIENNA),
+        duration_s=600.0,
+        sha256="b" * 64,
+    )
+    csv = _write_csv(
+        tmp_path / "e.csv",
+        [
+            _csv_row("2026-09-14T07:05:00+0000", side="buy", spread="ab"),
+            _csv_row("2026-09-14T09:05:00+0000", side="sell", price="21001.0", spread="ab"),
+        ],
+    )
+    build_day(tva_root, date(2026, 9, 14), executions=csv, venue="amp")
+    assert store.trades_path(tva_root, a.id).is_file()
+    assert not store.trades_path(tva_root, b.id).is_file()
+    rows = pq.read_table(store.trades_path(tva_root, a.id)).to_pylist()
+    assert len(rows) == 1
+    assert rows[0]["tva_trade_id"] == "T01"
+    payload = load_current_day_json(tva_root, date(2026, 9, 14))
+    assert payload is not None
+    assert payload["trades_outside_clips"] == 0
+
+
+def test_proposal_remap_names_old_and_new_ids(
+    tva_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _four_on(monkeypatch)
+    a = _session(
+        tva_root,
+        "2026-09-14_090000",
+        start=datetime(2026, 9, 14, 9, 0, tzinfo=VIENNA),
+        duration_s=600.0,
+    )
+    _session(
+        tva_root,
+        "2026-09-14_110000",
+        start=datetime(2026, 9, 14, 11, 0, tzinfo=VIENNA),
+        duration_s=600.0,
+        sha256="b" * 64,
+    )
+    first = _write_csv(
+        tmp_path / "a.csv",
+        _round_turn("2026-09-14T07:05:00+0000", "2026-09-14T07:06:00+0000", spread="g1"),
+    )
+    build_day(tva_root, date(2026, 9, 14), executions=first, venue="amp")
+    store.write_json(
+        store.proposals_path(tva_root, a.id),
+        {
+            "schema_version": "1",
+            "session_id": a.id,
+            "proposals": [
+                {
+                    "tva_trade_id": "T01",
+                    "proposed_tags": ["OR"],
+                    "source_segs": ["s1"],
+                    "status": "confirmed",
+                }
+            ],
+            "gaps": [],
+        },
+    )
+    second = _write_csv(
+        tmp_path / "b.csv",
+        [
+            *_round_turn("2026-09-14T06:30:00+0000", "2026-09-14T06:31:00+0000", spread="out"),
+            *_round_turn("2026-09-14T07:05:00+0000", "2026-09-14T07:06:00+0000", spread="g1"),
+        ],
+    )
+    build_day(tva_root, date(2026, 9, 14), executions=second, venue="amp")
+    payload = load_current_day_json(tva_root, date(2026, 9, 14))
+    assert payload is not None
+    assert payload["proposal_remaps"]
+    assert any(
+        item["old_tva_trade_id"] == "T01" and item["new_tva_trade_id"] != "T01"
+        for item in payload["proposal_remaps"]
+    )
+    remapped = store.read_json(store.proposals_path(tva_root, a.id))
+    assert remapped["proposals"][0]["tva_trade_id"] != "T01"
+    assert remapped["proposals"][0]["status"] == "confirmed"
+    assert store.tradesviz_tags_path(tva_root, a.id).is_file()
+
+
+def test_corrupt_legacy_neighbor_parquet_fails_closed(
+    tva_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ENV_DAY_MANIFEST, "1")
+    legacy = _session(
+        tva_root,
+        "2026-09-14_233000",
+        start=datetime(2026, 9, 14, 23, 30, tzinfo=VIENNA),
+        duration_s=3600.0,
+    )
+    store.fills_path(tva_root, legacy.id).write_text("not-parquet", encoding="utf-8")
+    _four_on(monkeypatch)
+    _session(
+        tva_root,
+        "2026-09-15_090000",
+        start=datetime(2026, 9, 15, 9, 0, tzinfo=VIENNA),
+        duration_s=600.0,
+        sha256="c" * 64,
+    )
+    _session(
+        tva_root,
+        "2026-09-15_110000",
+        start=datetime(2026, 9, 15, 11, 0, tzinfo=VIENNA),
+        duration_s=600.0,
+        sha256="d" * 64,
+    )
+    csv = _write_csv(
+        tmp_path / "e.csv",
+        _round_turn("2026-09-14T22:45:00+0000", "2026-09-14T22:46:00+0000", spread="leg"),
+    )
+    with pytest.raises(DayManifestError, match="unlesbar"):
+        build_day(tva_root, date(2026, 9, 15), executions=csv, venue="amp")
