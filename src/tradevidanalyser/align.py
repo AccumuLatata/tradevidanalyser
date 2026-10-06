@@ -10,7 +10,13 @@ from pathlib import Path
 from tradevidanalyser import store
 from tradevidanalyser.naming import VIENNA
 from tradevidanalyser.ocr import read_ocr_parquet
-from tradevidanalyser.schema import Alignment, AlignmentSample, SessionRecord
+from tradevidanalyser.schema import (
+    ALIGN_INVALID_ERROR,
+    Alignment,
+    AlignmentSample,
+    SessionRecord,
+    alignment_is_invalid,
+)
 
 FILENAME_CONFIDENCE = 0.6
 MANUAL_NO_SAMPLE_CONFIDENCE = 1.0
@@ -249,6 +255,8 @@ def align_session(
         raise ValueError(
             f"session.json id {record.id!r} does not match directory {session_id!r}"
         )
+    if alignment_is_invalid(record.alignment):
+        raise ValueError(ALIGN_INVALID_ERROR)
     alignment = compute_alignment(record, root=root, manual_offset=manual_offset)
     store.save_session(root, record.model_copy(update={"alignment": alignment}))
     # Windows are alignment-dependent; keep evidence from pointing at the old clock.

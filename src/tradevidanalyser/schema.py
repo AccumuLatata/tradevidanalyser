@@ -33,7 +33,9 @@ class RecordingInfo(BaseModel):
     parts: list[RecordingPart] = Field(default_factory=list)
 
 
-AlignmentMethod = Literal["ocr_clock", "filename", "chapter_fill", "manual"]
+AlignmentMethod = Literal["ocr_clock", "filename", "chapter_fill", "manual", "invalid"]
+ALIGN_INVALID_ERROR = "Session ist invalid; Guard an und tva align --force"
+ALIGNMENT_INVALID_REASON = "alignment_invalid"
 
 
 class AlignmentSample(BaseModel):
@@ -49,6 +51,11 @@ class Alignment(BaseModel):
     confidence: float = Field(ge=0, le=1, allow_inf_nan=False)
     method: AlignmentMethod
     samples: list[AlignmentSample] = Field(default_factory=list)
+
+
+def alignment_is_invalid(alignment: Alignment | None) -> bool:
+    """True when ``session.alignment.method`` is already ``invalid`` (PR-29 reader)."""
+    return alignment is not None and alignment.method == "invalid"
 
 
 class StatedCite(BaseModel):

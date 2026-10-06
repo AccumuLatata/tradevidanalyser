@@ -27,6 +27,7 @@ from tradevidanalyser.providers.extract import (
     stated_fields_of,
 )
 from tradevidanalyser.schema import (
+    ALIGNMENT_INVALID_REASON,
     Alignment,
     Chapter,
     Evidence,
@@ -36,6 +37,7 @@ from tradevidanalyser.schema import (
     SessionRecord,
     Transcript,
     TranscriptSegment,
+    alignment_is_invalid,
 )
 
 SCHEMA_VERSION = "1"
@@ -313,6 +315,8 @@ def build_evidence(
     rows = read_trade_rows(trades_file)
     if not rows:
         return None
+    if alignment_is_invalid(record.alignment):
+        return None
     provider = get_extract_provider(provider_name)
     clock = effective_alignment(record)
     start = _parse_dt(record.recording.start_wallclock_vienna)
@@ -390,6 +394,14 @@ def evidence_session(
     if record.id != session_id:
         raise ValueError(
             f"session.json id {record.id!r} does not match directory {session_id!r}"
+        )
+    if alignment_is_invalid(record.alignment):
+        store.evidence_path(root, session_id).unlink(missing_ok=True)
+        store.compute_status(root, session_id)
+        return EvidenceResult(
+            session_id=session_id,
+            status="skipped",
+            reason=ALIGNMENT_INVALID_REASON,
         )
     transcript: Transcript | None = None
     if store.transcript_path(root, session_id).is_file():
