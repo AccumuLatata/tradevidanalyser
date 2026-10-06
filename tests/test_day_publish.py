@@ -297,8 +297,8 @@ def test_missing_one_debrief_leaves_existing_page(
         _win("2026-09-14T07:05:00+0000", "2026-09-14T07:06:00+0000", spread="a"),
     )
     build_day(tva_root, DAY, executions=csv, venue="amp")
-    store.debrief_json_path(tva_root, a.id).unlink()
-    with pytest.raises(PublishError, match="Debrief fehlt für"):
+    _write_debrief(tva_root, a.id)
+    with pytest.raises(PublishError, match=debrief_missing_error([b.id])):
         publish_session(b.id, root=tva_root, notion=True)
     assert not day_publish_path(tva_root, DAY).is_file()
     page = FakePublishClient(tva_root).get_page(prior.page_id)
