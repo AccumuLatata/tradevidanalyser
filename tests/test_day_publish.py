@@ -10,12 +10,19 @@ import pytest
 from tradevidanalyser import config, store
 from tradevidanalyser.cli import main
 from tradevidanalyser.day_manifest import (
+    DAY_STALE_ERROR,
     LOCK_ERROR,
     DayManifestError,
+    DayStale,
     build_day,
     day_lock_path,
 )
-from tradevidanalyser.day_publish import day_publish_path, debrief_missing_error
+from tradevidanalyser.day_publish import (
+    day_publish_path,
+    debrief_missing_error,
+    payload_from_day,
+)
+from tradevidanalyser.rules import DAY_RULE_IDS
 from tradevidanalyser.flags import (
     ENV_DAY_MANIFEST,
     ENV_DAY_PUBLISH,
@@ -212,6 +219,12 @@ def test_two_sessions_one_page_id_second_payload_is_not_clip_debrief(
     assert "2 clips" in page.properties["Summaries"]
     assert "0 clock_resolution_s=60" in page.properties["Summaries"]
     assert "trades_outside_clips" in page.properties["Summaries"]
+    for rule in DAY_RULE_IDS:
+        assert f"{rule} " in page.properties["Summaries"]
+        assert any(
+            f"{rule} {status}" in page.properties["Summaries"]
+            for status in ("pass", "violated", "unverifiable")
+        )
     assert page.properties["Learning 1"] == "Alpha one."
     assert page.properties["Learning 2"] == "Alpha two."
     assert page.properties["Learning 3"] == "Bravo one."
@@ -445,6 +458,67 @@ def test_alignment_invalid_word_and_minute_clock_count(
     assert "1 suspected" in sentence
     assert "video time" not in sentence.lower()
     assert "wall_to_video" not in sentence
+
+
+def test_learnings_follow_nominal_start_not_ingest_order(
+    tva_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _four_on(monkeypatch)
+    later = _session(
+        tva_root,
+        "2026-09-14_110000",
+        start=datetime(2026, 9, 14, 11, 0, tzinfo=VIENNA),
+        duration_s=600.0,
+        sha256="b" * 64,
+    )
+    earlier = _session(
+        tva_root,
+        "2026-09-14_090000",
+        start=datetime(2026, 9, 14, 9, 0, tzinfo=VIENNA),
+        duration_s=600.0,
+    )
+    csv = _write_csv(
+        tmp_path / "e.csv",
+        _win("2026-09-14T07:05:00+0000", "2026-09-14T07:06:00+0000", spread="a"),
+    )
+    build_day(tva_root, DAY, executions=csv, venue="amp")
+    _write_debrief(tva_root, earlier.id, learnings="Alpha one.\nAlpha two.")
+    _write_debrief(tva_root, later.id, learnings="Bravo one.")
+    reversed_clips = [later, earlier]
+    payload = payload_from_day(tva_root, DAY, reversed_clips, later)
+    assert payload.learnings == ["Alpha one.", "Alpha two.", "Bravo one."]
+    result = publish_session(later.id, root=tva_root, notion=True)
+    page = FakePublishClient(tva_root).get_page(result.page_id or "")
+    assert page is not None
+    assert page.properties["Learning 1"] == "Alpha one."
+    assert page.properties["Learning 2"] == "Alpha two."
+    assert page.properties["Learning 3"] == "Bravo one."
+
+
+def test_stale_day_aborts_instead_of_legacy_clip_payload(
+    tva_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    a, b = _build_two(tva_root, tmp_path, monkeypatch)
+    _write_debrief(
+        tva_root,
+        a.id,
+        summaries="Clip A only sentence. Extra.",
+        learnings="Alpha one.",
+    )
+    _write_debrief(tva_root, b.id, learnings="Bravo one.")
+    _session(
+        tva_root,
+        "2026-09-14_150000",
+        start=datetime(2026, 9, 14, 15, 0, tzinfo=VIENNA),
+        duration_s=600.0,
+        sha256="c" * 64,
+    )
+    with pytest.raises(DayStale, match=DAY_STALE_ERROR):
+        publish_session(a.id, root=tva_root, notion=True)
+    assert not day_publish_path(tva_root, DAY).is_file()
+    fake = FakePublishClient(tva_root)
+    assert fake.find_page(debrief_title(a)) is None
+    assert not store.publish_path(tva_root, a.id).is_file()
 
 
 def test_session_publish_json_is_not_page_id_source(

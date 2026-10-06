@@ -725,16 +725,6 @@ def get_publish_client(
     raise PublishError(f"unknown Notion publish provider {chosen!r}")
 
 
-def _session_on_day_path(root: Path, record: SessionRecord) -> bool:
-    """True only for a built day path. legacy / legacy_unbuilt stay per-session (§2.1)."""
-    from tradevidanalyser.day_manifest import day_state, nominal_vienna_date
-
-    return day_state(root, nominal_vienna_date(record)).kind in {
-        "current",
-        "current_incomplete",
-    }
-
-
 def _load_debrief(root: Path, session_id: str) -> DebriefReport:
     path = store.debrief_json_path(root, session_id)
     if not path.is_file():
@@ -793,16 +783,21 @@ def publish_session(
         )
     from tradevidanalyser.flags import day_publish_enabled
 
-    if day_publish_enabled() and _session_on_day_path(root, record):
+    if day_publish_enabled():
+        from tradevidanalyser.day_manifest import DayStale, day_state, nominal_vienna_date
         from tradevidanalyser.day_publish import publish_session_day_path
 
-        return publish_session_day_path(
-            record,
-            root=root,
-            provider_name=provider_name,
-            client=client,
-            now=now,
-        )
+        state = day_state(root, nominal_vienna_date(record))
+        if state.kind in {"stale", "missing"}:
+            raise DayStale([state.date])
+        if state.kind in {"current", "current_incomplete"}:
+            return publish_session_day_path(
+                record,
+                root=root,
+                provider_name=provider_name,
+                client=client,
+                now=now,
+            )
     report = _load_debrief(root, session_id)
     payload = payload_from_debrief(record, report)
     publisher = get_publish_client(provider_name, root=root, client=client)

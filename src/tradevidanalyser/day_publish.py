@@ -10,10 +10,11 @@ import httpx
 
 from tradevidanalyser import store
 from tradevidanalyser.day_manifest import (
+    _read_current_build_id,
     clips_for_day,
-    current_pointer_path,
     day_dir,
     load_current_day_json,
+    nominal_start_utc,
     nominal_vienna_date,
 )
 from tradevidanalyser.flags import day_publish_enabled
@@ -138,9 +139,9 @@ def publish_session_day_path(
     payload = payload_from_day(root, day, clips, record)
     publisher = get_publish_client(provider_name, root=root, client=client)
     existing_id = _saved_day_page_id(root, day, title=payload.title)
+    # Same title lookup as the legacy clip path (journal DB only). A workspace
+    # page with the same title is not a clip-publish page (§2.5).
     title_page = publisher.find_page(payload.title, database_only=True)
-    if title_page is None:
-        title_page = publisher.find_page(payload.title, database_only=False)
     created = False
     replaced = False
     page = None
@@ -201,7 +202,8 @@ def publish_session_day_path(
 
 def _day_learning_lines(root: Path, clips: list[SessionRecord]) -> list[str]:
     collected: list[str] = []
-    for clip in clips:
+    ordered = sorted(clips, key=lambda rec: (nominal_start_utc(rec), rec.id))
+    for clip in ordered:
         report = _load_debrief(root, clip.id)
         collected.extend(_nonempty_learning_lines(_section_body(report, "learnings")))
         if len(collected) >= 3:
@@ -234,13 +236,7 @@ def _is_minute_clock(value: Any) -> bool:
 
 def _day_rule_statuses(root: Path, day: date) -> list[tuple[str, str]]:
     found: dict[str, str] = {}
-    pointer = current_pointer_path(root, day)
-    build_id = None
-    if pointer.is_file():
-        try:
-            build_id = pointer.read_text(encoding="utf-8").strip().splitlines()[0]
-        except (OSError, IndexError):
-            build_id = None
+    build_id = _read_current_build_id(root, day)
     if build_id:
         path = day_dir(root, day) / "builds" / build_id / "rules.json"
         if path.is_file():
