@@ -147,8 +147,34 @@ def write_enabled_from(root: Path, day: date) -> Path:
     """Writer-only. Readers must not call this (plan §2.1 / §3.4)."""
     path = enabled_from_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(day.isoformat() + "\n", encoding="utf-8")
+    tmp = path.with_name(f".{ENABLED_FROM_NAME}.{os.getpid()}.tmp")
+    tmp.write_text(day.isoformat() + "\n", encoding="utf-8")
+    try:
+        os.replace(tmp, path)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        raise
     return path
+
+
+def write_enabled_from_if_absent(root: Path, day: date) -> date | None:
+    """First writer wins. Does not overwrite an existing enabled_from."""
+    path = enabled_from_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(os.fspath(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return read_enabled_from(root)
+    try:
+        os.write(fd, (day.isoformat() + "\n").encode("utf-8"))
+        os.fsync(fd)
+    except OSError:
+        os.close(fd)
+        path.unlink(missing_ok=True)
+        raise
+    else:
+        os.close(fd)
+    return day
 
 
 def enable_day_manifest(root: Path, day: date | None = None) -> date:
@@ -193,11 +219,11 @@ def day_state(root: Path, day: date) -> DayState:
     """Return the day-path state. Does not write. Flag off is always legacy."""
     if not day_manifest_enabled():
         return DayState(kind="legacy", date=day)
-    clips = clips_for_day(root, day)
     enabled = read_enabled_from(root)
     pointer = _read_current_build_id(root, day)
     if enabled is None or (day < enabled and pointer is None):
         return DayState(kind="legacy_unbuilt", date=day)
+    clips = clips_for_day(root, day)
     if not is_day_path(root, clips):
         return DayState(kind="legacy", date=day)
     payload = load_current_day_json(root, day)
@@ -224,6 +250,8 @@ def require_fresh(root: Path, day: date) -> DayState:
 
 
 def require_fresh_for_session(root: Path, session_id: str) -> DayState | None:
+    if not day_manifest_enabled():
+        return None
     if not store.is_safe_path_name(session_id):
         raise ValueError(f"unsafe session id {session_id!r}")
     if not store.session_json_path(root, session_id).is_file():
@@ -241,10 +269,14 @@ def require_fresh_for_dates(root: Path, days: list[date]) -> list[DayState]:
 
 
 def scan_store_days(root: Path) -> list[DayState]:
+    if not day_manifest_enabled():
+        return []
     return [day_state(root, day) for day in sorted(_session_days(root))]
 
 
 def require_fresh_store(root: Path) -> list[DayState]:
+    if not day_manifest_enabled():
+        return []
     states = scan_store_days(root)
     stale = [item.date for item in states if item.kind in {"stale", "missing"}]
     if stale:
@@ -379,7 +411,7 @@ def build_day(
     if not csv_path.is_file():
         raise DayManifestError(f"executions file not found: {csv_path}")
     if read_enabled_from(root) is None:
-        write_enabled_from(root, day)
+        write_enabled_from_if_absent(root, day)
     clips = clips_for_day(root, day)
     if not is_day_path(root, clips):
         return DayBuildResult(
@@ -650,7 +682,11 @@ def _replace_current(root: Path, day: date, build_id: str) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(f".{CURRENT_NAME}.{os.getpid()}.tmp")
     tmp.write_text(build_id + "\n", encoding="utf-8")
-    os.replace(tmp, dest)
+    try:
+        os.replace(tmp, dest)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def _session_days(root: Path) -> list[date]:

@@ -172,13 +172,23 @@ def _win_pid_is_running(pid: int) -> bool:
     return kernel32.GetLastError() == ERROR_ACCESS_DENIED
 
 
-def _lock_is_stale(lock: Path) -> bool:
+def _lock_pid(lock: Path) -> int | None:
     try:
         raw = lock.read_text(encoding="utf-8").strip().splitlines()
-        pid = int(raw[0])
+        return int(raw[0])
     except (OSError, ValueError, IndexError):
+        return None
+
+
+def _unlink_if_pid(lock: Path, pid: int) -> bool:
+    """Unlink ``lock`` only if it still names ``pid`` (do not steal a new holder)."""
+    if _lock_pid(lock) != pid:
+        return False
+    try:
+        lock.unlink()
         return True
-    return not _pid_is_running(pid)
+    except OSError:
+        return False
 
 
 def try_acquire_lock(lock: Path) -> bool:
@@ -188,15 +198,17 @@ def try_acquire_lock(lock: Path) -> bool:
         try:
             fd = os.open(os.fspath(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except FileExistsError:
-            if _lock_is_stale(lock):
-                try:
-                    lock.unlink()
-                except OSError:
-                    return False
+            pid = _lock_pid(lock)
+            if pid is None:
+                if not lock.exists():
+                    continue
+                return False
+            if not _pid_is_running(pid) and _unlink_if_pid(lock, pid):
                 continue
             return False
         try:
             os.write(fd, f"{os.getpid()}\n".encode("utf-8"))
+            os.fsync(fd)
         finally:
             os.close(fd)
         return True

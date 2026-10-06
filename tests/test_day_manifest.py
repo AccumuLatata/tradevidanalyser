@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from tradevidanalyser import config, store
 from tradevidanalyser.cli import main
+from tradevidanalyser.coach import coach_session
 from tradevidanalyser.day_manifest import (
     DAY_STALE_ERROR,
     DayStale,
@@ -29,6 +30,7 @@ from tradevidanalyser.day_manifest import (
     require_fresh,
     require_fresh_store,
 )
+from tradevidanalyser.ledger import ledger_summary, window_session_ids, window_trade_facts
 from tradevidanalyser.flags import ENV_DAY_MANIFEST, ENV_PAUSE_GUARD
 from tradevidanalyser.ingest import SPLIT_GAP_S, ingest
 from tradevidanalyser.pipeline import fills_session
@@ -637,3 +639,107 @@ def test_nominal_end_uses_utc_plus_duration(tva_root: Path, tmp_path: Path, monk
     clip = next(row for row in payload["clips"] if row["session_id"] == "2026-10-25_013000")
     # UTC 2026-10-24 23:30 + 7200s = 2026-10-25 01:30 UTC = 02:30 CET, not 03:30 CEST.
     assert clip["nominal_end"].startswith("2026-10-25T02:30:00")
+
+
+def test_flag_off_readers_do_not_load_sessions_or_write(tva_root: Path) -> None:
+    dest = config.session_dir(tva_root, "2026-09-14_093000")
+    dest.mkdir(parents=True)
+    (dest / "session.json").write_text("{not-json", encoding="utf-8")
+    require_fresh_store(tva_root)
+    require_fresh(tva_root, date(2026, 9, 14))
+    ledger_summary(tva_root, weeks=4)
+    window_session_ids(tva_root, weeks=4)
+    window_trade_facts(tva_root, ["2026-09-14_093000"])
+    assert not (tva_root / "days").exists()
+
+
+def test_empty_lock_is_not_stolen(
+    tva_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _on(monkeypatch, ENV_DAY_MANIFEST)
+    _session(
+        tva_root,
+        "2026-09-14_093000",
+        start=datetime(2026, 9, 14, 9, 30, tzinfo=VIENNA),
+    )
+    _session(
+        tva_root,
+        "2026-09-14_140000",
+        start=datetime(2026, 9, 14, 14, 0, tzinfo=VIENNA),
+        sha256="b" * 64,
+    )
+    lock = day_lock_path(tva_root, date(2026, 9, 14))
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text("", encoding="utf-8")
+    csv = _write_csv(tmp_path / "exec.csv")
+    with pytest.raises(ValueError, match="gesperrt"):
+        build_day(tva_root, date(2026, 9, 14), executions=csv, venue="amp")
+
+
+def test_dead_lock_is_stolen(
+    tva_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _on(monkeypatch, ENV_DAY_MANIFEST)
+    _session(
+        tva_root,
+        "2026-09-14_093000",
+        start=datetime(2026, 9, 14, 9, 30, tzinfo=VIENNA),
+    )
+    _session(
+        tva_root,
+        "2026-09-14_140000",
+        start=datetime(2026, 9, 14, 14, 0, tzinfo=VIENNA),
+        sha256="b" * 64,
+    )
+    lock = day_lock_path(tva_root, date(2026, 9, 14))
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text("2147483647\n", encoding="utf-8")
+    csv = _write_csv(tmp_path / "exec.csv")
+    result = build_day(tva_root, date(2026, 9, 14), executions=csv, venue="amp")
+    assert result.written
+    assert not lock.exists()
+
+
+def test_coach_window_facts_and_summary_raise_day_stale(
+    tva_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _on(monkeypatch, ENV_DAY_MANIFEST)
+    _session(
+        tva_root,
+        "2026-09-14_093000",
+        start=datetime(2026, 9, 14, 9, 30, tzinfo=VIENNA),
+    )
+    _session(
+        tva_root,
+        "2026-09-14_140000",
+        start=datetime(2026, 9, 14, 14, 0, tzinfo=VIENNA),
+        sha256="b" * 64,
+    )
+    enable_day_manifest(tva_root, date(2026, 9, 14))
+    with pytest.raises(DayStale, match=DAY_STALE_ERROR):
+        coach_session(root=tva_root, provider_name="fake")
+    with pytest.raises(DayStale, match=DAY_STALE_ERROR):
+        window_trade_facts(tva_root, ["2026-09-14_093000"])
+    with pytest.raises(DayStale, match=DAY_STALE_ERROR):
+        ledger_summary(tva_root, weeks=4)
+
+
+def test_later_build_does_not_overwrite_enabled_from(
+    tva_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _on(monkeypatch, ENV_DAY_MANIFEST)
+    enable_day_manifest(tva_root, date(2026, 9, 14))
+    _session(
+        tva_root,
+        "2026-09-15_093000",
+        start=datetime(2026, 9, 15, 9, 30, tzinfo=VIENNA),
+    )
+    _session(
+        tva_root,
+        "2026-09-15_140000",
+        start=datetime(2026, 9, 15, 14, 0, tzinfo=VIENNA),
+        sha256="b" * 64,
+    )
+    csv = _write_csv(tmp_path / "exec.csv")
+    assert build_day(tva_root, date(2026, 9, 15), executions=csv, venue="amp").written
+    assert read_enabled_from(tva_root) == date(2026, 9, 14)

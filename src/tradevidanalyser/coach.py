@@ -567,10 +567,10 @@ def coach_session(
     if weeks < 1:
         raise CoachError("weeks must be >= 1")
     floor = min_n if min_n is not None else min_citations()
-    from tradevidanalyser.day_manifest import incomplete_days, legacy_unbuilt_days, scan_store_days
+    from tradevidanalyser.day_manifest import incomplete_days, legacy_unbuilt_days, require_fresh_store
 
+    states = require_fresh_store(root)
     pack = gather_pack(root, weeks=weeks, min_n=floor)
-    states = scan_store_days(root)
     chosen = provider or get_coach_provider(provider_name, client=client)
     draft = chosen.review(pack)
     claims, gaps = accept_claims(draft, pack)

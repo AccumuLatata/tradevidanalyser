@@ -1042,6 +1042,9 @@ def window_row_ids(root: Path, session_ids: list[str]) -> list[str]:
 
 
 def window_trade_facts(root: Path, session_ids: list[str]) -> list[dict[str, Any]]:
+    from tradevidanalyser.day_manifest import require_fresh_store
+
+    require_fresh_store(root)
     if not session_ids:
         return []
     path = ledger_db_path(root)
