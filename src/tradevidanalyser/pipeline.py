@@ -326,6 +326,9 @@ def fills_session(
 ) -> FillsResult:
     if not store.is_safe_path_name(session_id):
         raise ValueError(f"unsafe session id {session_id!r}")
+    from tradevidanalyser.day_manifest import require_fresh_for_session
+
+    require_fresh_for_session(root, session_id)
     record = store.load_session(root, session_id)
     return ingest_fills(
         record,
@@ -348,6 +351,9 @@ def evidence_session(
 ) -> EvidenceResult:
     if not store.is_safe_path_name(session_id):
         raise ValueError(f"unsafe session id {session_id!r}")
+    from tradevidanalyser.day_manifest import require_fresh_for_session
+
+    require_fresh_for_session(root, session_id)
     result = run_evidence(
         session_id,
         root=root,
@@ -379,6 +385,9 @@ def rules_session(
 ) -> RulesResult:
     if not store.is_safe_path_name(session_id):
         raise ValueError(f"unsafe session id {session_id!r}")
+    from tradevidanalyser.day_manifest import require_fresh_for_session
+
+    require_fresh_for_session(root, session_id)
     return run_rules(session_id, root=root, config_path=config_path)
 
 
@@ -391,6 +400,9 @@ def context_session(
 ) -> ContextResult:
     if not store.is_safe_path_name(session_id):
         raise ValueError(f"unsafe session id {session_id!r}")
+    from tradevidanalyser.day_manifest import require_fresh_for_session
+
+    require_fresh_for_session(root, session_id)
     return run_context(
         session_id,
         root=root,
@@ -407,12 +419,18 @@ def report_session(
 ) -> ReportResult:
     if not store.is_safe_path_name(session_id):
         raise ValueError(f"unsafe session id {session_id!r}")
+    from tradevidanalyser.day_manifest import require_fresh_for_session
+
+    require_fresh_for_session(root, session_id)
     return run_report(session_id, root=root, provider_name=provider_name)
 
 
 def ledger_add(session_id: str, *, root: Path) -> LedgerAddResult:
     if not store.is_safe_path_name(session_id):
         raise ValueError(f"unsafe session id {session_id!r}")
+    from tradevidanalyser.day_manifest import require_fresh_for_session
+
+    require_fresh_for_session(root, session_id)
     return run_ledger_add(session_id, root=root)
 
 
@@ -422,6 +440,9 @@ def rollup_ledger(
     week: str | None = None,
     month: str | None = None,
 ) -> RollupResult:
+    from tradevidanalyser.day_manifest import require_fresh_store
+
+    require_fresh_store(root)
     return run_rollup(root, week=week, month=month)
 
 
@@ -434,18 +455,33 @@ def publish_session(
 ) -> PublishResult:
     if not store.is_safe_path_name(session_id):
         raise ValueError(f"unsafe session id {session_id!r}")
-    return run_publish(
-        session_id, root=root, notion=notion, provider_name=provider_name
-    )
+    from tradevidanalyser.day_manifest import acquire_day_publish_lock, require_fresh_for_session
+    from tradevidanalyser.watch import release_lock
+
+    require_fresh_for_session(root, session_id)
+    lock = acquire_day_publish_lock(root, session_id)
+    try:
+        return run_publish(
+            session_id, root=root, notion=notion, provider_name=provider_name
+        )
+    finally:
+        if lock is not None:
+            release_lock(lock)
 
 
 def proposals_session(session_id: str, *, root: Path) -> ProposalsResult:
     if not store.is_safe_path_name(session_id):
         raise ValueError(f"unsafe session id {session_id!r}")
+    from tradevidanalyser.day_manifest import require_fresh_for_session
+
+    require_fresh_for_session(root, session_id)
     return run_proposals(session_id, root=root)
 
 
 def confirm_proposal(ident: str, *, root: Path) -> ProposalsResult:
+    from tradevidanalyser.day_manifest import require_fresh_store
+
+    require_fresh_store(root)
     return run_confirm_proposal(ident, root=root)
 
 
@@ -455,6 +491,9 @@ def coach_session(
     weeks: int = 4,
     provider_name: str | None = None,
 ) -> CoachResult:
+    from tradevidanalyser.day_manifest import require_fresh_store
+
+    require_fresh_store(root)
     return run_coach(root=root, weeks=weeks, provider_name=provider_name)
 
 

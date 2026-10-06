@@ -197,6 +197,27 @@ def test_live_lock_skips_copy(tva_root: Path, tmp_path: Path, write_video) -> No
     assert lock.is_file()
 
 
+def test_empty_lock_is_not_stolen(tva_root: Path, tmp_path: Path, write_video) -> None:
+    source = tmp_path / "obs"
+    source.mkdir()
+    src = write_video(_obs_name(source))
+    lock = lock_path(tva_root, src)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text("", encoding="utf-8")
+    copies: list[Path] = []
+    report = watch(
+        source,
+        root=tva_root,
+        once=True,
+        stable_s=0,
+        copy_fn=lambda a, b: copies.append(a),
+    )
+    assert copies == []
+    assert report["events"][0]["reason"] == "locked"
+    assert src.exists()
+    assert lock.is_file()
+
+
 def test_stale_lock_is_recovered(tva_root: Path, tmp_path: Path, write_video) -> None:
     source = tmp_path / "obs"
     source.mkdir()

@@ -13,7 +13,7 @@ import csv
 import math
 import re
 from collections import defaultdict, deque
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 from datetime import date, datetime, time, timedelta, timezone
 from html import unescape
 from pathlib import Path
@@ -103,9 +103,13 @@ class FillRecord:
     declared_stop: float | None
     declared_target: float | None
     flags: tuple[str, ...]
+    # Written CSV calendar day (before UTC convert). Not an identity/parquet field.
+    csv_calendar_date: date | None = None
 
 
-FILL_RECORD_COLUMNS: tuple[str, ...] = tuple(f.name for f in fields(FillRecord))
+FILL_RECORD_COLUMNS: tuple[str, ...] = tuple(
+    f.name for f in fields(FillRecord) if f.name != "csv_calendar_date"
+)
 
 
 @dataclass(frozen=True)
@@ -194,6 +198,7 @@ def load_tradesviz_executions(path: str | Path, *, profile: str) -> list[FillRec
                 declared_stop=record.declared_stop,
                 declared_target=record.declared_target,
                 flags=record.flags,
+                csv_calendar_date=record.csv_calendar_date,
             )
         )
     return filled
@@ -256,7 +261,7 @@ def _require_columns(header: tuple[str, ...]) -> None:
 
 
 def _row_to_record(index: int, row: Mapping[str, str | None]) -> FillRecord:
-    timestamp = _parse_timestamp(_cell(row, "date"), index=index)
+    timestamp, csv_calendar_date = _parse_csv_timestamp(_cell(row, "date"), index=index)
     symbol = _cell(row, "symbol")
     instrument, contract_month, contract_year = _parse_symbol(symbol, index=index)
     side = _parse_side(_cell(row, "side"), index=index)
@@ -306,6 +311,7 @@ def _row_to_record(index: int, row: Mapping[str, str | None]) -> FillRecord:
         declared_stop=declared_stop,
         declared_target=declared_target,
         flags=flags,
+        csv_calendar_date=csv_calendar_date,
     )
 
 
@@ -331,7 +337,8 @@ def _cell(row: Mapping[str, str | None], name: str) -> str:
     return "" if value is None else str(value)
 
 
-def _parse_timestamp(raw: str, *, index: int) -> datetime:
+def _parse_csv_timestamp(raw: str, *, index: int) -> tuple[datetime, date]:
+    """UTC instant plus the calendar date as the CSV wrote it (not Vienna, not UTC)."""
     text = raw.strip()
     if not text:
         raise JournalIngestError(f"row {index}: empty date")
@@ -360,7 +367,44 @@ def _parse_timestamp(raw: str, *, index: int) -> datetime:
         raise JournalIngestError(
             f"row {index}: date must carry an explicit UTC offset (got naive {raw!r})"
         )
-    return parsed.astimezone(timezone.utc)
+    return parsed.astimezone(timezone.utc), date(parsed.year, parsed.month, parsed.day)
+
+
+def _parse_timestamp(raw: str, *, index: int) -> datetime:
+    instant, _civil = _parse_csv_timestamp(raw, index=index)
+    return instant
+
+
+_FILL_ID_ROW = re.compile(r"^tv:(\d+):")
+
+
+def csv_calendar_dates_by_row_index(path: Path) -> dict[int, date]:
+    """Map CSV row index → written calendar date. Used when a loader dropped the field."""
+    out: dict[int, date] = {}
+    for index, row in enumerate(_read_csv_rows(path)):
+        _instant, civil = _parse_csv_timestamp(_cell(row, "date"), index=index)
+        del _instant
+        out[index] = civil
+    return out
+
+
+def attach_csv_calendar_dates(fills: list[FillRecord], path: Path) -> list[FillRecord]:
+    """Fill in ``csv_calendar_date`` from the executions CSV without changing identity keys."""
+    if all(fill.csv_calendar_date is not None for fill in fills):
+        return fills
+    by_index = csv_calendar_dates_by_row_index(path)
+    attached: list[FillRecord] = []
+    for fill in fills:
+        if fill.csv_calendar_date is not None:
+            attached.append(fill)
+            continue
+        match = _FILL_ID_ROW.match(fill.fill_id)
+        if match is None:
+            attached.append(fill)
+            continue
+        civil = by_index.get(int(match.group(1)))
+        attached.append(replace(fill, csv_calendar_date=civil) if civil is not None else fill)
+    return attached
 
 
 def _parse_symbol(raw: str, *, index: int) -> tuple[str, str | None, int | None]:

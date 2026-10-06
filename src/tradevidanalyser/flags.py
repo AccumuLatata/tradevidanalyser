@@ -32,6 +32,22 @@ def pause_guard_enabled() -> bool:
     return env_flag(ENV_PAUSE_GUARD)
 
 
+def day_manifest_enabled() -> bool:
+    return env_flag(ENV_DAY_MANIFEST)
+
+
+def active_flag_names() -> list[str]:
+    names = [
+        ENV_PAUSE_GUARD,
+        ENV_DAY_MANIFEST,
+        ENV_EXCLUSIVE_FILLS,
+        ENV_DAY_RULES,
+        ENV_DAY_PUBLISH,
+        ENV_TRADING_HOURS,
+    ]
+    return [name for name in names if env_flag(name)]
+
+
 def require_allowed_flag_set() -> None:
     """Abort on a combination that §3.6 does not list. Orthogonal overwrite is ignored."""
     pause = env_flag(ENV_PAUSE_GUARD)

@@ -18,6 +18,7 @@ import pyarrow.parquet as pq
 from tradevidanalyser import store
 from tradevidanalyser.fills_mirror import (
     FILL_RECORD_COLUMNS,
+    attach_csv_calendar_dates,
     JOURNAL_TRADE_COLUMNS,
     TRADESVIZ_EXECUTIONS_PROFILE,
     FillRecord,
@@ -304,7 +305,8 @@ def load_fills(
     if use_import:
         if not thesistester_available():
             raise FillsError("ThesisTester is not installed (pip install 'tradevidanalyser[journal]')")
-        return "import", _import_load(executions)
+        fills = _import_load(executions)
+        return "import", attach_csv_calendar_dates(fills, executions)
     return "mirror", mirror_load(executions, profile=TRADESVIZ_EXECUTIONS_PROFILE)
 
 

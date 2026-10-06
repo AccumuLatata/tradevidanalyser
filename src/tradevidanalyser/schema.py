@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal, get_args
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_serializer
 
 SCHEMA_VERSION = "1"
 
@@ -209,6 +209,14 @@ class SessionStatus(BaseModel):
     stages: dict[str, StageState] = Field(default_factory=dict)
     error: str | None = None
     cost_usd: float | None = None
+    day_state: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_null_day_state(self, handler):  # type: ignore[no-untyped-def]
+        payload = handler(self)
+        if payload.get("day_state") is None:
+            payload.pop("day_state", None)
+        return payload
 
 
 RuleStatus = Literal["pass", "violated", "unverifiable"]
@@ -332,6 +340,8 @@ class LedgerSummary(BaseModel):
     stated_vs_lab: StatedLabTally = Field(default_factory=StatedLabTally)
     periods: list[LedgerPeriod] = Field(default_factory=list)
     markdown: str = ""
+    incomplete_days: list[dict] = Field(default_factory=list)
+    legacy_unbuilt_days: list[str] = Field(default_factory=list)
 
 
 class PublishRecord(BaseModel):
@@ -393,6 +403,8 @@ class CoachReport(BaseModel):
     experiment: CoachExperiment | None = None
     markdown: str = ""
     gaps: list[str] = Field(default_factory=list)
+    incomplete_days: list[dict] = Field(default_factory=list)
+    legacy_unbuilt_days: list[str] = Field(default_factory=list)
 
 
 class DoctorCheck(BaseModel):

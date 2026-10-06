@@ -13,6 +13,12 @@ import duckdb
 from tradevidanalyser import __version__, config, store
 from tradevidanalyser.doctor import run_doctor
 from tradevidanalyser.flags import pause_guard_enabled, require_allowed_flag_set
+from tradevidanalyser.day_manifest import (
+    build_day,
+    day_state,
+    delete_day_manifest,
+    enable_day_manifest,
+)
 from tradevidanalyser.ingest import ingest
 from tradevidanalyser.align import alignment_result_dict
 from tradevidanalyser.pipeline import (
@@ -200,7 +206,7 @@ def main(argv: list[str] | None = None) -> int:
     p_rep.add_argument("session")
     p_rep.add_argument("--provider", default=None, help="fake (default) or grok")
 
-    p_day = sub.add_parser("day", help="day-path read tools")
+    p_day = sub.add_parser("day", help="day-path tools (audit, manifest)")
     day_sub = p_day.add_subparsers(dest="day_cmd", required=True)
     p_audit = day_sub.add_parser(
         "audit",
@@ -242,6 +248,44 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="read-only guard samples into audit JSON only (no session write)",
     )
+    p_build = day_sub.add_parser("build", help="write days/<date>/ manifest (TVA_DAY_MANIFEST)")
+    p_build.add_argument("date", metavar="YYYY-MM-DD")
+    p_build.add_argument("--executions", type=Path, required=True, help="TradesViz executions CSV")
+    p_build.add_argument(
+        "--venue",
+        choices=("topstepx", "amp", "unknown"),
+        default=None,
+        help="venue column; default = filename hint or unknown",
+    )
+    p_build.add_argument(
+        "--include-manual",
+        action="store_true",
+        help="pair manual (non-future) rows; default is imported futures only",
+    )
+    p_build.add_argument(
+        "--reconcile-dir",
+        type=Path,
+        default=None,
+        help="ThesisTester journal output (reads reconcile.json; no PDF parse)",
+    )
+    p_build.add_argument(
+        "--provider",
+        default=None,
+        help="optional; recorded in the fingerprint only. No model is called",
+    )
+    p_enable = day_sub.add_parser("enable", help="write days/enabled_from (never from a reader)")
+    p_enable.add_argument(
+        "date",
+        nargs="?",
+        default=None,
+        metavar="YYYY-MM-DD",
+        help="first enabled Vienna day (default: vienna_today())",
+    )
+    p_state = day_sub.add_parser("state", help="read day_state (does not write enabled_from)")
+    p_state.add_argument("date", metavar="YYYY-MM-DD")
+    p_delete = day_sub.add_parser("delete", help="delete days/<date>/ (keeps days/audit.json)")
+    p_delete.add_argument("date", nargs="?", default=None, metavar="YYYY-MM-DD")
+    p_delete.add_argument("--all", dest="all_days", action="store_true", help="all day folders + enabled_from")
 
     p_pc = sub.add_parser(
         "pause-checks",
@@ -472,6 +516,42 @@ def main(argv: list[str] | None = None) -> int:
                     sample_clocks=args.sample_clocks,
                 )
                 _emit(result.as_dict(), as_json=True)
+                return 0
+            if args.day_cmd == "build":
+                from datetime import date as _date
+
+                result = build_day(
+                    root,
+                    _date.fromisoformat(args.date),
+                    executions=args.executions,
+                    venue=args.venue,
+                    include_manual=args.include_manual,
+                    reconcile_dir=args.reconcile_dir,
+                    provider=args.provider,
+                )
+                _emit(result.as_dict(), as_json=True)
+                return 0
+            if args.day_cmd == "enable":
+                from datetime import date as _date
+
+                from tradevidanalyser.naming import vienna_today
+
+                chosen = _date.fromisoformat(args.date) if args.date else vienna_today()
+                enabled = enable_day_manifest(root, chosen)
+                _emit({"status": "ok", "enabled_from": enabled.isoformat()}, as_json=True)
+                return 0
+            if args.day_cmd == "state":
+                from datetime import date as _date
+
+                state = day_state(root, _date.fromisoformat(args.date))
+                _emit(state.as_dict(), as_json=True)
+                return 0
+            if args.day_cmd == "delete":
+                from datetime import date as _date
+
+                day = _date.fromisoformat(args.date) if args.date else None
+                deleted = delete_day_manifest(root, day, all_days=args.all_days)
+                _emit({"deleted": deleted}, as_json=True)
                 return 0
             parser.error(f"unknown day command {args.day_cmd}")
             return 2
