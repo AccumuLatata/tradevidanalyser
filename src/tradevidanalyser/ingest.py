@@ -46,7 +46,9 @@ def ingest(video: Path, *, root: Path, desktop_track: bool = False) -> SessionRe
     existing: SessionRecord | None = None
     if existing_path.is_file():
         existing = store.load_session(root, session_id)
-        _guard_session_id_collision(existing, first)
+        guard_session_id_collision(
+            existing, first_digest=first.digest, first_name=first.path.name
+        )
 
     dests = _copy_parts(chain, root=root)
     parts = _recording_parts(dests, root=root)
@@ -175,20 +177,35 @@ def _same_prefix(anchor: Path, other: Path) -> bool:
     return left is not None and left == right
 
 
-def _guard_session_id_collision(existing: SessionRecord, first: _Part) -> None:
-    """Abort a real id collision before ``_copy_parts`` (plan §2.9)."""
-    if existing.recording.sha256 == first.digest:
+def guard_session_id_collision(
+    existing: SessionRecord,
+    *,
+    first_digest: str,
+    first_name: str,
+    warn: bool = True,
+) -> None:
+    """Abort a real id collision before copy (plan §2.9).
+
+    Same first-part SHA is never a collision. Same stored filename and another
+    SHA is today's overwrite (loud). Empty stored filename counts as another
+    name. Other name or prefix plus another SHA is an error unless the
+    escape hatch is on.
+    """
+    if existing.recording.sha256 == first_digest:
         return
     old_name = existing.recording.filename or ""
-    new_name = first.path.name
-    if old_name and old_name == new_name:
-        sys.stderr.write(f"Session {existing.id}: Datei {old_name} hat andere SHA, überschreibe\n")
+    old_base = Path(old_name).name if old_name else ""
+    if old_base and old_base == first_name:
+        if warn:
+            sys.stderr.write(
+                f"Session {existing.id}: Datei {old_name} hat andere SHA, überschreibe\n"
+            )
         return
     if allow_session_id_overwrite():
         return
     raise IngestError(
         f"{SESSION_ID_COLLISION_ERROR} {existing.id}: "
-        f"bestehende Datei {old_name!r}, neue Datei {new_name!r}"
+        f"bestehende Datei {old_name!r}, neue Datei {first_name!r}"
     )
 
 

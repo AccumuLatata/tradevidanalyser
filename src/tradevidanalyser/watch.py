@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from tradevidanalyser import config, media, store
-from tradevidanalyser.ingest import ingest
+from tradevidanalyser.ingest import guard_session_id_collision, ingest
 from tradevidanalyser.naming import FilenameError, parse_obs_filename
 from tradevidanalyser.pipeline import extract_session, transcribe_session
 
@@ -240,13 +240,21 @@ def already_ingested(
         return False
     dest = dest_path(root, src)
     if dest.is_file() and same_copy(src, dest):
-        return True
+        if any(_name_in_recording(session, src.name) for session in sessions):
+            return True
     hasher = digest_fn or media.sha256_file
     try:
         digest = hasher(src)
     except OSError:
         return False
     return any(_digest_in_recording(session, digest) for session in sessions)
+
+
+def _name_in_recording(session: Any, name: str) -> bool:
+    rec = session.recording
+    if rec.filename == name:
+        return True
+    return any(part.filename == name for part in rec.parts)
 
 
 def _digest_in_recording(session: Any, digest: str) -> bool:
@@ -357,6 +365,15 @@ def process_source(
                 continue
 
             dest = dest_path(root, src)
+            existing_path = store.session_json_path(root, session_id)
+            if existing_path.is_file():
+                existing = store.load_session(root, session_id)
+                guard_session_id_collision(
+                    existing,
+                    first_digest=hasher(src),
+                    first_name=src.name,
+                    warn=False,
+                )
             if dest.is_file() and (same_copy(src, dest) or hasher(dest) == hasher(src)):
                 record = ingest(dest, root=root)
                 event["reason"] = "dest-exists"

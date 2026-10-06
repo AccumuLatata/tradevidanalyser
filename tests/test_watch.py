@@ -10,7 +10,7 @@ import pytest
 
 from tradevidanalyser import config, media, store
 from tradevidanalyser.cli import main
-from tradevidanalyser.ingest import ingest
+from tradevidanalyser.ingest import SESSION_ID_COLLISION_ERROR, ingest
 from tradevidanalyser.watch import (
     WatchError,
     dest_path,
@@ -418,3 +418,52 @@ def test_readonly_source_is_still_copied(tva_root: Path, tmp_path: Path, write_v
     finally:
         src.chmod(0o644)
         assert src.exists()
+
+
+def test_watch_m8_collision_does_not_copy(
+    tva_root: Path, tmp_path: Path, write_video
+) -> None:
+    source = tmp_path / "obs"
+    source.mkdir()
+    first_src = write_video(source / "NY 2026-09-11 14-30-00.mp4", seconds=1.0)
+    first = watch(source, root=tva_root, once=True, stable_s=0)
+    assert first["events"][0]["action"] == "copied"
+    session_id = "2026-09-11_143000"
+    first_json = store.session_json_path(tva_root, session_id).read_text(encoding="utf-8")
+    write_video(source / "ES 2026-09-11 14-30-00.mp4", seconds=2.0)
+    second = watch(source, root=tva_root, once=True, stable_s=0)
+    by_file = {event["file"]: event for event in second["events"]}
+    assert by_file[first_src.name]["reason"] == "ingested"
+    assert by_file["ES 2026-09-11 14-30-00.mp4"]["action"] == "error"
+    assert SESSION_ID_COLLISION_ERROR in by_file["ES 2026-09-11 14-30-00.mp4"]["reason"]
+    assert not dest_path(tva_root, source / "ES 2026-09-11 14-30-00.mp4").exists()
+    assert store.session_json_path(tva_root, session_id).read_text(encoding="utf-8") == first_json
+    third = watch(source, root=tva_root, once=True, stable_s=0)
+    again = {event["file"]: event for event in third["events"]}
+    assert again["ES 2026-09-11 14-30-00.mp4"]["action"] == "error"
+    assert again["ES 2026-09-11 14-30-00.mp4"]["reason"] != "ingested"
+    assert not dest_path(tva_root, source / "ES 2026-09-11 14-30-00.mp4").exists()
+
+
+def test_watch_collision_orphan_dest_is_not_already_ingested(
+    tva_root: Path, tmp_path: Path, write_video
+) -> None:
+    source = tmp_path / "obs"
+    source.mkdir()
+    write_video(source / "NY 2026-09-11 14-30-00.mp4", seconds=1.0)
+    watch(source, root=tva_root, once=True, stable_s=0)
+    first_json = store.session_json_path(tva_root, "2026-09-11_143000").read_text(
+        encoding="utf-8"
+    )
+    es = write_video(source / "ES 2026-09-11 14-30-00.mp4", seconds=2.0)
+    dest = dest_path(tva_root, es)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(es, dest)
+    report = watch(source, root=tva_root, once=True, stable_s=0)
+    by_file = {event["file"]: event for event in report["events"]}
+    assert by_file[es.name]["action"] == "error"
+    assert SESSION_ID_COLLISION_ERROR in by_file[es.name]["reason"]
+    assert by_file[es.name]["reason"] != "ingested"
+    assert store.session_json_path(tva_root, "2026-09-11_143000").read_text(
+        encoding="utf-8"
+    ) == first_json

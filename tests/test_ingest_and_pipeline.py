@@ -241,10 +241,13 @@ def test_overwrite_flag_default_off(monkeypatch: pytest.MonkeyPatch) -> None:
     for raw in ("", "0", "false", "off", "no"):
         monkeypatch.setenv(ENV_ALLOW_SESSION_ID_OVERWRITE, raw)
         assert allow_session_id_overwrite() is False
+    for raw in ("1", "true", "YES", "On"):
+        monkeypatch.setenv(ENV_ALLOW_SESSION_ID_OVERWRITE, raw)
+        assert allow_session_id_overwrite() is True
 
 
 def test_m8_same_start_different_prefix_is_collision(
-    tva_root: Path, tmp_path: Path, write_video
+    tva_root: Path, tmp_path: Path, write_video, capsys
 ) -> None:
     first_src = write_video(tmp_path / "NY 2026-09-11 14-30-00.mp4", seconds=1.0)
     second_src = write_video(tmp_path / "ES 2026-09-11 14-30-00.mp4", seconds=2.0)
@@ -264,6 +267,8 @@ def test_m8_same_start_different_prefix_is_collision(
     assert not (recordings / second_src.name).is_file()
     assert store.list_session_ids(tva_root) == [first.id]
     assert main(["--root", str(tva_root), "ingest", str(second_src)]) == 1
+    assert SESSION_ID_COLLISION_ERROR in capsys.readouterr().out
+    assert not (recordings / second_src.name).is_file()
 
 
 def test_m8_overwrite_flag_keeps_today_overwrite(
@@ -310,6 +315,62 @@ def test_empty_stored_filename_other_sha_is_collision(
     assert not (config.recordings_dir(tva_root) / other.name).is_file()
 
 
+def test_empty_stored_filename_same_name_other_sha_is_collision(
+    tva_root: Path, tmp_path: Path, write_video
+) -> None:
+    path = write_video(tmp_path / "2026-09-11 14-30-00.mp4", seconds=1.0)
+    first = ingest(path, root=tva_root)
+    payload = store.read_json(store.session_json_path(tva_root, first.id))
+    payload["recording"]["filename"] = ""
+    store.write_json(store.session_json_path(tva_root, first.id), payload)
+    write_video(path, seconds=2.0)
+    with pytest.raises(IngestError, match=SESSION_ID_COLLISION_ERROR):
+        ingest(path, root=tva_root)
+    assert store.load_session(tva_root, first.id).recording.sha256 == first.recording.sha256
+
+
+def test_empty_stored_filename_same_sha_reingest_ok(
+    tva_root: Path, tmp_path: Path, write_video
+) -> None:
+    path = write_video(tmp_path / "2026-09-11 14-30-00.mp4", seconds=1.0)
+    first = ingest(path, root=tva_root)
+    payload = store.read_json(store.session_json_path(tva_root, first.id))
+    payload["recording"]["filename"] = ""
+    store.write_json(store.session_json_path(tva_root, first.id), payload)
+    again = ingest(path, root=tva_root)
+    assert again.id == first.id
+    assert again.recording.sha256 == first.recording.sha256
+
+
+def test_same_first_sha_different_name_is_not_collision(
+    tva_root: Path, tmp_path: Path, write_video
+) -> None:
+    first_src = write_video(tmp_path / "NY 2026-09-11 14-30-00.mp4", seconds=1.0)
+    second_src = tmp_path / "ES 2026-09-11 14-30-00.mp4"
+    shutil.copy2(first_src, second_src)
+    first = ingest(first_src, root=tva_root)
+    second = ingest(second_src, root=tva_root)
+    assert second.id == first.id
+    assert second.recording.sha256 == first.recording.sha256
+    assert second.recording.filename == first.recording.filename
+
+
+def test_overwrite_flag_does_not_change_single_file_ingest(
+    tva_root: Path, tmp_path: Path, write_video, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    src = write_video(tmp_path / "2026-09-11 14-30-00.mp4", seconds=1.0)
+    off = ingest(src, root=tva_root)
+    monkeypatch.setenv(ENV_ALLOW_SESSION_ID_OVERWRITE, "1")
+    other_root = tva_root.parent / "root_on"
+    config.ensure_layout(other_root)
+    on = ingest(src, root=other_root)
+    assert on.id == off.id
+    assert on.recording.sha256 == off.recording.sha256
+    assert on.recording.filename == off.recording.filename
+    assert on.recording.parts == off.recording.parts
+    assert not (other_root / "days").exists()
+
+
 def test_l0_session_identity_with_overwrite_flag(
     tva_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -320,5 +381,6 @@ def test_l0_session_identity_with_overwrite_flag(
     shutil.copy2(src, dest / "session.json")
     record = store.load_session(tva_root, "2026-05-14_160300")
     assert record.id == "2026-05-14_160300"
+    assert record.schema_version == "1"
     assert (dest / "session.json").read_bytes() == src.read_bytes()
     assert not (tva_root / "days").exists()
