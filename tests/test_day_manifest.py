@@ -35,7 +35,14 @@ from tradevidanalyser.flags import ENV_DAY_MANIFEST, ENV_PAUSE_GUARD
 from tradevidanalyser.fills_mirror import FILL_RECORD_COLUMNS
 from tradevidanalyser.ingest import SPLIT_GAP_S, ingest
 from tradevidanalyser.pipeline import fills_session, publish_session as pipeline_publish
-from tradevidanalyser.schema import Evidence, RecordingInfo, RecordingPart, SessionRecord
+from tradevidanalyser.schema import (
+    DebriefReport,
+    DebriefSection,
+    Evidence,
+    RecordingInfo,
+    RecordingPart,
+    SessionRecord,
+)
 from tradevidanalyser.serve import create_app
 
 L0_DIR = Path(__file__).parent / "fixtures" / "l0_main_f44d864"
@@ -113,6 +120,31 @@ def _write_debrief(root: Path, session_id: str) -> Path:
     store.write_json(path, {"schema_version": "1", "session_id": session_id, "learnings": []})
     store.debrief_md_path(root, session_id).write_text("# debrief\n", encoding="utf-8")
     return path
+
+
+def _write_publish_debrief(root: Path, session_id: str) -> None:
+    report = DebriefReport(
+        session_id=session_id,
+        provider="fake",
+        model="none",
+        prompt_version="debrief-fake-v1",
+        sections=[
+            DebriefSection(
+                id="day",
+                title="Day",
+                kind="prose",
+                body="Reviewed the tape against T01. Extra clause stays out.",
+            ),
+            DebriefSection(
+                id="learnings",
+                title="Learnings",
+                kind="prose",
+                body="Name the playbook before entry.\nState stop and target.\nCool down after tilt.",
+            ),
+        ],
+    )
+    store.write_json(store.debrief_json_path(root, session_id), report.model_dump(mode="json"))
+    store.debrief_md_path(root, session_id).write_text("# Debrief\n", encoding="utf-8")
 
 
 def _write_rules(root: Path, session_id: str) -> Path:
@@ -810,7 +842,7 @@ def test_publish_lock_on_built_day_not_on_legacy_or_unbuilt(
         start=datetime(2026, 9, 14, 14, 0, tzinfo=VIENNA),
         sha256="b" * 64,
     )
-    _write_debrief(tva_root, a.id)
+    _write_publish_debrief(tva_root, a.id)
     enable_day_manifest(tva_root, date(2026, 9, 14))
     assert not day_dir(tva_root, date(2026, 9, 14)).exists()
     with pytest.raises(DayStale, match=DAY_STALE_ERROR):
@@ -823,7 +855,7 @@ def test_publish_lock_on_built_day_not_on_legacy_or_unbuilt(
         start=datetime(2026, 9, 16, 9, 30, tzinfo=VIENNA),
         sha256="c" * 64,
     )
-    _write_debrief(tva_root, lone.id)
+    _write_publish_debrief(tva_root, lone.id)
     pipeline_publish(lone.id, root=tva_root, notion=True)
     assert not day_dir(tva_root, date(2026, 9, 16)).exists()
 
@@ -834,6 +866,7 @@ def test_publish_lock_on_built_day_not_on_legacy_or_unbuilt(
     with pytest.raises(ValueError, match="gesperrt"):
         pipeline_publish(a.id, root=tva_root, notion=True)
     lock.unlink()
+    _write_publish_debrief(tva_root, b.id)
     pipeline_publish(b.id, root=tva_root, notion=True)
     assert not lock.exists()
     assert day_dir(tva_root, date(2026, 9, 14)).is_dir()
