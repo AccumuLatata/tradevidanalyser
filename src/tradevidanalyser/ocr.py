@@ -174,6 +174,16 @@ def parse_clock(text: str, *, prior: datetime, at_s: float = 0.0) -> str | None:
     return parsed.isoformat()
 
 
+def clock_text_resolution(text: str) -> int | None:
+    """1 if the first clock match has seconds, 60 if it is HH:MM, else None."""
+    match = _first_clock_match(_DATE.sub(" ", _normalize_ocr(text)))
+    if not match:
+        return None
+    if "s" in match.re.groupindex:
+        return 1
+    return 60
+
+
 def parse_pnl(text: str) -> str | None:
     compact = _CURRENCY.sub("", _normalize_ocr(text).replace(" ", "").replace("'", ""))
     negative = False

@@ -8,6 +8,7 @@ from datetime import datetime, tzinfo
 from pathlib import Path
 
 from tradevidanalyser import store
+from tradevidanalyser.flags import pause_guard_enabled
 from tradevidanalyser.naming import VIENNA
 from tradevidanalyser.ocr import read_ocr_parquet
 from tradevidanalyser.schema import (
@@ -248,6 +249,7 @@ def align_session(
     *,
     root: Path,
     manual_offset: float | None = None,
+    force: bool = False,
 ) -> Alignment:
     session_id = _require_safe_session_id(session_id)
     record = store.load_session(root, session_id)
@@ -255,8 +257,53 @@ def align_session(
         raise ValueError(
             f"session.json id {record.id!r} does not match directory {session_id!r}"
         )
-    if alignment_is_invalid(record.alignment):
+    from tradevidanalyser.pause_guard import (
+        FORCE_FLAG_OFF_ERROR,
+        MANUAL_SUSPECTED_ERROR,
+        run_pause_guard,
+        write_pause_check,
+    )
+
+    if force and not pause_guard_enabled():
+        raise ValueError(FORCE_FLAG_OFF_ERROR)
+    if alignment_is_invalid(record.alignment) and not pause_guard_enabled():
         raise ValueError(ALIGN_INVALID_ERROR)
+    if pause_guard_enabled():
+        check = run_pause_guard(record, root=root, apply_alignment=False)
+        if check.pause_check == "suspected" and manual_offset is not None and not force:
+            raise ValueError(MANUAL_SUSPECTED_ERROR)
+        if check.pause_check == "suspected" and not force:
+            alignment = Alignment(
+                offset_s=0.0,
+                drift_s_per_h=0.0,
+                confidence=0.0,
+                method="invalid",
+                samples=[],
+            )
+            store.save_session(root, record.model_copy(update={"alignment": alignment}))
+            store.evidence_path(root, session_id).unlink(missing_ok=True)
+            store.drop_debrief(root, session_id)
+            store.drop_proposals(root, session_id)
+            store.drop_ledger_session(root, session_id)
+            store.compute_status(root, session_id)
+            return alignment
+        alignment = compute_alignment(record, root=root, manual_offset=manual_offset)
+        if force and check.pause_check == "suspected":
+            check.override = "force"
+            check.fit_before = {
+                "method": alignment.method,
+                "offset_s": alignment.offset_s,
+                "drift_s_per_h": alignment.drift_s_per_h,
+                "confidence": alignment.confidence,
+            }
+            write_pause_check(root, check)
+        store.save_session(root, record.model_copy(update={"alignment": alignment}))
+        store.evidence_path(root, session_id).unlink(missing_ok=True)
+        store.drop_debrief(root, session_id)
+        store.drop_proposals(root, session_id)
+        store.drop_ledger_session(root, session_id)
+        store.compute_status(root, session_id)
+        return alignment
     alignment = compute_alignment(record, root=root, manual_offset=manual_offset)
     store.save_session(root, record.model_copy(update={"alignment": alignment}))
     # Windows are alignment-dependent; keep evidence from pointing at the old clock.

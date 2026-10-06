@@ -12,6 +12,7 @@ import duckdb
 
 from tradevidanalyser import __version__, config, store
 from tradevidanalyser.doctor import run_doctor
+from tradevidanalyser.flags import require_allowed_flag_set
 from tradevidanalyser.ingest import ingest
 from tradevidanalyser.align import alignment_result_dict
 from tradevidanalyser.pipeline import (
@@ -39,6 +40,7 @@ from tradevidanalyser.serve import create_app, token_required_for_host
 from tradevidanalyser.watch import watch
 from tradevidanalyser.wer import score_session
 from tradevidanalyser.day_audit import run_day_audit
+from tradevidanalyser.pause_guard import delete_pause_checks, load_pause_check
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -160,6 +162,11 @@ def main(argv: list[str] | None = None) -> int:
         metavar="S",
         help="override offset_s (method=manual, drift=0)",
     )
+    p_al.add_argument(
+        "--force",
+        action="store_true",
+        help="write the fit despite suspected (only while TVA_PAUSE_GUARD is on)",
+    )
 
     p_ev = sub.add_parser(
         "evidence",
@@ -228,7 +235,26 @@ def main(argv: list[str] | None = None) -> int:
     p_audit.add_argument(
         "--clock-note",
         default=None,
-        help="manual look at the large clock and ROI clock (PR-28; no --sample-clocks)",
+        help="manual look at the large clock and ROI clock",
+    )
+    p_audit.add_argument(
+        "--sample-clocks",
+        action="store_true",
+        help="read-only guard samples into audit JSON only (no session write)",
+    )
+
+    p_pc = sub.add_parser(
+        "pause-checks",
+        help="named pause_checks commands (delete is not a side effect)",
+    )
+    pc_sub = p_pc.add_subparsers(dest="pause_checks_cmd", required=True)
+    p_pc_del = pc_sub.add_parser("delete", help="delete pause_checks files; does not rewrite alignment")
+    p_pc_del.add_argument("session", nargs="?", default=None)
+    p_pc_del.add_argument(
+        "--all",
+        dest="all_sessions",
+        action="store_true",
+        help="delete every pause_checks file under TVA_ROOT",
     )
 
     p_led = sub.add_parser("ledger", help="DuckDB coaching ledger")
@@ -302,6 +328,7 @@ def main(argv: list[str] | None = None) -> int:
     root = config.resolve_root(args.root)
 
     try:
+        require_allowed_flag_set()
         if args.cmd == "doctor":
             report = run_doctor(root)
             _emit(report.model_dump(mode="json"), as_json=args.json or True)
@@ -401,8 +428,14 @@ def main(argv: list[str] | None = None) -> int:
                 args.session,
                 root=root,
                 manual_offset=args.manual_offset,
+                force=args.force,
             )
-            _emit(alignment_result_dict(args.session, alignment), as_json=True)
+            payload = alignment_result_dict(args.session, alignment)
+            check = load_pause_check(root, args.session)
+            if check is not None:
+                payload["pause_check"] = check.pause_check
+                payload["override"] = check.override
+            _emit(payload, as_json=True)
             return 0
         if args.cmd == "evidence":
             result = evidence_session(
@@ -435,10 +468,20 @@ def main(argv: list[str] | None = None) -> int:
                     executions=args.executions,
                     loader=args.loader,
                     clock_note=args.clock_note,
+                    sample_clocks=args.sample_clocks,
                 )
                 _emit(result.as_dict(), as_json=True)
                 return 0
             parser.error(f"unknown day command {args.day_cmd}")
+            return 2
+        if args.cmd == "pause-checks":
+            if args.pause_checks_cmd == "delete":
+                deleted = delete_pause_checks(
+                    root, args.session, all_sessions=args.all_sessions
+                )
+                _emit({"status": "ok", "deleted": deleted}, as_json=True)
+                return 0
+            parser.error(f"unknown pause-checks command {args.pause_checks_cmd}")
             return 2
         if args.cmd == "ledger":
             if args.ledger_cmd == "add":
