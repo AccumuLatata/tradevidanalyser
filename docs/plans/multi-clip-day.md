@@ -1,10 +1,10 @@
 # Phase 1 — Mehrere Clips pro Tag und Pausen
 
 **Status:** Plan. Keine Code-, Konfigurations-, Test- oder Datenänderung in diesem PR.
-**Stand geprüft:** `main` @ `f44d864` (Coach, PR-27), nach dem Review des Trading Coach vom 06.10.2026.
+**Stand geprüft:** `main` @ `f44d864` (Coach, PR-27), nach dem zweiten Review des Trading Coach vom 06.10.2026 (Head `9e4b739`).
 **Danach:** Review durch Accumu und den Trading Coach. Umsetzung erst als die PR-Serie unten, jeder PR mit eigenem Review.
 **Nicht in diesem Plan:** Phase 2 (Analysen abschalten, umbauen oder einen Datenvertrag für den Trading Coach). Alle bestehenden Analysen, Ausgaben und Schemas bleiben inhaltlich, was sie sind. Geändert wird nur, was nötig ist, damit sie bei mehreren Clips pro Tag und bei Pausen nicht mehr still falsch sind.
-**Entscheidungen:** CD1–CD14 in Abschnitt 6. Das sind nicht die gesperrten D1–D9 aus `docs/05_ROADMAP.md`. Roadmap-D4 (Tagesverlust 100 gegen 200) bleibt geparkt; `rules.yaml:4-6` und der Grundtext `daily_loss_limit_usd is unset (D4)` in `rules.py` meinen dieses Roadmap-D4.
+**Entscheidungen:** CD1–CD14 in Abschnitt 6. Das sind nicht die gesperrten D1–D9 aus `docs/05_ROADMAP.md`. Roadmap-D4 (Tagesverlust 100 gegen 200) bleibt geparkt; `rules.yaml:4-5` und der Grundtext `daily_loss_limit_usd is unset (D4)` in `rules.py` meinen dieses Roadmap-D4. Zeile 6 von `rules.yaml` ist der Kommentar zu `flat_by`, nicht D4.
 **Seriennummern:** PR-28…PR-36 setzen `docs/IMPLEMENTATION_PLAN.md` fort (zuletzt gelandet PR-27). Das sind keine GitHub-Pull-Request-Nummern. Die Nummern folgen der Merge-Reihenfolge. Die frühere Nummer PR-34 (Audit) ist jetzt PR-28.
 
 ---
@@ -50,6 +50,8 @@ R-DLL, R-MAX10, R-3L30, R-5M, R-REENTRY und R-CLOSE lesen die Alignment-Konfiden
 
 `tva align` ist keine Bot-Run-Stufe (`docs/04_ARCHITECTURE.md:123`). `tva evidence` ohne vorheriges Align nimmt `effective_alignment()` und mappt mit dem Dateinamen (`evidence.py:144-154`, `evidence.py:317-337`).
 
+Die Uhr hat im Code keine feste Auflösung. `_first_clock_match` nimmt zuerst eine Uhr mit Sekunden (`_CLOCK_COLON`, `_CLOCK_ANY`) und sonst `_CLOCK_HM` (`ocr.py:37`, Aufruf `ocr.py:447`). Fehlt die Sekundengruppe, wird die Sekunde 0 (`ocr.py:451`). Die Clock-ROI liegt bei x 0,90, y 0,96 (`layout.yaml:29`), klein genug für eine Taskleisten-Uhr, die oft nur HH:MM zeigt. Accumu hat zusätzlich eine große Uhr im Bild. Ob die Sekunden zeigt, steht nicht im Repo. Der Detektor deckt beide Formate ab (2.2).
+
 ### 1.3 Fills-Fenster, doppelt und zu kurz
 
 `tva fills` behält Fills im geschlossenen Intervall `[Start − 30 min, Start + Dauer + 30 min]` (`fills.py:35`, `fills.py:122-128`, Vergleich `fills.py:131-142`). Start und Ende kommen aus Dateiname und `duration_s`, nicht aus dem Alignment. Das Ende wird in UTC addiert (`fills.py:126-127`), nicht auf einer Vienna-Zeit mit Sommerzeit. Jede Session schreibt ihr eigenes `fills.parquet` (`fills.py:649-738`, Schreiben bei `716-717`). Danach löscht `ingest_fills` Evidence, Regeln, Context, Debrief, Proposals und die Ledger-Zeile **nur dieser** Session (`fills.py:718-726`). Es gibt keine Zuordnung über Sessions. Der Ledger-Schlüssel ist `(session_id, tva_trade_id)` (`ledger.py:205`), dieselbe Execution in zwei Sessions ist zwei Trades. `drop_session` löscht nur Zeilen mit genau dieser `session_id` (`ledger.py:266-277`).
@@ -74,7 +76,7 @@ Was geschrieben wird, sind Properties: Titel, Summaries = ein Satz, Learnings = 
 
 ### 1.6 Trades/Stunde
 
-`hours = duration_s / 3600` pro Session (`ledger.py:507`, `ledger.py:530-533`), Rollup summiert `hours` (`ledger.py:668-701`), Rate ist `trades / hours` (`ledger.py:555-558`). Das ist die Summe der Dateilängen. Der Auftrag nennt das den Bug und will die Rate auf Handelszeit. Für einen pausierten Clip ist der Nenner zu klein. Für mehrere gültige Stop/Start-Clips ist der Nenner die aufgezeichnete Zeit ohne die Lücken dazwischen, also genau die heutige Summe, und der Zähler ist zu groß, sobald Fills doppelt im Ledger stehen. Eine geschätzte Wandspanne aus einem kaputten Alignment wäre eine weitere Verzerrung. Abschnitt 2.6 und CD3 legen fest, was stattdessen gilt. Die Summe der `duration_s` ist dort eine Option, nicht die Empfehlung.
+`hours = duration_s / 3600` pro Session (`ledger.py:507`, `ledger.py:530-533`), Rollup summiert `hours` (`ledger.py:667-701`), Rate ist `trades / hours` (`ledger.py:555-558`). Das ist die Summe der Dateilängen. Der Auftrag nennt das den Bug und will die Rate auf Handelszeit. Für einen pausierten Clip ist der Nenner zu klein. Für mehrere gültige Stop/Start-Clips ist der Nenner die aufgezeichnete Zeit ohne die Lücken dazwischen, also genau die heutige Summe, und der Zähler ist zu groß, sobald Fills doppelt im Ledger stehen. Eine geschätzte Wandspanne aus einem kaputten Alignment wäre eine weitere Verzerrung. Abschnitt 2.6 und CD3 legen fest, was stattdessen gilt. Die Summe der `duration_s` ist dort eine Option, nicht die Empfehlung.
 
 ### 1.7 Zusammenlegen der OBS-Teile
 
@@ -83,13 +85,13 @@ Was geschrieben wird, sind Properties: Titel, Summaries = ein Satz, Learnings = 
 Zwei Korrekturen am Befund, nicht an der Schwelle:
 
 - Ein normaler OBS-Name `YYYY-MM-DD HH-MM-SS` hat das Präfix `""`. Alle solchen Dateien in **einem** Ordner gelten als gleiches Präfix. Getrennt wird nur durch die 5 s. Ein Stop/Start innerhalb von 5 s nach dem Ende der vorigen Datei wird zusammengelegt (`tests/test_ingest_and_pipeline.py:59-86`). Zwei Sessions desselben Tages mit Stunden Abstand bleiben zwei Sessions (`tests/test_ingest_and_pipeline.py:47-56`). Unterschiedliche Präfixe stitchen auch bei Abstand 0 nicht (`tests/test_ingest_and_pipeline.py:145-155`). Zwei Dateien mit gleichem Präfix und Abstand 0 sind **eine** Session. Der Grenzfall „Ende von A = Start von B“ als zwei Sessions entsteht bei gleichem Präfix nicht. Fixture M2 testet ihn deshalb nur über verschiedene Präfixe oder über einen Abstand über 5 s.
-- Die Session-Id ist `YYYY-MM-DD_HHMMSS` ohne Präfix (`naming.py:45`). Zwei Dateien mit derselben Startsekunde und verschiedenem Text davor landen auf derselben Id. Der zweite Ingest mit anderer `sha256` ruft `invalidate_downstream` und überschreibt die Session (`ingest.py:42-56`). Das verwirft die erste Aufnahme ohne Fehler. Phase 1 ändert die Id nicht (CD8). Mit `TVA_STRICT_SESSION_ID` bricht der Ingest laut ab (2.9).
+- Die Session-Id ist `YYYY-MM-DD_HHMMSS` ohne Präfix (`naming.py:45`). Zwei Dateien mit derselben Startsekunde und verschiedenem Text davor landen auf derselben Id. Der zweite Ingest mit anderer `sha256` ruft `invalidate_downstream` und überschreibt die Session (`ingest.py:42-56`). Das verwirft die erste Aufnahme ohne Fehler. Die Rohdatei bleibt unter `recordings/`, weil nach Dateinamen kopiert wird (`ingest.py:172-175`). Phase 1 ändert die Id nicht (CD8). Der Fehler ist der Default (2.9). Eine Auto-Split-Fortsetzung ist keine Kollision: `tests/test_ingest_and_pipeline.py:183-199` ingested denselben ersten Dateinamen erneut, `digest` bleibt die SHA des ersten Teils (`ingest.py:40`), nur `parts` wächst.
 
 `watch` kopiert mit `shutil.copy2` (`watch.py:307`) und erhält damit `mtime`. Der Kommentar in `watch.py:23` sagt, dass FAT/`copy2` auf manche NAS-Mounts die mtime auf 2 s rundet. Ob `mtime` die OBS-Stopzeit ist, ist nicht geprüft. Der Audit darf `(mtime − Dateistart) − duration_s` als Hinweiszahl schreiben. Der Detektor benutzt sie nicht.
 
 ### 1.8 KW40: 20 von 88 Executions
 
-Nicht nachgerechnet. Export und `fills.parquet` sind nicht im Repo, und dieser Plan liest die NAS nicht. Die Frage ist, warum nur 20 von 88 Executions in den **vorhandenen** `fills.parquet` stehen, nicht wie ein neu gerechnetes Fenster aussehen würde. Aus dem Code sind das die möglichen Ursachen, in dieser Reihenfolge. Keine davon wird hier als die Ursache festgelegt. Dass die CSV-Zeitstempel echtes UTC sind, ist **nicht** verifiziert (CD11). Alles Folgende über Fenster und DST gilt nur unter dieser Annahme.
+Nicht nachgerechnet. Export und `fills.parquet` sind nicht im Repo, und dieser Plan liest die NAS nicht. Die Frage ist, warum nur 20 von 88 Executions in den **vorhandenen** `fills.parquet` stehen, nicht wie ein neu gerechnetes Fenster aussehen würde. Aus dem Code sind das die möglichen Ursachen, in dieser Reihenfolge. Keine davon wird hier als die Ursache festgelegt. Dass die CSV-Zeitstempel echtes UTC sind, ist **nicht** verifiziert (CD11). `docs/IMPLEMENTATION_PLAN.md:238` schreibt „TradesViz timestamps are UTC with explicit offset“. PR-28 setzt diese Zeile auf „unverifiziert, siehe CD11“, damit sie kein späterer Leser als Fakt nimmt. Alles Folgende über Fenster und DST gilt nur unter der UTC-Annahme.
 
 1. **Fenster.** Es wird nur `[Start − 30 min, Ende + 30 min]` geschrieben. Ein Tagesexport gegen ein Session-Parquet, oder gegen die Vereinigung kurzer Fenster, verliert alles außerhalb. Für die pausierte Mittwoch-Datei endet das Fenster um 10:24:09. Das allein kann einen großen Fehlbetrag erklären.
 2. **Vergleich gegen eine Datei statt gegen den Tag.** Jede Session hat ihr eigenes Parquet.
@@ -139,11 +141,11 @@ Zwei Pfade, hart getrennt. Welcher gilt, wird **beim Lauf** entschieden, nicht e
 
 **Flag aus und schon geschriebenes `invalid`.** Flag aus heißt: der Guard wird nicht ausgeführt und `pause_checks/` wird nicht gelesen. Steht in `session.alignment.method` schon `invalid`, unterdrücken Evidence und die uhrgemappten Regeln weiter. Der Dateinamen-Fallback gilt nur, wenn `alignment` fehlt oder eine andere Methode hat. Ein bekanntes `invalid` wieder linear zu mappen wäre das stille falsche Mapping, das Phase 1 abstellt.
 
-In der Serie bleiben die Flags in Produktion aus, bis Accumu ein erlaubtes Set einschaltet (3.6). Aus heißt: Guard, Manifest, Besitz, Tagesregeln, Tages-Publish und die neue Rate laufen nicht. Ein schon geschriebenes `invalid` bleibt wirksam, wie der Absatz davor sagt.
+In der Serie bleiben die Flags in Produktion aus, bis Accumu ein erlaubtes Set einschaltet (3.6) und der NAS-Paritätslauf bestanden ist (CD10). Aus heißt: Guard, Manifest, Besitz, Tagesregeln, Tages-Publish und die neue Rate laufen nicht. Ein schon geschriebenes `invalid` bleibt wirksam, wie der Absatz davor sagt. Die Id-Kollision ist davon ausgenommen: sie ist ab PR-36 ein Fehler, ohne dass ein Flag an sein muss (2.9).
 
 Sortierung der Clips: UTC-Instant von `nominal_start`, dann `session_id`. Nicht der ISO-String. Als String läge `02:30+02:00` vor `02:10+01:00`.
 
-`tva day build <YYYY-MM-DD> --executions <csv>` ist der einzige Schreibbefehl für `days/<date>/`. Pflicht sind `--executions` und die Optionen `--venue` und `--include-manual` (Default wie heute). `--reconcile-dir` ist optional. CSV-`sha256` und die Optionen stehen im Fingerprint. Ein späteres `tva fills` mit anderer CSV oder anderen Optionen bricht laut ab. Watch und Ingest rufen `day build` nicht auf.
+`tva day build <YYYY-MM-DD> --executions <csv>` ist der einzige Schreibbefehl für `days/<date>/`. Pflicht sind `--executions` und die Optionen `--venue` und `--include-manual` (Default wie heute). `--reconcile-dir` ist optional. `--provider` ist optional und steht nur dann im Fingerprint, wenn es gesetzt ist. Ohne `--provider` ruft der Bau kein Modell und keinen Fake-Provider auf. Watch und Ingest rufen `day build` nicht auf. Ein späteres `tva fills` bricht laut ab, wenn die Identitätsschlüssel der für D relevanten Executions oder die Optionen vom letzten Bau abweichen. Die SHA der ganzen CSV allein macht den Tag nicht veraltet: ein neuer Export enthält die Vortage und hätte sonst jede frühere Woche neu gebaut.
 
 Atomarität: nicht `rename` eines nicht leeren Verzeichnisses. Das ist auf Windows und SMB nicht atomar. Der Bau schreibt `days/<date>/builds/<ulid>/`, dann ersetzt `os.replace` die Zeigerdatei `days/<date>/current` (ein kleiner Text, der den Build-Namen nennt). Leser folgen dem Zeiger. Ein abgebrochener Bau lässt den vorigen Zeiger stehen.
 
@@ -161,7 +163,7 @@ TVA_ROOT/days/YYYY-MM-DD/lock
 
 `day.json` enthält:
 
-- `input_fingerprint`: kanonisches SHA-256 über die sortierte Liste `(session_id, recording.sha256, duration_s, part-sha256 in Reihenfolge)`, die `sha256` der Executions-CSV, `venue`, `include_manual`, der Pfad von `--reconcile-dir` oder leer, die aktiven Flag-Namen, `schema_version`, `app_version`.
+- `input_fingerprint`: kanonisches SHA-256 über die sortierte Clip-Liste `(session_id, recording.sha256, duration_s, part-sha256 in Reihenfolge)`, die sortierten Identitätsschlüssel aller Fills mit Vienna-Tag D und aller Fills in Kernen von `clips(D)`, `venue`, `include_manual`, der Pfad von `--reconcile-dir` oder leer, `--provider` oder leer, die aktiven Flag-Namen, `schema_version`, `app_version`. Die SHA der Executions-CSV steht daneben als `executions_sha256` und geht nicht in den Hash.
 - die Clip-Liste unten.
 - `outside`: Fill-Schlüssel mit Grund.
 - `trades_outside_clips`: Anzahl, nicht die Rate.
@@ -175,7 +177,7 @@ Pro Clip:
 | `duration_s` | Mediendauer, nicht Wandspanne |
 | `stitched_gap_s` | größte absolute Lücke innerhalb einer Auto-Split-Kette; leer, wenn keine Teile |
 | `alignment_method`, `alignment_confidence`, `alignment_offset_s`, `alignment_drift_s_per_h` | Fit, bevor dieser Lauf `invalid` setzt. Ohne Invalidieren der aktuelle Fit. Quelle ist `pause_checks`, nicht ein neuer Fit |
-| `pause_check` | Kopie aus `pause_checks`. Ist `TVA_PAUSE_GUARD` an und die Datei fehlt oder die `sha256` passt nicht, bricht der Bau ab. Ist der Guard aus, steht hier `guard_off`, und der Fit bleibt. Ein `suspected` ohne Guard-Datei gibt es dann nicht |
+| `pause_check` | Kopie aus `pause_checks`. Ist `TVA_PAUSE_GUARD` an und die Datei fehlt oder der Schlüssel `(recording_sha256, Teil-SHAs, duration_s)` passt nicht, bricht der Bau ab. Ist der Guard aus, steht hier `guard_off`, und der Fit bleibt. Ein `suspected` ohne Guard-Datei gibt es dann nicht |
 | `pause_total_s` | `y_last − y_first` der akzeptierten Proben |
 | `overlap` | andere Session-Ids, wenn Kerne sich überdecken; sonst leer |
 | `near_boundary` | Fill-Schlüssel innerhalb ε der Kernkante (CD13). Besitz ändern sie nicht |
@@ -184,9 +186,18 @@ Geschrieben wird die Datei auf dem Tages-Pfad, sobald eines der Flags aus 3.6 de
 
 Ein zusammengelegter Auto-Split ist **eine** Session und damit ein Clip. Die Teile stehen weiter in `recording.parts`.
 
-**Veraltet.** Jeder Befehl auf dem Tages-Pfad (`tva fills`, `tva evidence`, `tva rules`, `tva ledger add`, `tva publish`, `tva rollup` für eine Woche, die den Tag enthält, sobald `TVA_TRADING_HOURS` an ist) liest den Fingerprint. Weicht er ab, oder fehlt `days/<date>/current`, obwohl der Tag nach der Regel oben ein Tages-Pfad ist, bricht der Befehl laut ab: `Tag veraltet, tva day build ausführen`. Er fällt nicht auf den Legacy-Pfad der einzelnen Session zurück, rechnet nicht still mit dem alten Stand weiter und baut nicht nebenbei neu. Nur `tva day build` ersetzt den Zeiger. Ein einzelner Clip, der noch nicht `suspected` ist, bleibt Legacy und hat kein `current`. Kommt der zweite Clip, ist der Tag ab diesem Lauf ein Tages-Pfad, und der nächste dieser Befehle bricht ab, bis gebaut wurde.
+**Veraltet.** Die Prüfung sitzt in `day_state(root, date)`, nicht in jedem CLI-Befehl einzeln. Sie liefert `legacy`, `current`, `stale` oder `missing`. `stale` oder `missing` auf einem Tages-Pfad wirft `DayStale` mit dem Text `Tag veraltet, tva day build ausführen`. Der Leser fällt nicht auf den Legacy-Stand der einzelnen Session zurück und baut nicht nebenbei neu. Nur `tva day build` ersetzt den Zeiger.
 
-**Kaskade.** Ein Tagesbau löscht danach für **jede** Session der Clip-Menge: Evidence, Regeln, Context, Debrief, Proposals, und die Ledger-Zeilen dieser Session (`drop_session`, `ledger.py:266-277`). Zusätzlich die Zeilen dieses Tages in `day_rollups` und `day_rule_checks` (2.4). Dann schreibt er sie neu. `ingest_fills` allein tut das heute nicht (`fills.py:718-726`).
+Aufgerufen wird `day_state` von den Store- und Ledger-Lesern, die Fakten eines Tages ausgeben: `compute_status` (`store.py:297`, der Status nennt den Tag `stale`), `ledger_summary`, `window_session_ids`, `window_trade_facts`, `tva coach` (`coach.py:174-200`), `tva serve` unter `/ledger/summary` (`serve.py:227-231`) und `/coach/latest` (`serve.py:233-238`), `tva report`, `tva context`, `tva proposals`, `tva rollup` mit und ohne `TVA_TRADING_HOURS`, dazu `tva fills`, `tva evidence`, `tva rules`, `tva ledger add` und `tva publish`. Eine Zusammenfassung, die den veralteten Tag still in Stunden oder Trades addiert, gibt es nicht. Der Fehler nennt die Tage.
+
+Ein einzelner Clip, der noch nicht `suspected` ist, bleibt Legacy und hat kein `current`. Kommt der zweite Clip, ist der Tag ab diesem Lauf ein Tages-Pfad, und der nächste Leser bricht ab, bis gebaut wurde.
+
+**Kaskade.** Reihenfolge, fest:
+
+1. Bestätigte und abgelehnte Proposals jeder Session der Clip-Menge werden mit dem Fill-Identitätsschlüssel nach `days/<date>/builds/<ulid>/proposals_carry.json` kopiert. `_previous_status` liest genau die Session-Datei (`proposals.py:363-378`). `drop_proposals` löscht sie (`store.py:130-132`). Ohne die Kopie vor dem Löschen kann nichts umgehängt werden.
+2. Danach löscht der Bau für jede Session der Clip-Menge: Evidence, Context, Debrief, Proposals, und die Ledger-Zeilen dieser Session (`drop_session`, `ledger.py:266-277`). Zusätzlich die Zeilen dieses Tages in `day_rollups` und `day_rule_checks` (2.4). `ingest_fills` allein tut das heute nicht (`fills.py:718-726`).
+3. Neu geschrieben werden nur deterministische Artefakte: Fills, Trades, die fünf Tagesregeln, die Ledger-Zeilen, die Tageszeilen. Evidence, Context und Debrief bleiben gelöscht. `compute_status` zeigt sie `missing`. Die uhrgemappten und sprachgestützten Regeln der Session werden nicht aus dem alten Evidence neu erfunden. Sie bleiben `missing`, bis der Nutzer nach einem neuen Evidence-Lauf `tva rules` ausführt. Ein Bau mit dem Default `fake` (`cli.py:168`, `cli.py:193`) würde Grok-Ergebnisse still durch Fake ersetzen. Das passiert nicht. Ist `--provider` gesetzt, schreibt der Bau Evidence und Debrief mit diesem Provider, und der Name steht im Fingerprint.
+4. Danach werden die Einträge aus `proposals_carry.json` umgehängt oder laut verworfen (2.3).
 
 **Sperre.** `days/<date>/lock`, dasselbe Muster wie `try_acquire_lock` (`watch.py:184-204`): `O_EXCL`, Inhalt die PID, stehlen nur wenn die PID tot ist. Ein zweiter Lauf auf demselben Tag bricht laut ab. Die Sperre liegt um den ganzen Bau und um `tva publish` dieses Tages.
 
@@ -202,30 +213,35 @@ Das Ergebnis steht in einer eigenen Datei, nicht nur in `session.json`:
 TVA_ROOT/pause_checks/<session_id>.json
 ```
 
-Felder: `schema_version: "1"`, `session_id`, `recording_sha256`, `duration_s`, `pause_check`, `pause_total_s`, die akzeptierten und die verworfenen Proben, `fit_before` (Methode, Offset, Drift, Konfidenz), `override` (`null` oder `force`). Der Schlüssel ist `recording_sha256`. Eine Datei zu einer anderen `sha256` gilt als nicht vorhanden. Der Ordner liegt außerhalb von `sessions/`, damit die Byte-Gleichheit von L0 die Session-Artefakte trifft und das Guard-Ergebnis trotzdem bleibt.
+Felder: `schema_version: "1"`, `session_id`, `recording_sha256`, die Teil-SHAs, `duration_s`, `pause_check`, `pause_total_s`, `clock_resolution_s` (1 oder 60 oder null), `ocr_provider`, `ocr_model`, die akzeptierten und die verworfenen Proben, `fit_before` (Methode, Offset, Drift, Konfidenz), `override` (`null` oder `force`). Der Schlüssel ist `(recording_sha256, Teil-SHAs in Reihenfolge, duration_s)`. `recording_sha256` allein ist die SHA des ersten Teils (`digest = dests[0][1]`, `ingest.py:40`) und ändert sich nicht, wenn ein Auto-Split-Teil dazukommt. Eine Datei zu einem anderen Schlüssel gilt als nicht vorhanden. Der Ordner liegt außerhalb von `sessions/`, damit die Byte-Gleichheit von L0 die Session-Artefakte trifft und das Guard-Ergebnis trotzdem bleibt.
 
-`invalidate_downstream` löscht diese Datei mit (`store.py:230-264` wird in PR-30 erweitert). Ein Re-Ingest eines `suspected` Clips lässt Evidence verweigern, bis der Guard für die neue `sha256` gelaufen ist. Testfall dazu in PR-30.
+`invalidate_downstream` löscht diese Datei mit (`store.py:230-264` wird in PR-30 erweitert). Ein Re-Ingest eines `suspected` Clips lässt Evidence verweigern, bis der Guard für den neuen Schlüssel gelaufen ist. Testfall dazu in PR-30.
 
-`tva day build` liest diese Datei und öffnet das Video nicht. Neu proben tun `tva align` und, wenn die Datei für die aktuelle `sha256` fehlt, `tva evidence` und `tva rules`. Dieselbe Funktion. Proben werden nicht gerechnet und danach verworfen.
+`tva day build` liest diese Datei und öffnet das Video nicht. Neu proben tun `tva align` und, wenn die Datei für den aktuellen Schlüssel fehlt, `tva evidence` und `tva rules`. Dieselbe Funktion. Proben werden nicht gerechnet und danach verworfen.
 
-Mit `TVA_PAUSE_GUARD` an gilt: `tva evidence` und `tva rules` ohne gültige `pause_checks`-Datei für die aktuelle `sha256` führen den Guard selbst aus, wenn die Videodatei lesbar ist. Ist sie es nicht, brechen sie laut ab. Sie rufen `effective_alignment()` in diesem Zustand nicht auf. Mit Flag aus gilt 1.2 unverändert, außer dem schon geschriebenen `invalid` (oben).
+Mit `TVA_PAUSE_GUARD` an gilt: `tva evidence` und `tva rules` ohne gültige `pause_checks`-Datei für den aktuellen Schlüssel führen den Guard selbst aus, wenn die Videodatei lesbar ist. Ist sie es nicht, brechen sie laut ab. Sie rufen `effective_alignment()` in diesem Zustand nicht auf. Mit Flag aus gilt 1.2 unverändert, außer dem schon geschriebenen `invalid` (oben). Die Unterdrückung von `invalid` liegt in PR-29, ohne Flag, damit ein Revert von PR-30 sie nicht mitnimmt (3.5).
+
+Mit `TVA_PAUSE_GUARD` an und Provider `fake` bricht der Guard laut ab: `Guard braucht echten OCR-Provider`. `get_ocr_provider` fällt ohne `TVA_OCR_PROVIDER` auf `fake` (`ocr.py:132-136`). `FakeOcrProvider.read` liefert ohne Sidecar leeren Text und Konfidenz 0 (`ocr.py:86-95`). Null Proben wären `unverifiable`, der Fit bliebe, Evidence mappt linear. Das ist das stille Mapping, das Phase 1 abstellt. Tests dürfen Reads injizieren. Eine `pause_checks`-Datei mit `ocr_provider: fake` gilt außerhalb dieser Tests als nicht vorhanden.
 
 Detektor. Primärsignal ist Dauer gegen Uhrzeit, nicht ein 2-gegen-1-Muster. Eine und mehrere Pausen sind monoton steigende `y`. Drei Proben an Start, Mitte und Ende verfehlen eine Mehrfach-Pause, weil keine zwei auf derselben Stufe liegen. Acht Proben und ein Nachbarframe fangen das.
 
 - Zeiten: `inset = min(1 s, duration/4)`. Acht Punkte `t_i = inset + i · (duration − 2·inset) / 7`, `i = 0…7`. Nicht exakt 0 und nicht `duration − 0,5 s`: das sind oft Schwarz- oder Übergangsframes. Für Auto-Split-Sessions sucht der Seek über `media_for_time` (`frames.py:138-155`).
 - Zu jedem `t_i` drei Reads: `t_i`, und die Nachbarn `t_i ± 2 s`, geklemmt in die Datei. Nichts davon geht nach `ocr.parquet` oder `frames/`.
 - `y = (geparste Uhr − nominal_start) − video_t`, Sekunden, Uhr in Vienna wie `parse_clock`.
-- Ein Read ist bestätigt, wenn mindestens ein Nachbar innerhalb `AGREE_S = 5` s dasselbe `y` hat. Ein unbestätigter Read wird verworfen. Das ist der Schutz gegen eine einzelne falsch gelesene Uhr (etwa 360 s). Er invalidiert den Clip nicht.
-- Konstanten: `AGREE_S = 5`, `PAUSE_CONFIRM_S = 30`. `PAUSE_CONFIRM_S` ist nicht 120. Die frühere Blindzone 31–120 s lässt eine echte Pause auf dem linearen Fit. Der Evidence-Vorlauf ist 180 s (`rules.py:59`). Eine Pause in dieser Größe verschiebt das Fenster um weniger als den Vorlauf und hängt die falsche Sprache an den Fill. Deshalb wird eine bestätigte monotone Pause ab 30 s `suspected`, und 120 s ist keine Toleranz. Echte Uhr-Drift über eine Datei liegt darunter; eine monotone Spreizung von 40 s ist eine Pausenfolge (M10), kein Drift.
+- Ein Read ist bestätigt, wenn mindestens ein Nachbar innerhalb der `AGREE_S` seiner Auflösung dasselbe `y` hat. Ein unbestätigter Read wird verworfen. Das ist der Schutz gegen eine einzelne falsch gelesene Uhr (etwa 360 s auf einer Sekunden-Uhr). Er invalidiert den Clip nicht.
+- Auflösung des Reads: 1, wenn das Muster eine Sekundengruppe hat (`_CLOCK_COLON` oder `_CLOCK_ANY`). 60, wenn es `_CLOCK_HM` ist. `clock_resolution_s` der Datei ist 1, sobald mindestens zwei akzeptierte Proben Auflösung 1 haben. Sonst 60, sobald mindestens zwei akzeptierte Proben Auflösung 60 haben. Sonst gilt die Regel „weniger als zwei Proben“.
+- Konstanten bei Auflösung 1: `AGREE_S = 5`, `PAUSE_CONFIRM_S = 30`. Nachbarn bei ±2 s können eine Sekunden-Uhr bestätigen. `PAUSE_CONFIRM_S` ist hier nicht 120. Die frühere Blindzone 31–120 s lässt eine echte Pause auf dem linearen Fit. Der Evidence-Vorlauf ist 180 s (`rules.py:59`). Eine Pause in dieser Größe verschiebt das Fenster um weniger als den Vorlauf und hängt die falsche Sprache an den Fill. Deshalb wird eine bestätigte monotone Pause ab 30 s `suspected`. Echte Uhr-Drift über eine Datei liegt darunter. Eine monotone Spreizung von 40 s ist eine Pausenfolge (M10), kein Drift.
+- Konstanten bei Auflösung 60: `AGREE_S_HM = 60`, `PAUSE_CONFIRM_S_HM = 120`. Die Schwellen 5 s und 30 s gelten hier nicht. Eine HH:MM-Uhr setzt die Sekunde auf 0, also sägt `y` auf einem sauberen Clip zwischen 0 und 59 s. Mit 30 s wäre `pause_total` in etwa der Hälfte der Lagen über der Schwelle, und ein Abwärtsschritt über 5 s wäre `unverifiable`. Beides wäre falsch. Nachbarn bei ±2 s liegen meist in derselben Minute und bestätigen den quantisierten Wert. Sie machen aus HH:MM keine Sekunden. `pause_total` der Enden eines sauberen Clips bleibt unter 60 s, also unter 120 s: `clear`, nicht `suspected` (M16). Eine monotone Pause über 120 s wird `suspected` (M17, 300 s, und der KW40-Mittwoch mit mehreren Stunden). Die Blindzone auf einer Minuten-Uhr ist 31–120 s. Sie steht in Risiko 11.
+- Die Alternative, jeden HH:MM-Read als unbestätigt zu verwerfen und den Clip `unverifiable` mit Grund `clock_resolution_minute` zu lassen, ist nicht die Regel. Hätte die große Uhr keine Sekunden, würde der Guard dann nie `suspected` setzen, auch nicht bei der mehrstündigen Pause. Beide Formate sind damit abgedeckt, ohne auf die Auskunft des Coach zu warten. Vor PR-30 sieht jemand einen echten Frame auf der NAS an und schreibt ins Audit-Protokoll, welches Muster die große Uhr und die ROI-Uhr treffen. `--sample-clocks` gibt es erst ab PR-30. Der Blick davor ist manuell.
 
-Entscheidung, nachdem die Proben bereinigt sind. Eine Bruch-Probe wird höchstens einmal neu gelesen. Sie setzt den Clip nicht auf `suspected`.
+Entscheidung, nachdem die Proben bereinigt sind. `AGREE_S` und `PAUSE_CONFIRM_S` in den Schritten sind die Konstanten der festgestellten Auflösung. Eine Bruch-Probe wird höchstens einmal neu gelesen. Sie setzt den Clip nicht auf `suspected`.
 
 1. Unbestätigte Reads sind schon verworfen.
 2. Der Start liegt mehr als `AGREE_S` über allen späteren akzeptierten Proben, das Ende mehr als `AGREE_S` unter allen früheren, oder eine mittlere Probe liegt mehr als `AGREE_S` außerhalb `[y_first, y_last]`: diese Probe wird verworfen und einmal am anderen Nachbar neu gelesen. Bestätigt der andere Nachbar sie und die Lage bleibt falsch, bleibt sie verworfen.
 3. Weniger als zwei akzeptierte Proben → `unverifiable`. Der bisherige Fit bleibt. Ein Clip ohne lesbare Uhr wird nicht invalidiert.
 4. In der verbleibenden Folge fällt ein Schritt um mehr als `AGREE_S` → `unverifiable`, nicht `suspected`. Kein Raten. Die Folge ließ sich durch Verwerfen der Bruch-Proben nicht monoton machen.
 5. `pause_total = y_last − y_first` der akzeptierten Proben in Video-Reihenfolge. `pause_total ≤ PAUSE_CONFIRM_S` → `clear`.
-6. `pause_total > PAUSE_CONFIRM_S` → `suspected`. Das deckt eine Pause (M5, 300 s) und mehrere Pausen (M13, 0 / 1 800 / 17 000 s).
+6. `pause_total > PAUSE_CONFIRM_S` → `suspected`. Auf einer Sekunden-Uhr deckt das eine Pause (M5, 300 s) und mehrere Pausen (M13, 0 / 1 800 / 17 000 s). Auf einer Minuten-Uhr deckt es M17.
 
 `suspected` gilt für die **ganze** Datei. Drei oder acht Proben legen die Schnittstelle nicht auf die Sekunde. Ein teilgültiger Strahl wäre wieder ein stilles Mapping. `fit_before` steht in `pause_checks`. `ocr.parquet` bleibt.
 
@@ -233,7 +249,7 @@ Entscheidung, nachdem die Proben bereinigt sind. Eine Bruch-Probe wird höchsten
 
 - `suspected`: `session.alignment` wird `method=invalid`, Offset 0, Drift 0, Konfidenz 0. Der Theil–Sen-Fit wird nicht als Session-Alignment geschrieben.
 - `clear` oder `unverifiable`: der Fit bleibt, wie `tva align` ihn heute schreibt.
-- `--force` gibt es heute nicht (`cli.py:150-161`). PR-30 fügt es hinzu. Es schreibt den Fit trotz `suspected` und setzt `pause_checks.override = force`. Die Kommandoausgabe sagt das. Evidence mappt dann, die uhrgemappten Regeln werden nicht `alignment_invalid`. Das ist eine sichtbare Ausnahme, kein Default.
+- `--force` gibt es heute nicht (`cli.py:150-161`). PR-30 fügt es hinzu, und es gilt nur, solange `TVA_PAUSE_GUARD` an ist. Ist das Flag aus, ist `--force` ein Fehler. Es schreibt den Fit trotz `suspected` und setzt `pause_checks.override = force`. Die Kommandoausgabe sagt das. Evidence mappt dann, die uhrgemappten Regeln werden nicht `alignment_invalid`. Das ist eine sichtbare Ausnahme, kein Default.
 - `--manual-offset` auf einer Session mit `suspected` und ohne `--force` schreibt nichts und endet mit Fehler. Mit `--force` gilt der Offset, Drift 0, `override = force`.
 
 Unterdrückt, sobald `method == invalid` und `override` nicht `force` ist. Die Prüfung auf `invalid` steht vor `_alignment_too_low`, sonst wird aus Konfidenz 0 der Grund „alignment confidence below threshold“:
@@ -244,13 +260,13 @@ Unterdrückt, sobald `method == invalid` und `override` nicht `force` ist. Die P
 - R-BIAS bleibt auswertbar. `_session_has_speech` ist wahr, sobald Session-Events da sind, auch ohne Evidence (`rules.py:662-667`). Bias-Events sind Videozeit. Kein `alignment_invalid` für R-BIAS.
 - R-SLTP bleibt der bestehende Grund (`rules.py:945-946`), unabhängig von Evidence.
 - Transkript und Insights bleiben. Die Videozeit darin ist die Dateizeit und stimmt auch bei einer Pause.
-- Proposals für Trades dieser Session werden in der Kaskade gelöscht (1.11). Sie bleiben nicht stehen.
+- Proposals bleiben nicht an der alten `tva_trade_id` hängen (1.11). Die Kaskade sichert bestätigte und abgelehnte Einträge vorher und hängt sie danach um oder verwirft sie laut (2.1). Sie löscht nicht zuerst und hängt dann aus einer leeren Datei um.
 
 Nicht unterdrückt: die Fills selbst als Fakten mit ihrer eigenen Uhr. Ein invalidierter Clip beansprucht keine Fills (2.3). Die Tagesregeln zählen sie weiter (2.4).
 
 ### 2.3 Jeder Fill genau einmal
 
-Gesperrt durch CD11. PR-32 wird nicht gemerged, bis `+0000` in der CSV an mindestens drei Fills, die im Video sichtbar sind (OCR-Uhr oder DOM), und an einem Tag nach dem 25.10.2026 als echtes UTC bestätigt ist. Bis dahin beschreibt dieser Abschnitt die Regel, der Code bleibt beim heutigen Fenster.
+Gesperrt durch CD11. PR-32 wird nicht gemerged, bis `+0000` als echtes UTC bestätigt ist. Der Nachweis sind mindestens drei Fills, die im Video sichtbar sind, und ein Tag nach dem 25.10.2026. TVA liest keinen DOM. Was zählt, ist ein Frame oder Screenshot, auf dem die Uhr und der Fill (Zeit, Seite, Preis) zusammen sichtbar sind, manuell protokolliert in `days/audit.json` mit Session-Id, Videozeit und CSV-Zeitstempel. Accumu kann das Gate schriftlich aufheben. Dieselbe Aufhebung gilt in PR-28, hier, in CD11 und in Risiko 9. Sie steht im Audit-JSON und, falls danach gebaut wird, in `day.json` als `tz_assumption: waived`. Ohne diesen Vermerk bleibt PR-32 gesperrt. Bis dahin beschreibt dieser Abschnitt die Regel, der Code bleibt beim heutigen Fenster.
 
 Der Vienna-Tag eines Zeitstempels ist `timestamp.astimezone(VIENNA).date()`, und nur dann, wenn CD11 die Zeitstempel als UTC bestätigt hat. Nicht `timestamp.date()` auf dem gespeicherten Wert, und nicht `FillRecord.session_date`.
 
@@ -286,6 +302,8 @@ owner(fill):
 
 `tva day build D` betrachtet jede CSV-Execution, deren Zeitstempel in einem Kern von `clips(D)` liegt, auch nach Mitternacht, und jede Execution mit Vienna-Tag D. Liefert `owner` einen Clip, dessen Start nicht auf D liegt, schreibt dieser Bau die Execution nicht. Der Bau des Starttags schreibt sie, weil sie in seinem Kern liegt. Ein Fill nach Mitternacht steht damit nur im Tag des Clip-Starts (M12) und nicht noch einmal als `outside` des Folgetags. Der Folgetag sieht den Clip über `neighbors` und gibt ihn an den Starttag zurück.
 
+Gemischte Pfade über Mitternacht. Tag D ist Legacy, das Pad reicht 30 min über Mitternacht. Tag D+1 ist Tages-Pfad. Ein Fill nach Mitternacht, nach dem Kernende von D und noch im Legacy-Pad, steht heute im Parquet von D. D+1 nimmt ihn nicht als `outside`. Er wird `claimed_by_legacy_neighbor` gelistet und bleibt im Legacy-Parquet. Die Tagesregeln von D+1 zählen ihn nicht noch einmal.
+
 Grenze: Zeitstempel gleich `nominal_end` von A und gleich `nominal_start` von B gehört zu B. Bei gleichem Präfix und Abstand ≤ 5 s gibt es dieses Paar nicht, weil A und B eine Session sind (1.7). Der Test dafür ist M2 mit verschiedenen Präfixen oder mit Abstand ≥ 6 s.
 
 Heute ist das Fenster beidseitig geschlossen, inklusive Pad (`fills.py:140`). Auf dem Legacy-Pfad bleibt das so. Fills außerhalb dieses Pads auf einem Ein-Clip-Tag bleiben draußen (CD2). Ihre Anzahl `fills_outside_window` schreibt der Audit, nicht `session.json` und nicht `rules.json`.
@@ -296,7 +314,7 @@ Pairing für die Tagesregeln läuft **einmal** über zugewiesene und `outside`-F
 
 `tva_trade_id` ist `T01…` in der Reihenfolge `(entry_timestamp, trade_id)` über **alle** Trades des Tages-Pairings, `outside` eingeschlossen (`fills.py:145-150` ist die heutige Sortierung, die Menge ist auf dem Tages-Pfad die Tagesmenge). Auf dem Legacy-Pfad ist die Menge dieselbe wie heute, die Ids auch.
 
-Bestätigte Proposals werden beim Tagesbau am Fill-Identitätsschlüssel geprüft, nicht an `T01`. Passt der Schlüssel und nur die Id hat sich geändert, wird der Eintrag umgehängt und der Bau nennt die alte und die neue Id. Passt der Schlüssel nicht, wird der Eintrag laut verworfen, nicht still auf einen anderen Trade gelegt (1.11).
+Bestätigte und abgelehnte Proposals werden aus `proposals_carry.json` am Fill-Identitätsschlüssel geprüft, nicht an `T01` (2.1). Passt der Schlüssel und nur die Id hat sich geändert, wird der Eintrag umgehängt und der Bau nennt die alte und die neue Id. Passt der Schlüssel nicht, wird der Eintrag laut verworfen, nicht still auf einen anderen Trade gelegt (1.11). Die Session-Datei ist zu diesem Zeitpunkt schon gelöscht. Die Kopie ist die Quelle.
 
 ε ist 10 s (CD13). `near_boundary` steht im Manifest. Es ändert den Besitzer nicht, solange CD13 bei der Empfehlung bleibt.
 
@@ -344,17 +362,21 @@ Auf dem Legacy-Pfad ist der Payload `payload_from_debrief` wie heute (`publish.p
 
 Zähler und Nenner haben dieselbe Basis. Ein Trade zählt im Zähler genau dann, wenn sein Entry-Fill einem berechtigten Kern gehört. `outside`- und `no_core`-Trades stehen in `trades_outside_clips` und nicht im Zähler. `day_rollups.trade_count` ist dieser Zähler. R-MAX10 zählt die weitere Menge inklusive `outside` (2.4) und liest `trade_count` nicht. Die außerhalb liegenden Trades stehen auch nicht in der `trades`-Tabelle des Ledgers: `stated_lab_agree is None` würde sie als unverifiable im Stated-vs-Lab-Tally zählen (`ledger.py:598-614`).
 
-Der Nenner ist die Handelszeit aus CD3, Empfehlung (c): pro berechtigtem Clip die Spanne vom ersten eigenen Fill-Zeitstempel bis zum letzten, Vereinigung über überlappende Spannen, Summe. Ein `suspected` Clip trägt nicht bei. Eine Wandspanne aus dem kaputten Alignment wird nicht eingesetzt. Ein Clip mit weniger als zwei eigenen Fills hat die Spanne 0.
+Der Nenner ist die Handelszeit aus CD3, Empfehlung (c): pro berechtigtem Clip die Spanne vom ersten eigenen Fill-Zeitstempel bis zum letzten, Vereinigung über überlappende Spannen, Summe. Ein `suspected` Clip trägt nicht bei. Eine Wandspanne aus dem kaputten Alignment wird nicht eingesetzt. Ein Clip mit weniger als zwei eigenen Fills hat die Spanne 0. Trades, deren Entry auf so einem Clip liegt, zählen nicht im Zähler. Sie stehen in `trades_span_zero`. Sonst erhöhte ein einzelner Entry, dessen Exit in einem anderen Clip liegt, die Rate, ohne den Nenner zu vergrößern.
 
 `trades_per_hour = trade_count / hours`, wenn `hours > 0`. Sonst null. `_tph` gibt bei `hours <= 0` schon null zurück (`ledger.py:555-558`).
 
 Gründe, ein Wert, Schlüssel fehlt in der Serialisierung, wenn null, damit L0 kein neues Feld sieht. Es gilt der erste zutreffende:
 
 - `paused_clip`, wenn die Periode keinen berechtigten Kern hat. Die Rate ist null. `trades_outside_clips` trägt die Zahl daneben. M5 fällt hierher, nicht in eine Mischrate.
-- `span_undefined`, wenn berechtigte Trades da sind und die Spanne 0 ist.
-- `outside_trades_present`, wenn `trades_outside_clips > 0` und die Spanne über 0 ist. Die Rate bleibt die Rate der berechtigten Trades. Sie mischt die außerhalb liegenden Trades nicht in den Zähler.
+- `span_undefined`, wenn jeder berechtigte Entry auf einem Clip mit Spanne 0 liegt. Die Rate ist null. `trades_span_zero` trägt die Zahl.
+- `span_zero_excluded`, wenn `trades_span_zero > 0` und die Spanne über 0 ist. Diese Trades sind nicht im Zähler.
+- `outside_trades_present`, wenn `trades_outside_clips > 0` und die Spanne über 0 ist. Die Rate bleibt die Rate der berechtigten Trades mit positiver Spanne. Sie mischt die außerhalb liegenden Trades nicht in den Zähler.
+- `mixed_basis`, wenn keiner der vorigen Gründe greift und `hours_basis` gleich `mixed` ist.
 
-Der Rollup erkennt einen Tages-Pfad daran, dass `day_rollups` für dieses Datum eine Zeile hat. Dann nimmt er `trade_count` und `hours` von dort und lässt die Session-Zeilen dieses Datums aus Summe und Zählung der Rate heraus. Session-`hours` bleiben `duration_s / 3600`. Ein rohes `SUM(sessions.hours)` ist nicht die Rate. Ohne Zeile in `day_rollups` gilt die heutige Zählung: `COUNT(*)` der Trade-Zeilen und `SUM(hours)` (`ledger.py:667-700`). Auf L0 gibt es keine Tageszeile, die Zahl ist dieselbe wie heute.
+`hours_basis` ist ein eigenes Feld: `duration` auf einem reinen Legacy-Zeitraum, `fill_span` auf einem reinen Tages-Pfad, `mixed` wenn beides in derselben Periode liegt. Es fehlt in der Serialisierung, wenn der Zeitraum nur Legacy ist und `TVA_TRADING_HOURS` aus ist, damit L0 kein neues Feld sieht. Bei `mixed` bleibt `hours_basis` gesetzt, auch wenn der Grund `outside_trades_present` oder `span_zero_excluded` ist. Die Rate ist die Summe der Zähler geteilt durch die Summe der Nenner, jeder Tag mit seinem eigenen Nenner. Sie ist damit als gemischt gekennzeichnet und wird nicht als eine Definition von Handelszeit gelesen.
+
+Der Rollup erkennt einen Tages-Pfad daran, dass `day_rollups` für dieses Datum eine Zeile hat. Dann nimmt er `trade_count` und `hours` von dort und lässt die Session-Zeilen dieses Datums aus Summe und Zählung der Rate heraus. Session-`hours` bleiben `duration_s / 3600`. Ein rohes `SUM(sessions.hours)` ist nicht die Rate. Ohne Zeile in `day_rollups` gilt die heutige Zählung: `COUNT(*)` der Trade-Zeilen und `SUM(hours)` (`ledger.py:667-701`). Auf L0 gibt es keine Tageszeile, die Zahl ist dieselbe wie heute. `day_state` läuft auch dann, wenn `TVA_TRADING_HOURS` aus ist (2.1). Ein veralteter Tag wird nicht in diese Summe genommen.
 
 Die aligned Wandlänge `duration · (1 + drift/3600)` wird nicht benutzt.
 
@@ -364,27 +386,35 @@ Die aligned Wandlänge `duration · (1 + drift/3600)` wird nicht benutzt.
 
 - Schreibt höchstens `TVA_ROOT/days/audit.json`.
 - Ändert kein `session.json`, kein Parquet, kein `ocr.parquet`, keine Notion-Seite, kein `pause_checks/`.
-- Die Fill-Hälfte liest die **vorhandenen** `fills.parquet` und die CSV. Sie rechnet das Fenster nicht neu, um die 20 zu erklären. Klassen gegen den Identitätsschlüssel: `in_existing_parquet`, `session_without_fills_run`, `filtered_manual` (in `fills.parquet`, nicht in `trades.parquet`, weil nicht `--include-manual`), `other_instrument` (nicht MNQ/MES). `other_account` wird `not_in_schema` geschrieben: das Parquet hat kein Konto (1.8). `venue` wird pro Datei mitgeschrieben, das ist die eine Spalte aus `fills.py:36`. Zusätzlich, als eigene Zahlen und nicht als die 20/88-Antwort: `in_one`, `in_many`, `outside_all` auf dem heutigen `session_utc_window`.
+- Die Fill-Hälfte liest die **vorhandenen** `fills.parquet` und die CSV. Sie rechnet das Fenster nicht neu, um die 20 zu erklären. Klassen gegen den Identitätsschlüssel: `in_existing_parquet`, `session_without_fills_run`, `filtered_manual` (in `fills.parquet`, nicht in `trades.parquet`, weil nicht `--include-manual`), `other_instrument` (nicht MNQ/MES). `other_account` wird `not_in_schema` geschrieben: das Parquet hat kein Konto (1.8). `venue` wird pro Datei mitgeschrieben, das ist die eine Spalte aus `fills.py:36`. Zusätzlich, als eigene Zahlen und nicht als die 20/88-Antwort: `in_one`, `in_many`, `outside_all` auf dem heutigen `session_utc_window`. Diese Fensterzahlen und `fills_outside_window` tragen `tz_assumption: csv_offset_as_is`. Sie setzen den CSV-Offset voraus und wenden ihn nicht als UTC an. Eine schriftliche Aufhebung des Gates ist `tz_assumption: waived` (2.3).
 - Loader: `unknown`, außer der Operator übergibt ihn. Das Parquet speichert ihn nicht (1.8). Die offene Ursache bleibt Import gegen Mirror.
 - Verschiebungen, Vorzeichen fest: angenommene wahre Zeit = CSV-Zeitstempel + Δ, Δ in {−6, −5, −4, −2, −1, +1, +2} Stunden. Der Audit schreibt die Zähler. Er wendet Δ nicht an. −4 und −5 sind die New-York-Offsets, wenn eine Lokalzeit als `+0000` beschriftet wäre. −6 ist der Sommer-Abstand Vienna gegen New York, falls jemand Vienna als UTC beschriftet hat.
 - `fills_outside_window`: pro Session die Executions der CSV außerhalb des heutigen Pads, als Zahl. Nicht in die Session geschrieben (CD2).
-- `--sample-clocks` erst, wenn PR-30 da ist. Die Proben landen nur im Audit-JSON. Dieselbe Funktion wie der Guard, nur lesend. Zurückschreiben in die Session nicht.
+- `--sample-clocks` erst, wenn PR-30 da ist. Die Proben landen nur im Audit-JSON. Dieselbe Funktion wie der Guard, nur lesend. Zurückschreiben in die Session nicht. Vor PR-30 reicht ein manueller Blick auf einen echten Frame (2.2), notiert im Audit-Protokoll: große Uhr und ROI-Uhr, mit oder ohne Sekunden.
 - `mtime`-Hinweis aus 1.7, Spalte `mtime_pause_hint_s`, mit dem Vermerk `unverified`. Kein `pause_check` daraus.
 - Stitch-Abstände: pro zusammengelegter Kette `stitched_gap_s`, und die Abstände von aufeinanderfolgenden Dateien, die nicht zusammengelegt wurden. Das ist die Messung für CD12.
 - Listet jede Session im Intervall. Erfindet keine. `2026-09-30_090221` ist dabei, wenn es sie gibt.
 - Ohne `--executions` ist `fills_match: not_run`. Ohne Store ist der CI-Test synthetisch.
 
-Bis Accumu die Flags einschaltet: an Tagen mit mehr als einem Clip kein `tva publish --notion`, und Trades/Stunde aus dem Rollup nicht als Handelszeit lesen. Beides ist der heutige Code und bleibt falsch, solange die Flags aus sind.
+Bis Accumu die Flags einschaltet: an Tagen mit mehr als einem Clip kein `tva publish --notion`, und Trades/Stunde aus dem Rollup nicht als Handelszeit lesen. Beides ist der heutige Code und bleibt falsch, solange die Flags aus sind. Das Vierer-Set aus 3.6 lässt sich frühestens nach dem 25.10.2026 und der Bestätigung aus CD11 einschalten. Bis dahin gilt dieser Absatz für alle Mehrclip-Tage.
 
 Neu rechnen ist `tva day build --from … --to … --dry-run`. Es schreibt einen Diff nach `days/audit-dry-run.json` und ändert keine Session. Der echte Bau sichert vorher den Zeiger-Build nach `days/<date>/backup/<ulid>/`. Rohvideos und die CSV bleiben unberührt. Das ist kein stiller Schritt in PR-28 (CD7).
 
 ### 2.8 Was unverändert bleibt
 
-Transkript, Insights, Frames, Clips, VLM, Context, Proposals-Logik auf einem gültigen Clip mit unveränderten Ids, Coach-Prompt, Coach-Pack (keine Tageszeilen), `rules.yaml`-Schwellen, R-CLOSE, R-BIAS auf einem invalidierten Clip, sprachgestützte Regeln auf einem gültigen Clip, der 5-s-Stitch bis CD12, Session-Ids, das ±30-min-Fenster auf dem Legacy-Pfad. Neue Felder nur, wo Phase 1 sie selbst braucht: `pause_checks/`, das Tagesobjekt, `invalid` im Literal, die Lücken `exit_outside_clip` und `near_boundary`, der Regelgrund `alignment_invalid`, der outside-Grund `no_core`, die Tabellen `day_rollups` und `day_rule_checks`, `trades_per_hour_reason` wenn nicht null, `fills_outside_window` nur im Audit.
+Transkript, Insights, Frames, Clips, VLM, Context, Proposals-Logik auf einem gültigen Clip mit unveränderten Ids, Coach-Prompt, Coach-Pack (keine Tageszeilen), `rules.yaml`-Schwellen, R-CLOSE, R-BIAS auf einem invalidierten Clip, sprachgestützte Regeln auf einem gültigen Clip, der 5-s-Stitch bis CD12, Session-Ids, das ±30-min-Fenster auf dem Legacy-Pfad. Neue Felder nur, wo Phase 1 sie selbst braucht: `pause_checks/` inklusive `clock_resolution_s` und `ocr_provider`, das Tagesobjekt, `invalid` im Literal, die Lücken `exit_outside_clip` und `near_boundary`, der Regelgrund `alignment_invalid`, der outside-Grund `no_core`, `claimed_by_legacy_neighbor`, die Tabellen `day_rollups` und `day_rule_checks`, `trades_per_hour_reason` und `hours_basis` wenn nicht null, `trades_span_zero`, `fills_outside_window` nur im Audit, `tz_assumption` im Audit.
 
 ### 2.9 Session-Id-Kollision
 
-Mit `TVA_STRICT_SESSION_ID` an: unterscheiden sich die vorhandene Session und die neue Datei im Präfix oder im Dateinamen und in `sha256`, und sind sie keine Auto-Split-Kette (`discover_split_parts`), endet `tva ingest` mit Fehler. Nichts wird überschrieben. Flag aus: das heutige Überschreiben (`ingest.py:42-56`) bleibt, der bestehende Test bleibt grün. M8 erwartet den Fehler nur mit Flag an.
+Der Fehler ist immer an. `TVA_ALLOW_SESSION_ID_OVERWRITE` ist der Notausgang, Default aus. Wahr ist `1`, `true`, `yes` oder `on`. Die Prüfung liegt vor `_copy_parts` (`ingest.py:38`) und damit vor `invalidate_downstream` (`ingest.py:56`), damit keine verwaiste Kopie unter `recordings/` entsteht.
+
+| Fall | Erkennung | Verhalten |
+|---|---|---|
+| Auto-Split-Fortsetzung | `existing.recording.filename` gleich dem Namen des ersten Teils, und `existing.recording.sha256 == digest` (`ingest.py:40`), nur `parts` gewachsen | Überschreiben wie heute. `tests/test_ingest_and_pipeline.py:183-199` bleibt grün |
+| Dieselbe Datei neu kopiert oder geändert | gleicher Dateiname, andere SHA des ersten Teils | heutiges Überschreiben, mit lauter Meldung |
+| Echte Kollision | anderer Dateiname oder anderes Präfix, und andere SHA des ersten Teils | Fehler, nichts überschrieben, erste Session unverändert |
+
+Mit `TVA_ALLOW_SESSION_ID_OVERWRITE` an wird die echte Kollision wie heute überschrieben (`ingest.py:42-56`). Das ist der Rollback, kein Default. M8 erwartet den Fehler ohne dieses Flag.
 
 ---
 
@@ -402,7 +432,9 @@ Vergleich: Parquet über `pyarrow.Table.equals` mit `check_metadata=False`, plus
 
 L0 deckt „ein Clip, Fills außerhalb des Pads“ nicht als Verhaltensänderung ab (CD2). Die Zahl `fills_outside_window` steht im Audit, nicht in den L0-Artefakten.
 
-Echte Session: zwei unpausierte Ein-Datei-Sessions, eine mit OCR-Fit, eine mit Dateinamen-Fallback, ohne Medien (fills, trades, evidence, rules, insights, transcript, geschwärzt). Sie liegen auf der NAS, nicht in git. Begründung in Abschnitt 8. CI überspringt sie, gleiches Muster wie `docs/GOLDEN_EXCERPT.md`. Bevor die Flags aus 3.6 in Produktion an gehen, nennt Accumu die beiden Ids (CD10). Bis dahin hängt CI nicht daran.
+Echte Session: zwei unpausierte Ein-Datei-Sessions, eine mit OCR-Fit, eine mit Dateinamen-Fallback, ohne Medien (fills, trades, evidence, rules, insights, transcript, geschwärzt). Sie liegen auf der NAS, nicht in git. Begründung in Abschnitt 8. CI überspringt sie, gleiches Muster wie `docs/GOLDEN_EXCERPT.md`. Bevor irgendein Flag-Set aus 3.6 in Produktion an geht, ist der NAS-Paritätslauf beider Sessions bestanden und als Protokoll unter `TVA_ROOT` abgelegt: Datum, Commit, Ergebnis je Artefakt (CD10). Die Ids zu nennen reicht nicht.
+
+Zusätzlich, ohne Kontodaten, committet PR-30 `tests/fixtures/shapes_no_account/`: zwei Auto-Split-Teile, eine CSV mit Offsets `+0000` und `+0200`, Uhren im Format HH:MM:SS und HH:MM. CI sieht damit die Strukturen, die der NAS-Lauf prüft, ohne eine echte Session einzuchecken.
 
 ### 3.2 Weitere Fixtures
 
@@ -417,17 +449,22 @@ Alle synthetisch. Die Tabelle ist der Endzustand mit den Flags, die der Fall bra
 | M2d | verschiedene Präfixe, Abstand 0, Fill auf der gemeinsamen Kante | zwei Sessions, Fill gehört zu B |
 | M3 | zwei Teile, Abstand ≤ 5 s, Präfix gleich | eine Session, wie `test_split_parts_become_one_session` |
 | M4 | zwei Dateien, Abstand 6 s, Präfix gleich | zwei Sessions |
-| M5 | eine Datei, bestätigte monotone Stufe 300 s | `suspected`, `pause_checks` mit dieser `sha256`, `method invalid`, keine Evidence-Fenster, Fills `no_core`, Tagesregeln zählen sie |
-| M6 | eine Probe 60 s daneben, Nachbar bestätigt sie nicht, oder sie bricht die Monotonie | Probe verworfen, nicht `suspected`, Fit unverändert |
+| M5 | eine Datei, Sekunden-Uhr, bestätigte monotone Stufe 300 s | `suspected`, `pause_checks` mit dem Schlüssel aus 2.2, `method invalid`, keine Evidence-Fenster, Fills `no_core`, Tagesregeln zählen sie |
+| M6 | Sekunden-Uhr, eine Probe 60 s daneben, Nachbar bestätigt sie nicht, oder sie bricht die Monotonie | Probe verworfen, nicht `suspected`, Fit unverändert |
 | M7 | Fills in der Lücke zwischen zwei Kernen | einmal `outside` Grund `gap`, in den Tagesregeln, in keiner Session-Evidence |
-| M8 | dieselbe Startsekunde, Präfix verschieden | Flag an: Ingest-Fehler, erste Session unverändert. Flag aus: heutiges Überschreiben, Test bleibt |
+| M8 | dieselbe Startsekunde, Präfix verschieden, andere SHA des ersten Teils | Fehler, erste Session unverändert, keine Kopie. Mit `TVA_ALLOW_SESSION_ID_OVERWRITE`: heutiges Überschreiben |
 | M9 | drei Clips, R-3L30 über Clipgrenzen | eine Verletzung in `day_rule_checks`, Rollup-`violated` 1, Coach-Pack ohne diese Zeile |
-| M10 | bestätigte monotone Spreizung 40 s | `suspected`. Das ist eine Pausenfolge, kein Drift |
+| M10 | Sekunden-Uhr, bestätigte monotone Spreizung 40 s | `suspected`. Das ist eine Pausenfolge, kein Drift |
 | M11 | zwei bestätigte Proben, `y` steigt um 300 s | `suspected` |
 | M12 | Fill nach Mitternacht im Kern eines Clips vom Vortag | nur im Tag des Clip-Starts |
 | M13 | bestätigte Stufen 0 / 1 800 / 17 000 s | `suspected` |
 | M14 | drei Clips, einmal alle vorhanden dann bauen, einmal Clip für Clip mit `tva fills` dazwischen dann bauen | identische `day.json`. Nach Clip 2 ohne Neubau: Fehler `Tag veraltet`, kein stilles Ergebnis |
 | M15 | Fill 5 s vor `nominal_start` | `outside` und `near_boundary`, nicht dem Clip zugeordnet |
+| M16 | sauberer Clip, nur HH:MM-Uhr | nicht `suspected`. `clock_resolution_s` 60, `clear` |
+| M17 | HH:MM-Uhr, bestätigte monotone Pause 300 s | `suspected`, `clock_resolution_s` 60 |
+| M18 | eine Woche mit einem Legacy-Tag und einem Tages-Pfad-Tag | `hours_basis: mixed`, Grund `mixed_basis`, wenn kein anderer Grund greift |
+| M19 | ein Clip mit einem Fill und ein Clip mit einer echten Spanne | der einzelne Fill nicht im Zähler, `trades_span_zero` 1 |
+| M20 | Provider `fake`, Guard an, keine injizierten Reads | lauter Abbruch, kein `pause_checks` mit `ocr_provider: fake` |
 
 ### 3.3 Determinismus
 
@@ -437,10 +474,12 @@ Gleiche Sessions, gleiche CSV, gleiche `pause_checks`, gleiches Optionen-Set. M1
 
 | Lage | Sichtbar | Nicht |
 |---|---|---|
-| monotone bestätigte `pause_total > 30`, eine oder mehrere Pausen | `suspected`, Methode `invalid`, Datei in `pause_checks` | Fit stehen lassen, Wandende schätzen, „gültig bis zur Stufe“ |
+| monotone bestätigte Pause über der Schwelle der Auflösung | `suspected`, Methode `invalid`, Datei in `pause_checks` mit `clock_resolution_s` | Fit stehen lassen, Wandende schätzen, „gültig bis zur Stufe“ |
+| HH:MM-Uhr, `pause_total` unter 120 s | `clear`, Auflösung 60 | mit der 30-s-Schwelle `suspected` setzen |
 | eine Probe ohne Nachbar-Bestätigung oder gegen die Monotonie | Probe verworfen, neu gelesen | den Clip `invalid` setzen |
 | weniger als zwei akzeptierte Proben | `unverifiable`, Fit bleibt, Datei wird trotzdem geschrieben | Clip invalidieren, Ergebnis verwerfen |
-| kein `pause_checks` für die aktuelle `sha256`, Flag an | Guard läuft, oder lauter Abbruch | `effective_alignment()` |
+| kein `pause_checks` für den aktuellen Schlüssel, Flag an | Guard läuft, oder lauter Abbruch | `effective_alignment()` |
+| Guard an, OCR-Provider `fake` | lauter Abbruch | `unverifiable` und linear mappen |
 | Fingerprint stimmt nicht | Fehler `Tag veraltet` | alter Stand, oder still neu bauen |
 | Fill in keinem Kern | `outside` mit Grund, bei leerem Tag `no_core` | dem nächsten Clip zuschlagen |
 | Fill innerhalb ε der Kante | `near_boundary`, Besitzer unverändert | ε still als Pad benutzen |
@@ -448,7 +487,8 @@ Gleiche Sessions, gleiche CSV, gleiche `pause_checks`, gleiches Optionen-Set. M1
 | `outside`-Trades und berechtigte Kerne | Rate nur aus den Kernen, Grund `outside_trades_present`, Zähler `trades_outside_clips` | Mischrate |
 | Nenner 0 | `trades_per_hour: null` mit Grund | Dauer oder OCR-Spanne einsetzen |
 | 20/88 ohne CSV | `fills_match: not_run` | eine Ursache nennen |
-| Id-Kollision, Flag an | Ingest-Fehler | Überschreiben |
+| Id-Kollision, anderer Dateiname und andere SHA | Ingest-Fehler, vor dem Kopieren | Überschreiben |
+| Auto-Split-Fortsetzung, gleicher erster Name und gleiche SHA | Session wächst um `parts` | als Kollision abbrechen |
 | ungültige Flag-Kombination | Abbruch beim Start | die Teilmenge laufen lassen |
 
 ### 3.5 Schema und Migration
@@ -459,7 +499,7 @@ Gleiche Sessions, gleiche CSV, gleiche `pause_checks`, gleiches Optionen-Set. M1
 - Kein Umbau von `ocr.parquet`, Audio, Video. Kein neues Feld an `Evidence`.
 - Ledger-Spalten der Session-Zeilen unverändert. Die Tageswerte sind neue Tabellen. Alte Dateien ohne diese Tabellen bleiben lesbar.
 - Bestehende Session-Ordner werden nicht umgeschrieben, solange das jeweilige Flag aus ist. PR-30 schreibt bei Flag an `alignment.method` und `pause_checks`. Flag aus löscht beides nicht.
-- Ein Git-Revert von PR-30 lässt PR-29 stehen. Sessions mit `invalid` laden weiter. Ein Revert von PR-29 ist erst erlaubt, wenn kein `invalid` mehr im Store liegt. Das steht im PR-Text.
+- Die leseseitige Unterdrückung von `method == invalid` (kein Evidence-Fenster, uhrgemappte Regeln `alignment_invalid`) liegt in PR-29, ohne Flag. Ein Git-Revert von PR-30 lässt PR-29 stehen, und `invalid` wird weiter nicht linear gemappt. Ein Revert von PR-29 ist erst erlaubt, wenn kein `invalid` mehr im Store liegt. Das steht im PR-Text. PR-30 schreibt den Wert. PR-29 liest ihn und unterdrückt.
 - KW41 und ältere Mehrclip-Tage: erst `--dry-run`, dann Sicherung, dann Bau (2.7). Rohdaten bleiben.
 
 ### 3.6 Flags und Rollback
@@ -468,25 +508,28 @@ Ungesetzt oder leer ist aus. Wahr ist `1`, `true`, `yes` oder `on`, wie `serve_m
 
 | Flag | PR | An |
 |---|---|---|
-| `TVA_PAUSE_GUARD` | 30 | Detektor, `pause_checks`, `invalid`, `--force` |
+| `TVA_PAUSE_GUARD` | 30 | Detektor, `pause_checks`, Schreiben von `invalid`, `--force` nur solange dieses Flag an ist |
 | `TVA_DAY_MANIFEST` | 31 | `day.json`, Fingerprint, Sperre, Veraltet-Abbruch |
 | `TVA_EXCLUSIVE_FILLS` | 32 | Besitz. Merge erst nach CD11 |
 | `TVA_DAY_RULES` | 33 | fünf Tagesregeln, `day_rule_checks` |
 | `TVA_DAY_PUBLISH` | 34 | eine Seite, Properties aus CD14 |
 | `TVA_TRADING_HOURS` | 35 | Rate aus 2.6 |
-| `TVA_STRICT_SESSION_ID` | 36 | laute Id-Kollision |
+| `TVA_ALLOW_SESSION_ID_OVERWRITE` | 36 | Notausgang. Default aus, der Kollisionsfehler ist dann an |
+
+`TVA_ALLOW_SESSION_ID_OVERWRITE` ist orthogonal. Es darf zu jeder Zeile unten dazukommen. Es ist keine eigene erlaubte Menge, die andere Flags ausschließt.
 
 Erlaubte Kombinationen. Alles andere bricht beim Start des Befehls laut ab.
 
 | Set | Rollback |
 |---|---|
-| alle aus | nichts zu tun |
-| nur `TVA_STRICT_SESSION_ID` | Flag aus. Kein Daten-Rewrite |
-| nur `TVA_PAUSE_GUARD`, oder mit `TVA_DAY_MANIFEST` | Flag aus. `pause_checks` löschen ist ein genanntes Kommando, kein Nebenprodukt. `invalid` bleibt lesbar (PR-29). Zurück zum Fit nur mit `tva align --force`, solange PR-30 noch läuft |
+| alle aus | nichts zu tun. Der Kollisionsfehler aus PR-36 ist trotzdem an, solange der Notausgang aus ist |
+| nur `TVA_PAUSE_GUARD`, oder mit `TVA_DAY_MANIFEST` | Flag aus. `pause_checks` löschen ist ein genanntes Kommando, kein Nebenprodukt. `invalid` bleibt lesbar und unterdrückt (PR-29). Zurück zum Fit nur mit `tva align --force`, und nur solange `TVA_PAUSE_GUARD` an ist |
 | nur `TVA_DAY_MANIFEST` | Flag aus. `days/` löschen ist das Kommando |
-| `TVA_PAUSE_GUARD` + `TVA_DAY_MANIFEST` + die vier `TVA_EXCLUSIVE_FILLS`, `TVA_DAY_RULES`, `TVA_DAY_PUBLISH`, `TVA_TRADING_HOURS`, alle vier zusammen | Flag der vier aus, in umgekehrter PR-Reihenfolge. `day_rollups` und `day_rule_checks` dieses Laufs löschen, Kommando in PR-33. Parquets, die der Tages-Pfad geschrieben hat, hebt das Flag nicht an: `tva fills` einmal mit den vier Flags aus, bevor irgendetwas anderes liest. Notion-Seite bleibt, der nächste Legacy-Publish überschreibt sie |
+| `TVA_PAUSE_GUARD` + `TVA_DAY_MANIFEST` + die vier `TVA_EXCLUSIVE_FILLS`, `TVA_DAY_RULES`, `TVA_DAY_PUBLISH`, `TVA_TRADING_HOURS`, alle vier zusammen | Die vier Flags gemeinsam aus, nicht einzeln. Danach aufräumen, in dieser Reihenfolge: `day_rollups` und `day_rule_checks` dieses Laufs löschen, Kommando in PR-33. Dann `tva fills` einmal mit den vier Flags aus, bevor irgendetwas anderes liest. Notion-Seite bleibt, der nächste Legacy-Publish überschreibt sie |
 
-`TVA_DAY_PUBLISH` ohne `TVA_DAY_RULES`, oder `TVA_TRADING_HOURS` ohne `TVA_EXCLUSIVE_FILLS` und `TVA_PAUSE_GUARD`, oder eines der vier ohne die anderen drei, ist keine erlaubte Zeile.
+`TVA_DAY_PUBLISH` ohne `TVA_DAY_RULES`, oder `TVA_TRADING_HOURS` ohne `TVA_EXCLUSIVE_FILLS` und `TVA_PAUSE_GUARD`, oder eines der vier ohne die anderen drei, ist keine erlaubte Zeile. Ein Zwischenschritt, der nur eines der vier ausmacht, ist ebenfalls keine erlaubte Zeile.
+
+Bevor irgendeines dieser Sets in Produktion an geht, ist der NAS-Paritätslauf aus CD10 bestanden und das Protokoll unter `TVA_ROOT` abgelegt.
 
 ### 3.7 Grenzen
 
@@ -500,7 +543,7 @@ Ein Dateiname `2026-10-25 02:00` bis `02:59` ist in Europe/Vienna mehrdeutig. `p
 
 Jeder PR ist einzeln mergebar. Wo er ein Flag hat, ist der Default aus, und mit Flag aus ist der bisherige Teststand grün. L0 mit Flag an wird gegen `tests/fixtures/l0_main_f44d864/` geprüft (3.1), sobald dieser Snapshot existiert. Review durch einen eigenen Agenten, Checkliste am Ende. Nicht auf automatischen Bugbot warten.
 
-Reihenfolge ist die Abhängigkeit. Der Fill-Audit braucht die Pausenfunktion nicht und kommt zuerst, weil sein Ergebnis 2.3 und CD11 ändern kann.
+Reihenfolge ist die Abhängigkeit. Der Fill-Audit braucht die Pausenfunktion nicht und kommt zuerst, weil sein Ergebnis 2.3 und CD11 ändern kann. Das Vierer-Set lässt sich frühestens nach dem 25.10.2026 und der Bestätigung aus CD11 einschalten. Bis dahin gilt die Übergangsregel aus 2.7 für alle Mehrclip-Tage.
 
 Abbildung der Nummern aus dem vorigen Planstand: altes PR-28 (Manifest) → PR-31, altes PR-29 (Guard) → PR-29 plus PR-30, altes PR-34 (Audit) → PR-28, altes PR-30 (Fills) → PR-32, altes PR-31 (Regeln) → PR-33, altes PR-32 (Notion) → PR-34, altes PR-33 (Rate) → PR-35.
 
@@ -508,18 +551,18 @@ Abbildung der Nummern aus dem vorigen Planstand: altes PR-28 (Manifest) → PR-3
 
 - Abhängigkeit: keine.
 - Flag: keiner. Nur die Audit-Datei.
-- Tun: die Fill-Hälfte von 2.7, inklusive Verschiebungen, Klassen gegen vorhandene Parquets, `fills_outside_window`, Stitch-Abstände, `mtime`-Hinweis. Kein `--sample-clocks` (das kommt mit PR-30).
+- Tun: die Fill-Hälfte von 2.7, inklusive Verschiebungen, Klassen gegen vorhandene Parquets, `fills_outside_window`, `tz_assumption: csv_offset_as_is`, Stitch-Abstände, `mtime`-Hinweis. Kein `--sample-clocks` (das kommt mit PR-30). Ein manueller Blick auf die Uhr wird im Protokoll notiert (2.2). `docs/IMPLEMENTATION_PLAN.md:238` wird auf „unverifiziert, siehe CD11“ gesetzt.
 - Tests: synthetische Mischung innen, in zwei vorhandenen Parquets, außerhalb, manuell, anderes Instrument, fehlende CSV → `not_run`. Keine Session-Datei ändert mtime. Vorzeichen der Verschiebung ist assertiert: wahre Zeit = CSV + Δ.
 - Akzeptanz: Accumu kann CD4 und CD11 daran entscheiden. Ohne NAS ist CI synthetisch.
 - Rollback: Datei löschen.
-- **Gate:** PR-32 mergt nicht, bevor CD11 auf diesem Protokoll bestätigt ist oder Accumu den Gate schriftlich aufhebt. Liegt der Fehlbetrag der 20/88 am Fenster oder an der Doppelzählung, beschreibt 2.3 den Besitz weiter. Liegt er woanders, wird CD4 neu vorgelegt, bevor PR-32 mergt.
+- **Gate:** PR-32 mergt nicht, bevor CD11 auf diesem Protokoll bestätigt ist. Accumu kann das Gate schriftlich aufheben. Die Aufhebung steht als `tz_assumption: waived` im Audit-JSON (2.3). Ohne den Vermerk bleibt das Gate zu. Liegt der Fehlbetrag der 20/88 am Fenster oder an der Doppelzählung, beschreibt 2.3 den Besitz weiter. Liegt er woanders, wird CD4 neu vorgelegt, bevor PR-32 mergt.
 
 ### PR-29 — Literal `invalid`, nur Leser
 
 - Abhängigkeit: keine. Liegt vor PR-30.
 - Flag: keiner. Kein Schreiber.
-- Tun: `invalid` in `AlignmentMethod` (`schema.py:36`) und in den beiden Doku-Zeilen, die das Literal aufzählen. Ein `session.json` mit `method: invalid` lädt. Nichts schreibt den Wert.
-- Tests: rundes Laden und Speichern. L0 gegen den Snapshot, bytegleich, weil nichts geschrieben wird.
+- Tun: `invalid` in `AlignmentMethod` (`schema.py:36`) und in den beiden Doku-Zeilen, die das Literal aufzählen. Ein `session.json` mit `method: invalid` lädt. Nichts schreibt den Wert. Die leseseitige Unterdrückung aus 2.2 liegt hier, ohne Flag: kein Evidence-Fenster, die fünf uhrgemappten Regeln `alignment_invalid`. `effective_alignment` mappt `invalid` nicht auf den Dateinamen.
+- Tests: rundes Laden und Speichern. Eine Session mit `method: invalid` hat keine Evidence-Fenster. L0 gegen den Snapshot, bytegleich, weil nichts geschrieben wird.
 - Rollback: nur wenn kein Store-`invalid` existiert.
 
 ### PR-30 — Pausen-Guard
@@ -527,7 +570,7 @@ Abbildung der Nummern aus dem vorigen Planstand: altes PR-28 (Manifest) → PR-3
 - Abhängigkeit: PR-29.
 - Flag: `TVA_PAUSE_GUARD`.
 - Tun: Abschnitt 2.2, inklusive `--force` und der Verweigerung von `--manual-offset` ohne `--force`. `invalidate_downstream` löscht `pause_checks`. Evidence und Regeln ohne passende `sha256` laufen den Guard oder brechen ab. Die fünf uhrgemappten Regeln `alignment_invalid`. R-BIAS bleibt. `unverifiable` und `clear` werden geschrieben, auch für einen einzelnen Clip, und lassen den Fit in Ruhe.
-- Tests: M5, M6, M10, M11, M13, L0 mit Guard an (`pause_checks` ist `clear`, Session-Artefakte wie der Snapshot). Re-Ingest eines `suspected` Clips: Evidence bricht ab, bis der Guard neu gelaufen ist.
+- Tests: M5, M6, M10, M11, M13, M16, M17, M20, L0 mit Guard an (`pause_checks` ist `clear`, `clock_resolution_s` gesetzt, Session-Artefakte wie der Snapshot). Re-Ingest eines `suspected` Clips: Evidence bricht ab, bis der Guard für den neuen Schlüssel gelaufen ist. `shapes_no_account` aus 3.1.
 - Akzeptanz: ein durchgehender Clip ohne Stufe bleibt auf den Session-Artefakten feldgleich. Ein `suspected` Clip, auch als einzige Datei, hat `pause_checks`, `method invalid` und keine Evidence-Fenster. `day.json` erzeugt dieser PR noch nicht. Der Tages-Pfad für Regeln und Besitz kommt mit PR-31 und PR-32. Bis dahin unterdrückt der Guard nur das Zeit-Mapping.
 - Rollback: 3.6. Der Audit setzt nichts auf `invalid`.
 
@@ -535,7 +578,7 @@ Abbildung der Nummern aus dem vorigen Planstand: altes PR-28 (Manifest) → PR-3
 
 - Abhängigkeit: PR-30, weil `pause_check` aus `pause_checks` kopiert wird. Ohne Guard-Datei bricht der Bau ab, wenn der Guard-Flag an ist. Mit Guard-Flag aus und genau einer Session schreibt dieser PR kein `days/`.
 - Flag: `TVA_DAY_MANIFEST`.
-- Tun: Abschnitt 2.1 ohne Fill-Besitz und ohne Regeln. Veraltet-Abbruch. Kaskade ist hier noch leer an Fills, löscht aber schon Evidence und Regeln aller Sessions des Tages, wenn der Fingerprint neu ist, damit keine alten Ids stehen bleiben. Der folgende PR füllt die Parquets.
+- Tun: Abschnitt 2.1 ohne Fill-Besitz und ohne Regeln. `day_state` in den Lesern. Veraltet-Abbruch. Die Kaskade sichert `proposals_carry.json`, löscht Evidence, Context und Debrief und lässt sie `missing`. Sie schreibt sie nicht mit `fake` neu. Regeln und Fills füllen die folgenden PRs.
 - Tests: zwei Tage bleiben getrennt. M3 eine Session, M4 zwei. M14 die identischen Ausgaben und der Fehler ohne Neubau. L0 schreibt kein `days/`. Sortierung über einen synthetischen DST-String, der als Text falsch läge.
 - Akzeptanz: Session-Ordner von L0 wie der Snapshot. Flag aus: kein `days/`.
 - Rollback: Flag aus, `days/` des Laufs löschen, Kommando im PR.
@@ -544,7 +587,7 @@ Abbildung der Nummern aus dem vorigen Planstand: altes PR-28 (Manifest) → PR-3
 
 - Abhängigkeit: PR-31, Gate PR-28 / CD11.
 - Flag: `TVA_EXCLUSIVE_FILLS`. Nur im Vierer-Set aus 3.6.
-- Tun: Abschnitt 2.3. `tva fills` auf einer Session des Tages schreibt den ganzen Tag oder bricht ab, wenn der Fingerprint abweicht oder CSV und Optionen nicht zum letzten Bau passen. Legacy-Fenster unberührt.
+- Tun: Abschnitt 2.3. `tva fills` auf einer Session des Tages schreibt den ganzen Tag oder bricht ab, wenn die Identitätsschlüssel der Tages-Executions oder die Optionen nicht zum letzten Bau passen. Eine neue SHA der ganzen CSV allein bricht nicht ab. Legacy-Fenster unberührt. `claimed_by_legacy_neighbor` aus 2.3.
 - Tests: M1, M2a–M2d, M5 (Clip beansprucht nichts), M7, M12, M15, L0 Parquets wie der Snapshot.
 - Akzeptanz: keine Fill-Identität in mehr als einem Session-Parquet desselben Tages. `outside` vollständig. Kaskade hat Evidence der anderen Sessions gelöscht.
 - Rollback: 3.6. Kein stilles Mischparquet.
@@ -572,23 +615,23 @@ Abbildung der Nummern aus dem vorigen Planstand: altes PR-28 (Manifest) → PR-3
 - Abhängigkeit: PR-32 für den Besitz, PR-30 für `suspected`, PR-33 für die Tabelle. Im Vierer-Set.
 - Flag: `TVA_TRADING_HOURS`.
 - Tun: Abschnitt 2.6, Empfehlung CD3 (c), bis Accumu anders entscheidet.
-- Tests: L0 Rate gleich, Schlüssel `trades_per_hour_reason` fehlt. M1 Zähler ohne Doppelte. M5 Nenner ohne die kurze Dauer, Rate null, Grund `paused_clip`. M7: outside-Trades nicht im Zähler, Grund `outside_trades_present`, keine Mischrate. Session-`hours` bleiben `duration_s / 3600`.
+- Tests: L0 Rate gleich, Schlüssel `trades_per_hour_reason` und `hours_basis` fehlen. M1 Zähler ohne Doppelte. M5 Nenner ohne die kurze Dauer, Rate null, Grund `paused_clip`. M7: outside-Trades nicht im Zähler, Grund `outside_trades_present`, keine Mischrate. M18 `hours_basis: mixed`. M19 `trades_span_zero`. Session-`hours` bleiben `duration_s / 3600`.
 - Akzeptanz: auf L0 dieselbe Rate wie der Snapshot. Auf M5 nicht die heutige überhöhte Rate.
 - Rollback: Flag aus, Rollup neu. Alte Formel, weil `day_rollups.hours` nicht mehr gelesen wird.
 
 ### PR-36 — Laute Id-Kollision
 
 - Abhängigkeit: keine. Darf vor oder nach den anderen mergen.
-- Flag: `TVA_STRICT_SESSION_ID`.
-- Tun: Abschnitt 2.9.
-- Tests: M8, beide Flag-Stände.
-- Rollback: Flag aus.
+- Flag: `TVA_ALLOW_SESSION_ID_OVERWRITE`, Default aus. Der Fehler ist damit an, sobald der PR gemerged ist.
+- Tun: Abschnitt 2.9. Prüfung vor `_copy_parts`.
+- Tests: M8 ohne Flag ist der Fehler. Mit dem Notausgang das heutige Überschreiben. `test_new_split_part_invalidates_transcript` bleibt grün.
+- Rollback: Notausgang an. Kein Daten-Rewrite.
 
 ### Review-Checkliste, jeder PR
 
 Ein separater Agent, nicht der Autor. Er hakt nur ab, was er im Diff sieht.
 
-1. Flag default aus, und mit Flag aus ist der bisherige Teststand grün, ohne angepasste Erwartungen.
+1. Flag default aus, und mit Flag aus ist der bisherige Teststand grün, ohne angepasste Erwartungen. PR-36 ist die Ausnahme: der Kollisionsfehler ist ohne Flag an, der Notausgang ist aus. Der bisherige Teststand bleibt grün, weil eine Auto-Split-Fortsetzung keine Kollision ist.
 2. L0 mit Flag an gegen den Snapshot von `main` @ `f44d864`, Ausnahmen nur die benannte Feldliste in 3.1.
 3. Kein Schreiben außerhalb `sessions/`, `days/`, `pause_checks/`, `ledger/` unter `TVA_ROOT`. Kein Video-Write. Kein `/musiclabel`.
 4. Kein neuer Fallback, der bei fehlender Probe, fehlender CSV, veraltetem Fingerprint oder überlappendem Kern einen Wert erfindet.
@@ -596,7 +639,7 @@ Ein separater Agent, nicht der Autor. Er hakt nur ab, was er im Diff sieht.
 6. Alte `session.json` lädt. Session-`schema_version` bleibt `"1"`, außer der PR begründet eine Anhebung und migriert lesend. `invalid` wird nur geschrieben, wenn PR-29 schon gemerged ist.
 7. Keine Änderung an Prompts, Coach-Eingaben, Proposals-Logik auf gültigen Clips, `rules.yaml`, R-CLOSE, R-BIAS, Sprachregeln auf gültigen Clips. `window_session_ids` sieht keine Tages-Id.
 8. Phase 2 kommt im Diff nicht vor: kein Datenvertrag, kein Abschalten einer Analyse, die nicht in 2.2 als Unterdrückung bei `invalid` genannt ist. Kein neuer Modell-Auftrag für die Notion-Seite.
-9. Ein einzelner `suspected` Clip hat `pause_checks` und `method invalid`. M5, M10 und M13 sind `suspected`. M6 ist es nicht. M14 bricht ohne Neubau ab.
+9. Ein einzelner `suspected` Clip hat `pause_checks` und `method invalid`. M5, M10 und M13 sind `suspected` auf einer Sekunden-Uhr. M16 ist es nicht. M17 ist es. M6 ist es nicht. M14 bricht ohne Neubau ab. M20 bricht bei `fake` ab. M8 bricht ohne den Notausgang ab.
 
 ---
 
@@ -606,12 +649,13 @@ Ein separater Agent, nicht der Autor. Er hakt nur ab, was er im Diff sieht.
 2. **Acht Proben finden die Summe, nicht die Sekunde.** Stückweise Evidence auf pausierten Altbändern ist eine eigene spätere Serie, nicht Phase 1 und nicht Phase 2. KW40-Mittwoch bleibt für Fill-zu-Videozeit unbenutzbar, bis jemand CD5 auf Stückweise stellt. Eine falsch gelesene Uhr, die der Nachbar bestätigt, kann `pause_total` heben. Das ist das Restrisiko des Detektors. Sie invalidiert den Clip nicht, wenn der Nachbar widerspricht.
 3. **5 s Stitch.** Bis CD12 bleibt die Schwelle. Wer zwei Blöcke mit gleichem Präfix will, wartet länger als 5 s. Der Audit misst die echten Abstände, bevor die Schwelle fällt.
 4. **Ledger-Tabellen.** Ein vergessener Rollback lässt `day_rule_checks` stehen. PR-33 beschreibt das Löschen. Der Review prüft, dass der Rollup die Session-Zeilen der fünf Tagesregeln nicht als `violated` zählt und die Rate nicht aus Session-`hours` plus Tageszeile addiert.
-5. **Halbes Flag-Set.** 3.6 bricht ungültige Kombinationen ab. Ein Parquet vom Tages-Pfad und Regeln vom Legacy-Pfad bleiben möglich, wenn jemand die vier Flags ausmacht und `tva fills` nicht neu laufen lässt. Der PR-Text sagt die Reihenfolge.
+5. **Halbes Flag-Set.** 3.6 bricht ungültige Kombinationen ab. Die vier Tages-Pfad-Flags gehen gemeinsam aus. Ein Parquet vom Tages-Pfad und Regeln vom Legacy-Pfad bleiben möglich, wenn danach `tva fills` nicht neu läuft. Die Aufräum-Reihenfolge steht in 3.6.
 6. **DST und ETH-Datum.** Der Tagesschlüssel ist Vienna. Ein Join außen auf `session_date` kann in der Herbstwoche 25.10.–01.11.2026 und in den drei Frühlingswochen 08.–29.03. von 23:00 bis 24:00 Vienna danebenliegen. KW38–KW40 liegt davor. Der Audit berichtet beide Daten. Die Sortierung und `nominal_end` rechnen in UTC.
 7. **Notion-Seite existiert schon.** Der erste Tages-Publish überschreibt sie und sagt das im Ergebnis. Wer den alten Text behalten will, kopiert ihn vorher. Es wird keine zweite Seite angelegt. KW38–KW40 bleiben unberührt, bis CD7 anders lautet.
 8. **Proben lesen die NAS.** Nur lesen, nur die genannten Frames, nur wenn der Guard oder `--sample-clocks` an ist. Ein fehlgeschlagenes OCR der Uhr ist eine verworfene Probe, kein erfundener Offset.
-9. **CSV-Zeitzone.** Bis CD11 ist 2.3 nicht im Code. Ein Merge von PR-32 davor weist fast jeden Fill dem falschen Kern zu, sobald `+0000` keine UTC-Zeit ist. Das Pad von 30 min verdeckt denselben Fehler heute teilweise.
+9. **CSV-Zeitzone.** Bis CD11 ist 2.3 nicht im Code. Ein Merge von PR-32 davor weist fast jeden Fill dem falschen Kern zu, sobald `+0000` keine UTC-Zeit ist. Das Pad von 30 min verdeckt denselben Fehler heute teilweise. Die schriftliche Aufhebung ist nur `tz_assumption: waived` (2.3). Ohne den Vermerk bleibt das Gate zu. Das Vierer-Set wartet mindestens bis nach dem 25.10.2026.
 10. **KW41 läuft schon.** Bis zum Einschalten bleiben Mehrclip-Tage im heutigen Code falsch. 2.7 sagt, was man bis dahin nicht als wahr liest.
+11. **Minuten-Uhr.** Auf Auflösung 60 bleibt eine Pause von 31–120 s auf dem linearen Fit. Das ist die Blindzone von `PAUSE_CONFIRM_S_HM`. Eine Sekunden-Uhr hat diese Blindzone nicht. Der manuelle Blick vor PR-30 sagt, welche der beiden Uhren im Bild Sekunden hat.
 
 ---
 
@@ -668,7 +712,7 @@ Bis dahin an Mehrclip-Tagen kein `publish --notion` und die Rollup-Rate nicht al
 
 ### CD8. Session-Id und 5-s-Stitch
 
-Empfehlung: Ids nicht ändern. Die Kollision wird mit `TVA_STRICT_SESSION_ID` ein Fehler (2.9), kein Überschreiben. Die Stitch-Schwelle ändert dieser Punkt nicht. Das ist CD12. Ein Präfix in der Id wäre eine Migration aller bestehenden Ordner und bricht jeden Pfad, der `YYYY-MM-DD_HHMMSS` erwartet.
+Empfehlung: Ids nicht ändern. Die Kollision ist ein Fehler (2.9), kein Überschreiben. Der Notausgang ist `TVA_ALLOW_SESSION_ID_OVERWRITE`. Die Stitch-Schwelle ändert dieser Punkt nicht. Das ist CD12. Ein Präfix in der Id wäre eine Migration aller bestehenden Ordner und bricht jeden Pfad, der `YYYY-MM-DD_HHMMSS` erwartet.
 
 ### CD9. R-CLOSE
 
@@ -676,13 +720,13 @@ Empfehlung: pro Session lassen. `flat_by` ist null, die Regel ist unverifiable. 
 
 ### CD10. Welche echten Sessions die NAS-Parität sind
 
-Offen für den Namen. Der Inhalt ist festgelegt: eine unpausierte Session mit OCR-Fit, eine mit Dateinamen-Fallback, ohne Medien, geschwärzt, auf der NAS. CI läuft ohne sie. Bevor die Flags in Produktion an gehen, nennt Accumu die beiden Ids.
+Offen für den Namen. Der Inhalt ist festgelegt: eine unpausierte Session mit OCR-Fit, eine mit Dateinamen-Fallback, ohne Medien, geschwärzt, auf der NAS. CI läuft ohne sie. Bevor ein Flag-Set aus 3.6 in Produktion an geht, ist der Paritätslauf beider Sessions bestanden. Das Protokoll liegt unter `TVA_ROOT`: Datum, Commit, Ergebnis je Artefakt. Die Ids zu nennen reicht nicht.
 
 ### CD11. TradesViz-Zeitzone
 
 Unverifiziert. Die CSV kann `+0000` tragen. Ob das echtes UTC ist, weiß der Code nicht. Er speichert den Offset, den er sieht (`fills_mirror.py:334-363`), und prüft ihn nicht gegen das Video.
 
-Empfehlung: PR-32 bleibt gesperrt, bis an mindestens drei Fills, die im Video sichtbar sind (OCR-Uhr oder DOM), und an einem Tag nach dem 25.10.2026 bestätigt ist, dass `+0000` echtes UTC ist. Der Audit berichtet die Verschiebungen aus 2.7 und wendet sie nicht an. CD1, das Fenster und der Besitz gelten bis dahin nur als Regel unter Vorbehalt.
+Empfehlung: PR-32 bleibt gesperrt, bis an mindestens drei Fills, die im Video sichtbar sind, und an einem Tag nach dem 25.10.2026 bestätigt ist, dass `+0000` echtes UTC ist. Der Nachweis ist ein Frame oder Screenshot mit Uhr und Fill, protokolliert in `days/audit.json` (2.3). TVA liest keinen DOM. Accumu kann das Gate schriftlich aufheben. Die Aufhebung ist `tz_assumption: waived` im Audit-JSON und, falls danach gebaut wird, in `day.json`. Dieselbe Regel gilt in 2.3, PR-28 und Risiko 9. Ohne den Vermerk bleibt das Gate zu. Der Audit berichtet die Verschiebungen aus 2.7 und wendet sie nicht an. CD1, das Fenster und der Besitz gelten bis dahin nur als Regel unter Vorbehalt.
 
 ### CD12. Stitch-Schwelle
 
@@ -710,22 +754,16 @@ Nicht hier: Stückweise-Alignment (CD5), die Senkung der Stitch-Schwelle vor der
 
 ## 8. Abweichungen vom Review
 
-Drei Punkte. Alles andere aus B1–B5, W1–W15 und N1–N11 steht in den Abschnitten oben.
+Zwei Punkte, beide aus dem ersten Review. Das zweite Review hat sie akzeptiert. Die Abweichung zur Id-Kollision ist zurückgezogen: 2.9 macht den Fehler zum Default und unterscheidet die Auto-Split-Fortsetzung. Die Punkte N1–N15 des zweiten Reviews stehen in den Abschnitten oben.
 
 ### 8.1 Echte Session-Artefakte nicht nach git (W8, zweiter Satz)
 
 Der Review will eine geschwärzte echte Session ohne Medien als CI-Fixture einchecken. `docs/GOLDEN_EXCERPT.md:3-4` legt den geschwärzten Ausschnitt auf die NAS, „never in git“. Roadmap D8 (`docs/05_ROADMAP.md:161`) sperrt echtes Band gegen ein Übungskonto; die Ablage „nicht im Repository“ steht im Golden-Rezept, nicht in D8. Fills und Trades einer echten Session sind Kontobewegung, auch ohne Video.
 
-Stattdessen: der synthetische Snapshot von `main` @ `f44d864` wird eingecheckt (3.1). Die beiden echten Sessions bleiben auf der NAS. CI überspringt sie. Bevor die Flags in Produktion an gehen, müssen die Ids genannt sein (CD10). Der Vergleich (Parquet ohne Metadaten, JSON ohne die benannte Feldliste) gilt für beide.
+Stattdessen: der synthetische Snapshot von `main` @ `f44d864` wird eingecheckt (3.1), dazu die kontolose Struktur-Fixture `shapes_no_account`. Die beiden echten Sessions bleiben auf der NAS. CI überspringt sie. Bevor ein Flag-Set in Produktion an geht, ist der NAS-Lauf bestanden und das Protokoll unter `TVA_ROOT` abgelegt (CD10). Der Vergleich (Parquet ohne Metadaten, JSON ohne die benannte Feldliste) gilt für beide.
 
 ### 8.2 Der Fill-Audit läuft nicht vor dem Merge dieses Plans (B5, letzter Satz)
 
 Der Review nennt als bessere Variante, den lesenden Abgleich noch vor dem Merge dieses Plans auf der NAS auszuführen. Dieser PR ändert nur das Plan-Dokument. Im Repository liegen kein Export und keine `fills.parquet` (Abschnitt 1). Ein NAS-Lauf wäre eine Datenaktion, die der Auftrag für diesen PR ausschließt.
 
-Stattdessen ist der Fill-Audit der erste Umsetzungs-PR (PR-28) und das Gate vor PR-32. Sein Ergebnis kann 2.3 und CD11 noch ändern. Der Merge des Plans wartet nicht auf einen Lauf, den dieses Repository nicht enthält.
-
-### 8.3 Die Id-Kollision wird nur mit Flag laut (W6, M8)
-
-Der Review will, dass M8 den Fehler erwartet und nichts überschrieben wird. Heute überschreibt der zweite Ingest derselben Id bei anderer `sha256` ohne Fehler (`ingest.py:42-56`). Eine Auto-Split-Kette muss das weiter tun: `tests/test_ingest_and_pipeline.py:183-199` hängt ein neues Teil an und erwartet die längere Session, kein Abbruch.
-
-Der laute Fehler gilt deshalb nur mit `TVA_STRICT_SESSION_ID` (2.9, PR-36). Ohne Flag bleibt das heutige Überschreiben, und M8 erwartet es. Mit Flag erwartet M8 den Fehler und eine unveränderte erste Session. Aus ist der Rollback dieser Stufe (3.6). Ein immer aktiver Fehler wäre kein Flag mehr und ließe sich nicht abschalten, ohne den PR zurückzunehmen.
+Stattdessen ist der Fill-Audit der erste Umsetzungs-PR (PR-28) und das Gate vor PR-32. Sein Ergebnis kann 2.3 und CD11 noch ändern. Der Merge des Plans wartet nicht auf einen Lauf, den dieses Repository nicht enthält. Die schriftliche Aufhebung des Gates ist überall dieselbe: `tz_assumption: waived` (2.3).
