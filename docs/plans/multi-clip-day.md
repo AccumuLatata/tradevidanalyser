@@ -710,7 +710,7 @@ Nicht hier: Stückweise-Alignment (CD5), die Senkung der Stitch-Schwelle vor der
 
 ## 8. Abweichungen vom Review
 
-Zwei Punkte. Alles andere aus B1–B5, W1–W15 und N1–N11 steht in den Abschnitten oben.
+Drei Punkte. Alles andere aus B1–B5, W1–W15 und N1–N11 steht in den Abschnitten oben.
 
 ### 8.1 Echte Session-Artefakte nicht nach git (W8, zweiter Satz)
 
@@ -723,3 +723,9 @@ Stattdessen: der synthetische Snapshot von `main` @ `f44d864` wird eingecheckt (
 Der Review nennt als bessere Variante, den lesenden Abgleich noch vor dem Merge dieses Plans auf der NAS auszuführen. Dieser PR ändert nur das Plan-Dokument. Im Repository liegen kein Export und keine `fills.parquet` (Abschnitt 1). Ein NAS-Lauf wäre eine Datenaktion, die der Auftrag für diesen PR ausschließt.
 
 Stattdessen ist der Fill-Audit der erste Umsetzungs-PR (PR-28) und das Gate vor PR-32. Sein Ergebnis kann 2.3 und CD11 noch ändern. Der Merge des Plans wartet nicht auf einen Lauf, den dieses Repository nicht enthält.
+
+### 8.3 Die Id-Kollision wird nur mit Flag laut (W6, M8)
+
+Der Review will, dass M8 den Fehler erwartet und nichts überschrieben wird. Heute überschreibt der zweite Ingest derselben Id bei anderer `sha256` ohne Fehler (`ingest.py:42-56`). Eine Auto-Split-Kette muss das weiter tun: `tests/test_ingest_and_pipeline.py:183-199` hängt ein neues Teil an und erwartet die längere Session, kein Abbruch.
+
+Der laute Fehler gilt deshalb nur mit `TVA_STRICT_SESSION_ID` (2.9, PR-36). Ohne Flag bleibt das heutige Überschreiben, und M8 erwartet es. Mit Flag erwartet M8 den Fehler und eine unveränderte erste Session. Aus ist der Rollback dieser Stufe (3.6). Ein immer aktiver Fehler wäre kein Flag mehr und ließe sich nicht abschalten, ohne den PR zurückzunehmen.
