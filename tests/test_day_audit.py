@@ -585,7 +585,7 @@ def test_trades_missing_identity_columns_fail_closed(tva_root: Path) -> None:
 
 
 def test_l0_parity_helper_roundtrip() -> None:
-    from tests.l0_parity import json_files_equal, l0_variant_dir
+    from l0_parity import json_files_equal, l0_variant_dir
 
     ocr = l0_variant_dir("l0-ocr") / "session.json"
     filename = l0_variant_dir("l0-filename") / "session.json"
