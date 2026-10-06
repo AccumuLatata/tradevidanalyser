@@ -36,6 +36,10 @@ def day_manifest_enabled() -> bool:
     return env_flag(ENV_DAY_MANIFEST)
 
 
+def exclusive_fills_enabled() -> bool:
+    return env_flag(ENV_EXCLUSIVE_FILLS)
+
+
 def active_flag_names() -> list[str]:
     names = [
         ENV_PAUSE_GUARD,

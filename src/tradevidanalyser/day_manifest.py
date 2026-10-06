@@ -433,12 +433,11 @@ def build_day(
                     raise DayManifestError(f"{PAUSE_KEY_ERROR}: {record.id}")
         chosen_venue = venue_from_hint(csv_path, venue)
         try:
-            _loader, fills = load_fills(csv_path)
+            loader, fills = load_fills(csv_path)
         except Exception as exc:
             if type(exc).__name__ == "JournalIngestError":
                 raise DayManifestError(str(exc)) from exc
             raise
-        del _loader
         identities = csv_window_fill_identities(fills, day)
         identities.sort(key=_identity_sort)
         provider_name = (provider or "").strip()
@@ -456,21 +455,68 @@ def build_day(
             app_version=__version__,
         )
         fingerprint = _canonical_sha256(fp_inputs)
+        previous = load_current_day_json(root, day)
         clip_rows = [_clip_row(root, record) for record in clips]
+        outside: list[dict[str, Any]] = []
+        trades_outside = 0
+        ownership_store: dict[str, Any] = {}
+        from tradevidanalyser.flags import exclusive_fills_enabled
+
+        if exclusive_fills_enabled():
+            from tradevidanalyser.day_fills import (
+                apply_exclusive_build,
+                assign_day_ownership,
+                tz_assumption_for_build,
+            )
+
+            ownership = assign_day_ownership(
+                root,
+                day,
+                fills,
+                include_manual=include_manual,
+                loader=loader,
+            )
+            build_id = new_ulid()
+            dest = day_dir(root, day) / "builds" / build_id / "day.json"
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            cascade = apply_exclusive_build(
+                root,
+                day,
+                ownership,
+                venue=chosen_venue,
+                previous=previous,
+                build_dir=dest.parent,
+            )
+            for row in clip_rows:
+                session_id = str(row["session_id"])
+                row["cascade"] = cascade.get(session_id, "unchanged")
+                row["overlap"] = ownership.overlap.get(session_id, [])
+                row["near_boundary"] = ownership.near_boundary.get(session_id, [])
+            outside = [item.as_dict() for item in ownership.outside]
+            trades_outside = sum(
+                1
+                for trade in ownership.trades
+                if ownership.fill_owner.get(trade.entry_fill_id) is None
+            )
+            ownership_store = ownership.as_store()
+            tz_assumption = tz_assumption_for_build(root)
+        else:
+            build_id = new_ulid()
+            dest = day_dir(root, day) / "builds" / build_id / "day.json"
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            tz_assumption = TZ_ASSUMPTION_CSV
         payload = {
             "schema_version": SCHEMA_VERSION,
             "date": day.isoformat(),
-            "tz_assumption": TZ_ASSUMPTION_CSV,
+            "tz_assumption": tz_assumption,
             "executions_sha256": media.sha256_file(csv_path),
             "input_fingerprint": fingerprint,
             "fingerprint_inputs": fp_inputs,
             "clips": clip_rows,
-            "outside": [],
-            "trades_outside_clips": 0,
+            "outside": outside,
+            "trades_outside_clips": trades_outside,
+            "ownership": ownership_store,
         }
-        build_id = new_ulid()
-        dest = day_dir(root, day) / "builds" / build_id / "day.json"
-        dest.parent.mkdir(parents=True, exist_ok=True)
         store.write_json(dest, payload)
         _replace_current(root, day, build_id)
         return DayBuildResult(
