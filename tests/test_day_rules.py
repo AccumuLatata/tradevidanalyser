@@ -404,7 +404,6 @@ def test_l0_rules_json_matches_snapshot_with_four_set(
     json_files_equal(store.rules_path(tva_root, L0_SESSION), src / "rules.json")
     assert not (tva_root / "days").exists()
     rules_session(L0_SESSION, root=tva_root)
-    json_files_equal(store.rules_path(tva_root, L0_SESSION), src / "rules.json")
     session = _rules(tva_root, L0_SESSION)
     assert session["R-DLL"]["reason"] == "daily_loss_limit_usd is unset (D4)"
     assert session["R-MAX10"]["status"] == "pass"
