@@ -38,6 +38,7 @@ from tradevidanalyser.pipeline import (
 from tradevidanalyser.serve import create_app, token_required_for_host
 from tradevidanalyser.watch import watch
 from tradevidanalyser.wer import score_session
+from tradevidanalyser.day_audit import run_day_audit
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -191,6 +192,44 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_rep.add_argument("session")
     p_rep.add_argument("--provider", default=None, help="fake (default) or grok")
+
+    p_day = sub.add_parser("day", help="day-path read tools")
+    day_sub = p_day.add_subparsers(dest="day_cmd", required=True)
+    p_audit = day_sub.add_parser(
+        "audit",
+        help="read-only fills audit → days/audit.json (does not rewrite sessions)",
+    )
+    p_audit.add_argument(
+        "--from",
+        dest="date_from",
+        default="2026-09-14",
+        metavar="YYYY-MM-DD",
+        help="first Vienna calendar day (default 2026-09-14, KW38)",
+    )
+    p_audit.add_argument(
+        "--to",
+        dest="date_to",
+        default=None,
+        metavar="YYYY-MM-DD",
+        help="last Vienna calendar day (default: vienna_today())",
+    )
+    p_audit.add_argument(
+        "--executions",
+        type=Path,
+        default=None,
+        help="TradesViz executions CSV; omit for fills_match=not_run",
+    )
+    p_audit.add_argument(
+        "--loader",
+        choices=("unknown", "mirror", "import"),
+        default="unknown",
+        help="reported parquet loader (default unknown; parquet does not store it)",
+    )
+    p_audit.add_argument(
+        "--clock-note",
+        default=None,
+        help="manual look at the large clock and ROI clock (PR-28; no --sample-clocks)",
+    )
 
     p_led = sub.add_parser("ledger", help="DuckDB coaching ledger")
     led_sub = p_led.add_subparsers(dest="ledger_cmd", required=True)
@@ -387,6 +426,20 @@ def main(argv: list[str] | None = None) -> int:
             )
             _emit(result.as_dict(), as_json=True)
             return 0
+        if args.cmd == "day":
+            if args.day_cmd == "audit":
+                result = run_day_audit(
+                    root=root,
+                    date_from=args.date_from,
+                    date_to=args.date_to,
+                    executions=args.executions,
+                    loader=args.loader,
+                    clock_note=args.clock_note,
+                )
+                _emit(result.as_dict(), as_json=True)
+                return 0
+            parser.error(f"unknown day command {args.day_cmd}")
+            return 2
         if args.cmd == "ledger":
             if args.ledger_cmd == "add":
                 result = ledger_add(args.session, root=root)
