@@ -1,0 +1,91 @@
+{
+  "schema_version": "1",
+  "session_id": "2026-05-14_160300",
+  "provider": "fake",
+  "model": "none",
+  "prompt_version": "debrief-fake-v1",
+  "sections": [
+    {
+      "id": "source",
+      "title": "Source",
+      "kind": "facts",
+      "body": "Language de.\nTrades file present.",
+      "cites": []
+    },
+    {
+      "id": "day",
+      "title": "Day",
+      "kind": "prose",
+      "body": "Reviewed the tape against T01.",
+      "cites": [
+        "T01"
+      ]
+    },
+    {
+      "id": "trades",
+      "title": "Trades",
+      "kind": "facts",
+      "body": "| Trade | Side | Instrument | Entry | Exit | PnL | Clip |\n| --- | --- | --- | --- | --- | --- | --- |\n| T01 | long | MNQ | 29584 | 29585 | 2 |  |\n| T02 | long | MNQ | 29584.25 | 29585.25 | 2 |  |",
+      "cites": [
+        "T01",
+        "T02"
+      ]
+    },
+    {
+      "id": "rules",
+      "title": "Rules",
+      "kind": "facts",
+      "body": "- Daily loss limit: unverifiable\n- Max trades: pass\n- Consecutive-loss timeout: pass\n- Post-loss block: pass\n- Re-entry: pass\n- Flat-by: unverifiable\n- Playbook: pass\n- Defined stop/target: violated\n- Counter-trend: unverifiable\n- Arrival close: violated\n- Stop/target moves: unverifiable\n- Hourly check-in: unverifiable\n- Trade zone: unverifiable\n- Bias: pass\n- Tilt: unverifiable",
+      "cites": [
+        "R-DLL",
+        "R-MAX10",
+        "R-3L30",
+        "R-5M",
+        "R-REENTRY",
+        "R-CLOSE",
+        "R-PLAYBOOK",
+        "R-DEFINED",
+        "R-3C-CT",
+        "R-ARRIVAL",
+        "R-SLTP",
+        "R-HOURLY",
+        "R-ZONE",
+        "R-BIAS",
+        "R-TILT"
+      ]
+    },
+    {
+      "id": "brief_vs_behaviour",
+      "title": "Brief vs behaviour",
+      "kind": "prose",
+      "body": "",
+      "cites": []
+    },
+    {
+      "id": "observations",
+      "title": "Observations",
+      "kind": "prose",
+      "body": "Notes recorded for T01.",
+      "cites": [
+        "T01"
+      ]
+    },
+    {
+      "id": "learnings",
+      "title": "Learnings",
+      "kind": "prose",
+      "body": "Name the playbook before entry (T01).\nState stop and target before entry (T01).\nCool down after tilt language (T01).",
+      "cites": [
+        "T01"
+      ]
+    },
+    {
+      "id": "gaps",
+      "title": "Gaps",
+      "kind": "facts",
+      "body": "None.",
+      "cites": []
+    }
+  ],
+  "gaps": []
+}

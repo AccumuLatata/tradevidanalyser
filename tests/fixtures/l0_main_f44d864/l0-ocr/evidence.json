@@ -1,0 +1,213 @@
+{
+  "schema_version": "1",
+  "provider": "fake",
+  "model": "keyword-v1",
+  "prompt_version": "stated-keyword-v1",
+  "session_id": "2026-05-14_160300",
+  "trades": [
+    {
+      "tva_trade_id": "T01",
+      "window": {
+        "t0": 0.0,
+        "t1": 2.0
+      },
+      "commentary": [
+        "seg_001"
+      ],
+      "stated": {
+        "setup": {
+          "value": "ONH Touch",
+          "seg": "seg_001"
+        },
+        "bias": {
+          "value": "Bias long",
+          "seg": "seg_001"
+        },
+        "stop_raw": {
+          "value": "Stop unter dem Level",
+          "seg": "seg_001"
+        },
+        "target_raw": null,
+        "playbook": {
+          "value": "Playbook ONH Touch",
+          "seg": "seg_001"
+        }
+      },
+      "markers": [
+        {
+          "t": 0.0,
+          "name": "open"
+        }
+      ],
+      "frames": [],
+      "ocr": [
+        {
+          "t": 0.0,
+          "roi": "clock",
+          "text": "16:03:01",
+          "parsed": "2026-05-14T16:03:01.800000+02:00"
+        },
+        {
+          "t": 0.2,
+          "roi": "clock",
+          "text": "16:03:02",
+          "parsed": "2026-05-14T16:03:02+02:00"
+        },
+        {
+          "t": 0.4,
+          "roi": "clock",
+          "text": "16:03:02",
+          "parsed": "2026-05-14T16:03:02.200000+02:00"
+        },
+        {
+          "t": 0.6,
+          "roi": "clock",
+          "text": "16:03:02",
+          "parsed": "2026-05-14T16:03:02.400000+02:00"
+        },
+        {
+          "t": 0.8,
+          "roi": "clock",
+          "text": "16:03:02",
+          "parsed": "2026-05-14T16:03:02.600000+02:00"
+        },
+        {
+          "t": 1.0,
+          "roi": "clock",
+          "text": "16:03:02",
+          "parsed": "2026-05-14T16:03:02.800000+02:00"
+        },
+        {
+          "t": 1.2,
+          "roi": "clock",
+          "text": "16:03:03",
+          "parsed": "2026-05-14T16:03:03+02:00"
+        },
+        {
+          "t": 1.4,
+          "roi": "clock",
+          "text": "16:03:03",
+          "parsed": "2026-05-14T16:03:03.200000+02:00"
+        },
+        {
+          "t": 1.6,
+          "roi": "clock",
+          "text": "16:03:03",
+          "parsed": "2026-05-14T16:03:03.400000+02:00"
+        },
+        {
+          "t": 1.8,
+          "roi": "clock",
+          "text": "16:03:03",
+          "parsed": "2026-05-14T16:03:03.600000+02:00"
+        }
+      ],
+      "clip": null,
+      "alignment_confidence": 1.0,
+      "alignment": null,
+      "gaps": []
+    },
+    {
+      "tva_trade_id": "T02",
+      "window": {
+        "t0": 0.0,
+        "t1": 2.0
+      },
+      "commentary": [
+        "seg_001"
+      ],
+      "stated": {
+        "setup": {
+          "value": "ONH Touch",
+          "seg": "seg_001"
+        },
+        "bias": {
+          "value": "Bias long",
+          "seg": "seg_001"
+        },
+        "stop_raw": {
+          "value": "Stop unter dem Level",
+          "seg": "seg_001"
+        },
+        "target_raw": null,
+        "playbook": {
+          "value": "Playbook ONH Touch",
+          "seg": "seg_001"
+        }
+      },
+      "markers": [
+        {
+          "t": 0.0,
+          "name": "open"
+        }
+      ],
+      "frames": [],
+      "ocr": [
+        {
+          "t": 0.0,
+          "roi": "clock",
+          "text": "16:03:01",
+          "parsed": "2026-05-14T16:03:01.800000+02:00"
+        },
+        {
+          "t": 0.2,
+          "roi": "clock",
+          "text": "16:03:02",
+          "parsed": "2026-05-14T16:03:02+02:00"
+        },
+        {
+          "t": 0.4,
+          "roi": "clock",
+          "text": "16:03:02",
+          "parsed": "2026-05-14T16:03:02.200000+02:00"
+        },
+        {
+          "t": 0.6,
+          "roi": "clock",
+          "text": "16:03:02",
+          "parsed": "2026-05-14T16:03:02.400000+02:00"
+        },
+        {
+          "t": 0.8,
+          "roi": "clock",
+          "text": "16:03:02",
+          "parsed": "2026-05-14T16:03:02.600000+02:00"
+        },
+        {
+          "t": 1.0,
+          "roi": "clock",
+          "text": "16:03:02",
+          "parsed": "2026-05-14T16:03:02.800000+02:00"
+        },
+        {
+          "t": 1.2,
+          "roi": "clock",
+          "text": "16:03:03",
+          "parsed": "2026-05-14T16:03:03+02:00"
+        },
+        {
+          "t": 1.4,
+          "roi": "clock",
+          "text": "16:03:03",
+          "parsed": "2026-05-14T16:03:03.200000+02:00"
+        },
+        {
+          "t": 1.6,
+          "roi": "clock",
+          "text": "16:03:03",
+          "parsed": "2026-05-14T16:03:03.400000+02:00"
+        },
+        {
+          "t": 1.8,
+          "roi": "clock",
+          "text": "16:03:03",
+          "parsed": "2026-05-14T16:03:03.600000+02:00"
+        }
+      ],
+      "clip": null,
+      "alignment_confidence": 1.0,
+      "alignment": null,
+      "gaps": []
+    }
+  ]
+}

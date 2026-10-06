@@ -1,0 +1,163 @@
+{
+  "schema_version": "1",
+  "session_id": "2026-05-14_160300",
+  "rules": [
+    {
+      "rule": "R-DLL",
+      "status": "unverifiable",
+      "evidence": {
+        "daily_pnl": 4.0,
+        "limit_usd": null,
+        "trade_ids": [
+          "T01",
+          "T02"
+        ],
+        "fees_unknown": false,
+        "unknown_pnl_trades": []
+      },
+      "reason": "daily_loss_limit_usd is unset (D4)"
+    },
+    {
+      "rule": "R-MAX10",
+      "status": "pass",
+      "evidence": {
+        "count": 2,
+        "max": 10,
+        "trade_ids": [
+          "T01",
+          "T02"
+        ]
+      },
+      "reason": null
+    },
+    {
+      "rule": "R-3L30",
+      "status": "pass",
+      "evidence": {
+        "n": 3,
+        "minutes": 30,
+        "breaches": []
+      },
+      "reason": null
+    },
+    {
+      "rule": "R-5M",
+      "status": "pass",
+      "evidence": {
+        "minutes": 5,
+        "breaches": []
+      },
+      "reason": null
+    },
+    {
+      "rule": "R-REENTRY",
+      "status": "pass",
+      "evidence": {
+        "window_s": 120.0,
+        "max": 1,
+        "block_minutes": 5,
+        "breaches": []
+      },
+      "reason": null
+    },
+    {
+      "rule": "R-CLOSE",
+      "status": "unverifiable",
+      "evidence": {
+        "flat_by": null,
+        "open_trades": []
+      },
+      "reason": "flat_by is unset"
+    },
+    {
+      "rule": "R-PLAYBOOK",
+      "status": "pass",
+      "evidence": {
+        "segs": [
+          "seg_001"
+        ],
+        "trade_ids": []
+      },
+      "reason": null
+    },
+    {
+      "rule": "R-DEFINED",
+      "status": "violated",
+      "evidence": {
+        "segs": [
+          "seg_001"
+        ],
+        "trade_ids": [
+          "T01",
+          "T02"
+        ]
+      },
+      "reason": "stop or target missing from pre-entry window"
+    },
+    {
+      "rule": "R-3C-CT",
+      "status": "unverifiable",
+      "evidence": {
+        "segs": [],
+        "trade_ids": [],
+        "passed": []
+      },
+      "reason": "no 3c or counter-trend speech; journal triggers later"
+    },
+    {
+      "rule": "R-ARRIVAL",
+      "status": "violated",
+      "evidence": {
+        "segs": [],
+        "trade_ids": [
+          "T01",
+          "T02"
+        ],
+        "passed": []
+      },
+      "reason": "no arrival-candle close cue"
+    },
+    {
+      "rule": "R-SLTP",
+      "status": "unverifiable",
+      "evidence": {
+        "segs": []
+      },
+      "reason": "order modifications not in TradesViz; needs a venue adapter"
+    },
+    {
+      "rule": "R-HOURLY",
+      "status": "unverifiable",
+      "evidence": {
+        "segs": []
+      },
+      "reason": "alignment confidence below threshold"
+    },
+    {
+      "rule": "R-ZONE",
+      "status": "unverifiable",
+      "evidence": {
+        "segs": []
+      },
+      "reason": "alignment confidence below threshold"
+    },
+    {
+      "rule": "R-BIAS",
+      "status": "pass",
+      "evidence": {
+        "segs": [
+          "seg_001"
+        ]
+      },
+      "reason": null
+    },
+    {
+      "rule": "R-TILT",
+      "status": "unverifiable",
+      "evidence": {
+        "segs": []
+      },
+      "reason": "no tilt language"
+    }
+  ]
+}

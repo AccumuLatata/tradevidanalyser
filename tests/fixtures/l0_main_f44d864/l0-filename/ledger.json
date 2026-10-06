@@ -1,0 +1,168 @@
+{
+  "sessions": [
+    {
+      "session_id": "2026-05-14_160300",
+      "session_date": "2026-05-14",
+      "iso_week": "2026-W20",
+      "year_month": "2026-05",
+      "start_wallclock_vienna": "2026-05-14T16:03:00+02:00",
+      "duration_s": 2.0,
+      "language": "de",
+      "trade_count": 2,
+      "hours": 0.0005555555555555556
+    }
+  ],
+  "trades": [
+    {
+      "session_id": "2026-05-14_160300",
+      "tva_trade_id": "T01",
+      "trade_id": "jt:scaleIn4:0",
+      "entry_fill_id": "tv:000000:scaleIn4:20260514T140325Z:buy:29584.0:1",
+      "direction": "long",
+      "instrument": "MNQ",
+      "entry_price": 29584.0,
+      "exit_price": 29585.0,
+      "net_pnl_currency": 2.0,
+      "status": "closed",
+      "venue": "amp",
+      "stated_setup": "ONH Touch",
+      "stated_playbook": "Playbook ONH Touch",
+      "lab_token": null,
+      "tag_alignment": null,
+      "stated_lab_agree": null
+    },
+    {
+      "session_id": "2026-05-14_160300",
+      "tva_trade_id": "T02",
+      "trade_id": "jt:scaleIn4:1",
+      "entry_fill_id": "tv:000001:scaleIn4:20260514T140340Z:buy:29584.25:1",
+      "direction": "long",
+      "instrument": "MNQ",
+      "entry_price": 29584.25,
+      "exit_price": 29585.25,
+      "net_pnl_currency": 2.0,
+      "status": "closed",
+      "venue": "amp",
+      "stated_setup": "ONH Touch",
+      "stated_playbook": "Playbook ONH Touch",
+      "lab_token": null,
+      "tag_alignment": null,
+      "stated_lab_agree": null
+    }
+  ],
+  "rule_checks": [
+    {
+      "session_id": "2026-05-14_160300",
+      "rule": "R-DLL",
+      "status": "unverifiable",
+      "reason": "daily_loss_limit_usd is unset (D4)"
+    },
+    {
+      "session_id": "2026-05-14_160300",
+      "rule": "R-MAX10",
+      "status": "pass",
+      "reason": null
+    },
+    {
+      "session_id": "2026-05-14_160300",
+      "rule": "R-3L30",
+      "status": "pass",
+      "reason": null
+    },
+    {
+      "session_id": "2026-05-14_160300",
+      "rule": "R-5M",
+      "status": "pass",
+      "reason": null
+    },
+    {
+      "session_id": "2026-05-14_160300",
+      "rule": "R-REENTRY",
+      "status": "pass",
+      "reason": null
+    },
+    {
+      "session_id": "2026-05-14_160300",
+      "rule": "R-CLOSE",
+      "status": "unverifiable",
+      "reason": "flat_by is unset"
+    },
+    {
+      "session_id": "2026-05-14_160300",
+      "rule": "R-PLAYBOOK",
+      "status": "pass",
+      "reason": null
+    },
+    {
+      "session_id": "2026-05-14_160300",
+      "rule": "R-DEFINED",
+      "status": "violated",
+      "reason": "stop or target missing from pre-entry window"
+    },
+    {
+      "session_id": "2026-05-14_160300",
+      "rule": "R-3C-CT",
+      "status": "unverifiable",
+      "reason": "no 3c or counter-trend speech; journal triggers later"
+    },
+    {
+      "session_id": "2026-05-14_160300",
+      "rule": "R-ARRIVAL",
+      "status": "violated",
+      "reason": "no arrival-candle close cue"
+    },
+    {
+      "session_id": "2026-05-14_160300",
+      "rule": "R-SLTP",
+      "status": "unverifiable",
+      "reason": "order modifications not in TradesViz; needs a venue adapter"
+    },
+    {
+      "session_id": "2026-05-14_160300",
+      "rule": "R-HOURLY",
+      "status": "unverifiable",
+      "reason": "alignment confidence below threshold"
+    },
+    {
+      "session_id": "2026-05-14_160300",
+      "rule": "R-ZONE",
+      "status": "unverifiable",
+      "reason": "alignment confidence below threshold"
+    },
+    {
+      "session_id": "2026-05-14_160300",
+      "rule": "R-BIAS",
+      "status": "pass",
+      "reason": null
+    },
+    {
+      "session_id": "2026-05-14_160300",
+      "rule": "R-TILT",
+      "status": "unverifiable",
+      "reason": "no tilt language"
+    }
+  ],
+  "events": [
+    {
+      "session_id": "2026-05-14_160300",
+      "t": 0.0,
+      "kind": "bias_statement",
+      "seg": "seg_001",
+      "text": "Bias long. Playbook ONH Touch. Stop unter dem Level. Check-in zur halben Stunde."
+    },
+    {
+      "session_id": "2026-05-14_160300",
+      "t": 0.0,
+      "kind": "hourly_checkin",
+      "seg": "seg_001",
+      "text": "Bias long. Playbook ONH Touch. Stop unter dem Level. Check-in zur halben Stunde."
+    },
+    {
+      "session_id": "2026-05-14_160300",
+      "t": 0.0,
+      "kind": "rule_mention",
+      "seg": "seg_001",
+      "text": "Bias long. Playbook ONH Touch. Stop unter dem Level. Check-in zur halben Stunde."
+    }
+  ]
+}

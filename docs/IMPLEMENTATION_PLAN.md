@@ -235,9 +235,11 @@ loader that is contract-tested against a committed synthetic CSV and its
 expected parquet produced once by the ThesisTester function. Mirror and
 import must produce identical frames (test).
 
-Clock: TradesViz timestamps are UTC with explicit offset. `session_date`
-is ThesisTester's trading session date (ETH 18:00 ET). Video wall-clock is
-Europe/Vienna. The join happens on UTC instants, never on calendar dates.
+Clock: TradesViz timestamps are unverified (see CD11). The loader requires an
+explicit offset and stores UTC; whether `+0000` is true UTC is not confirmed.
+`session_date` is ThesisTester's trading session date (ETH 18:00 ET). Video
+wall-clock is Europe/Vienna. The join happens on UTC instants, never on
+calendar dates.
 
 ### 3.5 Alignment (TVA5)
 

@@ -1,0 +1,91 @@
+{
+  "schema_version": "1",
+  "id": "2026-05-14_160300",
+  "recording": {
+    "path": "recordings/2026-05-14 16-03-00.mp4",
+    "sha256": "4d8044c5f3cd7796418d6552d071dedfa5e86cac2caf677fd91b9c509823e621",
+    "start_wallclock_vienna": "2026-05-14T16:03:00+02:00",
+    "duration_s": 2.0,
+    "tracks": [
+      "SoundHandler"
+    ],
+    "chapters": [
+      {
+        "t": 0.0,
+        "name": "open"
+      }
+    ],
+    "filename": "2026-05-14 16-03-00.mp4",
+    "parts": []
+  },
+  "language": "de",
+  "alignment": {
+    "offset_s": 1.8,
+    "drift_s_per_h": 0.0,
+    "confidence": 1.0,
+    "method": "ocr_clock",
+    "samples": [
+      {
+        "video_t": 0.0,
+        "ocr_text": "16:03:01",
+        "parsed_wallclock": "2026-05-14T16:03:01.800000+02:00",
+        "residual_s": 0.0
+      },
+      {
+        "video_t": 0.2,
+        "ocr_text": "16:03:02",
+        "parsed_wallclock": "2026-05-14T16:03:02+02:00",
+        "residual_s": 0.0
+      },
+      {
+        "video_t": 0.4,
+        "ocr_text": "16:03:02",
+        "parsed_wallclock": "2026-05-14T16:03:02.200000+02:00",
+        "residual_s": 0.0
+      },
+      {
+        "video_t": 0.6,
+        "ocr_text": "16:03:02",
+        "parsed_wallclock": "2026-05-14T16:03:02.400000+02:00",
+        "residual_s": 0.0
+      },
+      {
+        "video_t": 0.8,
+        "ocr_text": "16:03:02",
+        "parsed_wallclock": "2026-05-14T16:03:02.600000+02:00",
+        "residual_s": 0.0
+      },
+      {
+        "video_t": 1.0,
+        "ocr_text": "16:03:02",
+        "parsed_wallclock": "2026-05-14T16:03:02.800000+02:00",
+        "residual_s": 0.0
+      },
+      {
+        "video_t": 1.2,
+        "ocr_text": "16:03:03",
+        "parsed_wallclock": "2026-05-14T16:03:03+02:00",
+        "residual_s": 0.0
+      },
+      {
+        "video_t": 1.4,
+        "ocr_text": "16:03:03",
+        "parsed_wallclock": "2026-05-14T16:03:03.200000+02:00",
+        "residual_s": 0.0
+      },
+      {
+        "video_t": 1.6,
+        "ocr_text": "16:03:03",
+        "parsed_wallclock": "2026-05-14T16:03:03.400000+02:00",
+        "residual_s": 0.0
+      },
+      {
+        "video_t": 1.8,
+        "ocr_text": "16:03:03",
+        "parsed_wallclock": "2026-05-14T16:03:03.600000+02:00",
+        "residual_s": 0.0
+      }
+    ]
+  },
+  "app_version": "0.1.0"
+}

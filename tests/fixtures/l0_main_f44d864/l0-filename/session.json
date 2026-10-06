@@ -1,0 +1,30 @@
+{
+  "schema_version": "1",
+  "id": "2026-05-14_160300",
+  "recording": {
+    "path": "recordings/2026-05-14 16-03-00.mp4",
+    "sha256": "4d8044c5f3cd7796418d6552d071dedfa5e86cac2caf677fd91b9c509823e621",
+    "start_wallclock_vienna": "2026-05-14T16:03:00+02:00",
+    "duration_s": 2.0,
+    "tracks": [
+      "SoundHandler"
+    ],
+    "chapters": [
+      {
+        "t": 0.0,
+        "name": "open"
+      }
+    ],
+    "filename": "2026-05-14 16-03-00.mp4",
+    "parts": []
+  },
+  "language": "de",
+  "alignment": {
+    "offset_s": 0.0,
+    "drift_s_per_h": 0.0,
+    "confidence": 0.6,
+    "method": "filename",
+    "samples": []
+  },
+  "app_version": "0.1.0"
+}
