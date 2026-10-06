@@ -5,6 +5,7 @@ import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -26,6 +27,7 @@ from tradevidanalyser.flags import (
     require_allowed_flag_set,
 )
 from tradevidanalyser.ingest import ingest
+from tradevidanalyser.ledger import ledger_db_path
 from tradevidanalyser.ocr import OcrRow, clock_text_resolution, write_ocr_parquet
 from tradevidanalyser.pause_guard import (
     FAKE_PROVIDER_ERROR,
@@ -33,6 +35,7 @@ from tradevidanalyser.pause_guard import (
     MANUAL_SUSPECTED_ERROR,
     PAUSE_DETECTABLE_FROM_HM_S,
     PAUSE_DETECTABLE_FROM_S,
+    SCHEMA_VERSION,
     detect_pauses,
     ensure_pause_check,
     key_matches,
@@ -41,6 +44,7 @@ from tradevidanalyser.pause_guard import (
     run_pause_guard,
     sample_times,
     set_clock_reader,
+    suspected_unforced,
     write_pause_check,
 )
 from tradevidanalyser.pipeline import (
@@ -92,13 +96,55 @@ def _drop_l0(payload: object) -> object:
     return payload
 
 
+def _jsonable(value: object) -> object:
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {key: _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, bytes):
+        return value.decode("utf-8")
+    return value
+
+
+def _dump_ledger(root: Path, session_id: str) -> dict:
+    path = ledger_db_path(root)
+    con = duckdb.connect(str(path), read_only=True)
+    try:
+        payload: dict[str, list] = {}
+        for table in ("sessions", "trades", "rule_checks", "events"):
+            rows = con.execute(
+                f"SELECT * FROM {table} WHERE session_id = ? ORDER BY 1",
+                [session_id],
+            ).fetchall()
+            cols = [col[0] for col in con.description]
+            payload[table] = [_jsonable(dict(zip(cols, row, strict=True))) for row in rows]
+    finally:
+        con.close()
+    return payload
+
+
+def _posix_store_paths(payload: object) -> object:
+    """L0 snapshots use forward slashes; Windows ingest may store backslashes."""
+    if isinstance(payload, dict):
+        out = {key: _posix_store_paths(value) for key, value in payload.items()}
+        path = out.get("path")
+        if isinstance(path, str) and not path.startswith("http"):
+            out["path"] = path.replace("\\", "/")
+        return out
+    if isinstance(payload, list):
+        return [_posix_store_paths(item) for item in payload]
+    return payload
+
+
 def _canonical(payload: object) -> str:
     return json.dumps(_drop_l0(payload), sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 
 
 def _json_files_equal(left: Path, right: Path) -> None:
-    a = json.loads(left.read_text(encoding="utf-8"))
-    b = json.loads(right.read_text(encoding="utf-8"))
+    a = _posix_store_paths(json.loads(left.read_text(encoding="utf-8")))
+    b = _posix_store_paths(json.loads(right.read_text(encoding="utf-8")))
     if _canonical(a) != _canonical(b):
         raise AssertionError(f"json differs: {left} vs {right}")
 
@@ -219,6 +265,17 @@ def test_m5_seconds_300s_suspected(tva_root: Path) -> None:
     assert check.pause_total_s is not None
     assert check.pause_total_s > 30
     assert key_matches(check, record)
+
+
+def test_downward_step_is_unverifiable_not_suspected(tva_root: Path) -> None:
+    record = _session(tva_root)
+
+    def y_at(video_t: float) -> float:
+        return -20.0 if video_t >= 250.0 else 0.0
+
+    check = detect_pauses(record, root=tva_root, reader=_y_reader(START, y_at))
+    assert check.pause_check == "unverifiable"
+    assert check.pause_check != "suspected"
 
 
 def test_m6_unconfirmed_outlier_not_suspected(tva_root: Path) -> None:
@@ -357,6 +414,20 @@ def test_align_flag_off_does_not_write_pause_checks(
     assert loaded.alignment.method == "filename"
 
 
+def test_align_flag_off_cli_ignores_leftover_pause_checks(
+    tva_root: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    monkeypatch.delenv(ENV_PAUSE_GUARD, raising=False)
+    record = _session(tva_root)
+    leftover = detect_pauses(record, root=tva_root, reader=_y_reader(START, lambda _t: 0.0))
+    write_pause_check(tva_root, leftover)
+    assert main(["--root", str(tva_root), "align", record.id]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["method"] == "filename"
+    assert "pause_check" not in payload
+    assert "override" not in payload
+
+
 def test_align_suspected_writes_invalid(tva_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(ENV_PAUSE_GUARD, "1")
     record = _session(tva_root)
@@ -409,6 +480,49 @@ def test_manual_offset_suspected_requires_force(
     check = load_pause_check(tva_root, record.id)
     assert check is not None
     assert check.override == "force"
+
+
+def test_suspected_check_without_invalid_does_not_filename_map(
+    tva_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Plan §1.10 / §3.4: pause_checks suspected + alignment None must not map."""
+    monkeypatch.setenv(ENV_PAUSE_GUARD, "1")
+    record = _session(tva_root)
+    _write_trades(tva_root, record.id)
+    set_clock_reader(_y_reader(START, _step_y(300.0, 300.0)))
+    check = detect_pauses(
+        record, root=tva_root, reader=_y_reader(START, _step_y(300.0, 300.0))
+    )
+    assert check.pause_check == "suspected"
+    assert suspected_unforced(check)
+    write_pause_check(tva_root, check)
+    assert store.load_session(tva_root, record.id).alignment is None
+    result = evidence_session(record.id, root=tva_root)
+    assert result.status == "skipped"
+    assert result.reason == ALIGNMENT_INVALID_REASON
+    assert not store.evidence_path(tva_root, record.id).is_file()
+    loaded = store.load_session(tva_root, record.id)
+    assert loaded.alignment is not None
+    assert loaded.alignment.method == "invalid"
+
+
+def test_corrupt_override_is_missing_not_trusted(tva_root: Path) -> None:
+    record = _session(tva_root)
+    set_clock_reader(_y_reader(START, lambda _t: 0.0))
+    check = detect_pauses(record, root=tva_root, reader=_y_reader(START, lambda _t: 0.0))
+    payload = check.as_dict()
+    payload["override"] = "please"
+    store.write_json(pause_checks_path(tva_root, record.id), payload)
+    assert load_pause_check(tva_root, record.id, allow_fake=True) is None
+    payload["override"] = None
+    payload["schema_version"] = "2"
+    store.write_json(pause_checks_path(tva_root, record.id), payload)
+    assert load_pause_check(tva_root, record.id, allow_fake=True) is None
+    payload["schema_version"] = SCHEMA_VERSION
+    store.write_json(pause_checks_path(tva_root, record.id), payload)
+    loaded = load_pause_check(tva_root, record.id, allow_fake=True)
+    assert loaded is not None
+    assert loaded.schema_version == SCHEMA_VERSION
 
 
 def test_m5_no_evidence_windows(tva_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -639,6 +753,10 @@ def test_l0_with_guard_on_matches_snapshot(
             "debrief.json",
         ):
             _json_or_parquet(dest / filename, src / filename)
+        got_ledger = _dump_ledger(root, session_id)
+        want_ledger = json.loads((src / "ledger.json").read_text(encoding="utf-8"))
+        if _canonical(got_ledger) != _canonical(want_ledger):
+            raise AssertionError(f"ledger differs for {name}")
         record = store.load_session(root, session_id)
         report = DebriefReport.model_validate(
             store.read_json(store.debrief_json_path(root, session_id))

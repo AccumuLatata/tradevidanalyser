@@ -22,7 +22,7 @@ from tradevidanalyser.ocr import (
     get_ocr_provider,
     parse_clock,
 )
-from tradevidanalyser.schema import Alignment, SessionRecord
+from tradevidanalyser.schema import Alignment, SessionRecord, alignment_is_invalid
 
 SCHEMA_VERSION = "1"
 AGREE_S = 5.0
@@ -137,6 +137,11 @@ def key_matches(check: PauseCheck, record: SessionRecord) -> bool:
     if tuple(check.part_shas) != parts:
         return False
     return math.isclose(float(check.duration_s), duration, abs_tol=KEY_DURATION_TOL)
+
+
+def suspected_unforced(check: PauseCheck) -> bool:
+    """True when the clip is suspected and override is not force (plan §2.2 / §1.10)."""
+    return check.pause_check == "suspected" and check.override != "force"
 
 
 def load_pause_check(
@@ -349,6 +354,8 @@ def ensure_pause_check(
     """Load a matching pause_checks file, or run the guard / abort (plan §2.2)."""
     loaded = load_pause_check(root, record.id)
     if loaded is not None and key_matches(loaded, record):
+        if apply_alignment:
+            _apply_suspected_alignment(root, record, loaded)
         return loaded
     if not _video_readable(record, root) and (reader or get_clock_reader()) is None:
         _require_can_sample(record, root, reader=reader)
@@ -356,6 +363,15 @@ def ensure_pause_check(
     return run_pause_guard(
         record, root=root, reader=reader, apply_alignment=apply_alignment
     )
+
+
+def _apply_suspected_alignment(root: Path, record: SessionRecord, check: PauseCheck) -> None:
+    """Keep session.alignment in sync with pause_checks (plan §1.10 / §2.2)."""
+    if not suspected_unforced(check):
+        return
+    if alignment_is_invalid(record.alignment):
+        return
+    _write_invalid_alignment(root, record)
 
 
 def sample_clocks_readonly(
@@ -678,9 +694,14 @@ def _from_payload(raw: dict[str, Any]) -> PauseCheck | None:
     try:
         accepted = [_sample_from_payload(item) for item in raw.get("accepted_samples") or []]
         rejected = [_sample_from_payload(item) for item in raw.get("rejected_samples") or []]
+        version = raw.get("schema_version")
+        if version is None:
+            version = SCHEMA_VERSION
+        if str(version) != SCHEMA_VERSION:
+            return None
         override = raw.get("override")
         if override not in {None, "force"}:
-            override = None
+            return None
         status = raw.get("pause_check")
         if status not in {"clear", "suspected", "unverifiable"}:
             return None
@@ -699,7 +720,7 @@ def _from_payload(raw: dict[str, Any]) -> PauseCheck | None:
             rejected_samples=rejected,
             fit_before=raw.get("fit_before") if isinstance(raw.get("fit_before"), dict) else None,
             override=override,
-            schema_version=str(raw.get("schema_version") or SCHEMA_VERSION),
+            schema_version=SCHEMA_VERSION,
         )
     except (KeyError, TypeError, ValueError):
         return None

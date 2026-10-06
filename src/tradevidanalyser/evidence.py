@@ -411,10 +411,18 @@ def evidence_session(
             f"session.json id {record.id!r} does not match directory {session_id!r}"
         )
     if pause_guard_enabled():
-        from tradevidanalyser.pause_guard import ensure_pause_check
+        from tradevidanalyser.pause_guard import ensure_pause_check, suspected_unforced
 
-        ensure_pause_check(record, root=root)
+        check = ensure_pause_check(record, root=root)
         record = store.load_session(root, session_id)
+        if suspected_unforced(check):
+            store.evidence_path(root, session_id).unlink(missing_ok=True)
+            store.compute_status(root, session_id)
+            return EvidenceResult(
+                session_id=session_id,
+                status="skipped",
+                reason=ALIGNMENT_INVALID_REASON,
+            )
     if alignment_is_invalid(record.alignment):
         store.evidence_path(root, session_id).unlink(missing_ok=True)
         store.compute_status(root, session_id)

@@ -12,7 +12,7 @@ import duckdb
 
 from tradevidanalyser import __version__, config, store
 from tradevidanalyser.doctor import run_doctor
-from tradevidanalyser.flags import require_allowed_flag_set
+from tradevidanalyser.flags import pause_guard_enabled, require_allowed_flag_set
 from tradevidanalyser.ingest import ingest
 from tradevidanalyser.align import alignment_result_dict
 from tradevidanalyser.pipeline import (
@@ -431,10 +431,11 @@ def main(argv: list[str] | None = None) -> int:
                 force=args.force,
             )
             payload = alignment_result_dict(args.session, alignment)
-            check = load_pause_check(root, args.session)
-            if check is not None:
-                payload["pause_check"] = check.pause_check
-                payload["override"] = check.override
+            if pause_guard_enabled():
+                check = load_pause_check(root, args.session)
+                if check is not None:
+                    payload["pause_check"] = check.pause_check
+                    payload["override"] = check.override
             _emit(payload, as_json=True)
             return 0
         if args.cmd == "evidence":
