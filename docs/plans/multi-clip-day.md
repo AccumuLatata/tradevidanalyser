@@ -6,6 +6,7 @@
 **Nicht in diesem Plan:** Phase 2 (Analysen abschalten, umbauen oder einen Datenvertrag für den Trading Coach). Alle bestehenden Analysen, Ausgaben und Schemas bleiben inhaltlich, was sie sind. Geändert wird nur, was nötig ist, damit sie bei mehreren Clips pro Tag und bei Pausen nicht mehr still falsch sind.
 **Entscheidungen:** CD1–CD14 in Abschnitt 6. Das sind nicht die gesperrten D1–D9 aus `docs/05_ROADMAP.md`. Roadmap-D4 (Tagesverlust 100 gegen 200) bleibt geparkt; `rules.yaml:4-5` und der Grundtext `daily_loss_limit_usd is unset (D4)` in `rules.py` meinen dieses Roadmap-D4. Zeile 6 von `rules.yaml` ist der Kommentar zu `flat_by`, nicht D4.
 **Seriennummern:** PR-28…PR-36 setzen `docs/IMPLEMENTATION_PLAN.md` fort (zuletzt gelandet PR-27). Das sind keine GitHub-Pull-Request-Nummern. Die Nummern folgen der Merge-Reihenfolge. Die frühere Nummer PR-34 (Audit) ist jetzt PR-28.
+**Abweichung, 2026-10-06, Entscheidung Accumu:** PR-32 wird mit `TVA_EXCLUSIVE_FILLS` aus gemerged. CD11 ist nicht aufgehoben (`tz_assumption: waived` steht nirgends). CD11 sperrt das Einschalten, nicht den Merge. Das Vierer-Set geht erst nach dem 25.10.2026, CD11 und dem NAS-Paritätslauf aus CD10 an.
 
 ---
 
@@ -280,7 +281,7 @@ Nicht unterdrückt: die Fills selbst als Fakten mit ihrer eigenen Uhr. Ein inval
 
 ### 2.3 Jeder Fill genau einmal
 
-Gesperrt durch CD11. PR-32 wird nicht gemerged, bis `+0000` als echtes UTC bestätigt ist. Der Nachweis sind mindestens drei Fills, die im Video sichtbar sind, und ein Tag nach dem 25.10.2026. TVA liest keinen DOM. Was zählt, ist ein Frame oder Screenshot, auf dem die Uhr und der Fill (Zeit, Seite, Preis) zusammen sichtbar sind, manuell protokolliert in `days/audit.json` mit Session-Id, Videozeit und CSV-Zeitstempel. Accumu kann das Gate schriftlich aufheben. Dieselbe Aufhebung gilt in PR-28, hier, in CD11 und in Risiko 9. Sie steht im Audit-JSON und, falls danach gebaut wird, in `day.json` als `tz_assumption: waived`. Ohne diesen Vermerk bleibt PR-32 gesperrt. Bis dahin beschreibt dieser Abschnitt die Regel, der Code bleibt beim heutigen Fenster.
+Gesperrt durch CD11. `TVA_EXCLUSIVE_FILLS` wird nicht eingeschaltet, bis `+0000` als echtes UTC bestätigt ist. Der Nachweis sind mindestens drei Fills, die im Video sichtbar sind, und ein Tag nach dem 25.10.2026. TVA liest keinen DOM. Was zählt, ist ein Frame oder Screenshot, auf dem die Uhr und der Fill (Zeit, Seite, Preis) zusammen sichtbar sind, manuell protokolliert in `days/audit.json` mit Session-Id, Videozeit und CSV-Zeitstempel. Accumu kann das Gate schriftlich aufheben. Dieselbe Aufhebung gilt in PR-28, hier, in CD11 und in Risiko 9. Sie steht im Audit-JSON und, falls danach gebaut wird, in `day.json` als `tz_assumption: waived`. Ohne diesen Vermerk bleibt das Flag aus. Bis dahin beschreibt dieser Abschnitt die Regel, der Code bleibt beim heutigen Fenster.
 
 Der Vienna-Tag eines Zeitstempels ist `timestamp.astimezone(VIENNA).date()`, und nur dann, wenn CD11 die Zeitstempel als UTC bestätigt hat. Nicht `timestamp.date()` auf dem gespeicherten Wert, und nicht `FillRecord.session_date`.
 
@@ -539,7 +540,7 @@ Ungesetzt oder leer ist aus. Wahr ist `1`, `true`, `yes` oder `on`, wie `serve_m
 |---|---|---|
 | `TVA_PAUSE_GUARD` | 30 | Detektor, `pause_checks`, Schreiben von `invalid`, `--force` nur solange dieses Flag an ist |
 | `TVA_DAY_MANIFEST` | 31 | `day.json`, Fingerprint, Sperre, Veraltet-Abbruch. Flag aus: `day_state` ist `legacy`. Tage vor `days/enabled_from` ohne `current` sind `legacy_unbuilt` |
-| `TVA_EXCLUSIVE_FILLS` | 32 | Besitz. Merge erst nach CD11 |
+| `TVA_EXCLUSIVE_FILLS` | 32 | Besitz. Einschalten erst nach CD11 |
 | `TVA_DAY_RULES` | 33 | fünf Tagesregeln, `day_rule_checks` |
 | `TVA_DAY_PUBLISH` | 34 | eine Seite, Properties aus CD14 |
 | `TVA_TRADING_HOURS` | 35 | Rate aus 2.6 |
@@ -584,7 +585,7 @@ Abbildung der Nummern aus dem vorigen Planstand: altes PR-28 (Manifest) → PR-3
 - Tests: synthetische Mischung innen, in zwei vorhandenen Parquets, außerhalb, manuell, anderes Instrument, fehlende CSV → `not_run`. Keine Session-Datei ändert mtime. Vorzeichen der Verschiebung ist assertiert: wahre Zeit = CSV + Δ.
 - Akzeptanz: Accumu kann CD4 und CD11 daran entscheiden. Ohne NAS ist CI synthetisch.
 - Rollback: Datei löschen.
-- **Gate:** PR-32 mergt nicht, bevor CD11 auf diesem Protokoll bestätigt ist. Accumu kann das Gate schriftlich aufheben. Die Aufhebung steht als `tz_assumption: waived` im Audit-JSON (2.3). Ohne den Vermerk bleibt das Gate zu. Liegt der Fehlbetrag der 20/88 am Fenster oder an der Doppelzählung, beschreibt 2.3 den Besitz weiter. Liegt er woanders, wird CD4 neu vorgelegt, bevor PR-32 mergt.
+- **Gate:** `TVA_EXCLUSIVE_FILLS` geht nicht an, bevor CD11 auf diesem Protokoll bestätigt ist. Accumu kann das Gate schriftlich aufheben. Die Aufhebung steht als `tz_assumption: waived` im Audit-JSON (2.3). Ohne den Vermerk bleibt das Gate zu. Liegt der Fehlbetrag der 20/88 am Fenster oder an der Doppelzählung, beschreibt 2.3 den Besitz weiter. Liegt er woanders, wird CD4 neu vorgelegt, bevor das Flag an geht.
 
 ### PR-29 — Literal `invalid`, nur Leser
 
@@ -682,7 +683,7 @@ Ein separater Agent, nicht der Autor. Er hakt nur ab, was er im Diff sieht.
 6. **DST und ETH-Datum.** Der Tagesschlüssel ist Vienna. Ein Join außen auf `session_date` kann in der Herbstwoche 25.10.–01.11.2026 und in den drei Frühlingswochen 08.–29.03. von 23:00 bis 24:00 Vienna danebenliegen. KW38–KW40 liegt davor. Der Audit berichtet beide Daten. Die Sortierung und `nominal_end` rechnen in UTC.
 7. **Notion-Seite existiert schon.** Der erste Tages-Publish überschreibt sie und sagt das im Ergebnis, sobald jeder Clip einen Debrief hat. Fehlt ein Debrief, bricht er ab und die Seite bleibt (2.5). Wer den alten Text behalten will, kopiert ihn vorher. Es wird keine zweite Seite angelegt. KW38–KW40 bleiben unberührt, bis CD7 anders lautet.
 8. **Proben lesen die NAS.** Nur lesen, nur die genannten Frames, nur wenn der Guard oder `--sample-clocks` an ist. Ein fehlgeschlagenes OCR der Uhr ist eine verworfene Probe, kein erfundener Offset.
-9. **CSV-Zeitzone.** Bis CD11 ist 2.3 nicht im Code. Ein Merge von PR-32 davor weist fast jeden Fill dem falschen Kern zu, sobald `+0000` keine UTC-Zeit ist. Das Pad von 30 min verdeckt denselben Fehler heute teilweise. Die schriftliche Aufhebung ist nur `tz_assumption: waived` (2.3). Ohne den Vermerk bleibt das Gate zu. Das Vierer-Set wartet mindestens bis nach dem 25.10.2026.
+9. **CSV-Zeitzone.** Bis CD11 bleibt 2.3 aus (Flag aus). Ein Einschalten von `TVA_EXCLUSIVE_FILLS` davor weist fast jeden Fill dem falschen Kern zu, sobald `+0000` keine UTC-Zeit ist. Das Pad von 30 min verdeckt denselben Fehler heute teilweise. Die schriftliche Aufhebung ist nur `tz_assumption: waived` (2.3). Ohne den Vermerk bleibt das Gate zu. Das Vierer-Set wartet mindestens bis nach dem 25.10.2026.
 10. **KW41 läuft schon.** Bis zum Einschalten bleiben Mehrclip-Tage im heutigen Code falsch. 2.7 sagt, was man bis dahin nicht als wahr liest.
 11. **Minuten-Uhr.** Jedes geparste `y` hat einen Quantisierungsfehler in (−60, 0], `pause_total` deshalb ein Rauschen in (−60, +60). Eine echte Pause ≤ 60 s wird nie `suspected`, eine von 60 s bis 180 s je nach Sekundenphase, eine über 180 s sicher. `pause_detectable_from_s` ist 180 und steht in `pause_checks` und in `day.json`. Der Notion-Satz nennt die Zahl dieser Clips. Evidence-Trades tragen `alignment: "low"`. Eine Sekunden-Uhr erkennt ab 30 s. Der Guard liest nur die ROI (1.2). Der manuelle Blick vor PR-30 sagt, welche der beiden Uhren im Bild Sekunden hat.
 
@@ -721,7 +722,7 @@ Empfehlung: (c) auf dem Tages-Pfad, Legacy unverändert. (a) wäre der Auftrag a
 
 ### CD4. Ursache von 20/88
 
-Offen, bis PR-28 die Klassen gegen die vorhandenen Parquets geschrieben hat. Keine Zeitzonen-Korrektur, kein anderes Fenster und kein Dedupe-Fix in PR-32, der nur diese Zahl erklären soll. Das ist nicht das geparkte Roadmap-D4 zum Tagesverlust. PR-32 setzt den Besitz um, wie in 2.3 beschrieben, erst nach CD11. Gestoppt wird zusätzlich, wenn der Audit zeigt, dass der Fehlbetrag nicht das Fenster und nicht die Doppelzählung ist, sondern etwas, das 2.3 nicht trifft (ein durchgängig falscher CSV-Offset, oder der Loader). Dann wird CD4 neu vorgelegt, bevor PR-32 mergt.
+Offen, bis PR-28 die Klassen gegen die vorhandenen Parquets geschrieben hat. Keine Zeitzonen-Korrektur, kein anderes Fenster und kein Dedupe-Fix in PR-32, der nur diese Zahl erklären soll. Das ist nicht das geparkte Roadmap-D4 zum Tagesverlust. PR-32 setzt den Besitz um, wie in 2.3 beschrieben; eingeschaltet wird erst nach CD11. Gestoppt wird zusätzlich, wenn der Audit zeigt, dass der Fehlbetrag nicht das Fenster und nicht die Doppelzählung ist, sondern etwas, das 2.3 nicht trifft (ein durchgängig falscher CSV-Offset, oder der Loader). Dann wird CD4 neu vorgelegt, bevor das Flag an geht.
 
 ### CD5. Pause: invalidieren oder stückweise
 
@@ -755,7 +756,7 @@ Offen für den Namen. Der Inhalt ist festgelegt: eine unpausierte Session mit OC
 
 Unverifiziert. Die CSV kann `+0000` tragen. Ob das echtes UTC ist, weiß der Code nicht. Er speichert den Offset, den er sieht (`fills_mirror.py:334-363`), und prüft ihn nicht gegen das Video.
 
-Empfehlung: PR-32 bleibt gesperrt, bis an mindestens drei Fills, die im Video sichtbar sind, und an einem Tag nach dem 25.10.2026 bestätigt ist, dass `+0000` echtes UTC ist. Der Nachweis ist ein Frame oder Screenshot mit Uhr und Fill, protokolliert in `days/audit.json` (2.3). TVA liest keinen DOM. Accumu kann das Gate schriftlich aufheben. Die Aufhebung ist `tz_assumption: waived` im Audit-JSON und, falls danach gebaut wird, in `day.json`. Dieselbe Regel gilt in 2.3, PR-28 und Risiko 9. Ohne den Vermerk bleibt das Gate zu. Der Audit berichtet die Verschiebungen aus 2.7 und wendet sie nicht an. CD1, das Fenster und der Besitz gelten bis dahin nur als Regel unter Vorbehalt.
+Empfehlung: `TVA_EXCLUSIVE_FILLS` bleibt aus, bis an mindestens drei Fills, die im Video sichtbar sind, und an einem Tag nach dem 25.10.2026 bestätigt ist, dass `+0000` echtes UTC ist. Der Nachweis ist ein Frame oder Screenshot mit Uhr und Fill, protokolliert in `days/audit.json` (2.3). TVA liest keinen DOM. Accumu kann das Gate schriftlich aufheben. Die Aufhebung ist `tz_assumption: waived` im Audit-JSON und, falls danach gebaut wird, in `day.json`. Dieselbe Regel gilt in 2.3, PR-28 und Risiko 9. Ohne den Vermerk bleibt das Gate zu. Der Audit berichtet die Verschiebungen aus 2.7 und wendet sie nicht an. CD1, das Fenster und der Besitz gelten bis dahin nur als Regel unter Vorbehalt.
 
 ### CD12. Stitch-Schwelle
 
@@ -795,4 +796,4 @@ Stattdessen: der synthetische Snapshot von `main` @ `f44d864` wird eingecheckt (
 
 Der Review nennt als bessere Variante, den lesenden Abgleich noch vor dem Merge dieses Plans auf der NAS auszuführen. Dieser PR ändert nur das Plan-Dokument. Im Repository liegen kein Export und keine `fills.parquet` (Abschnitt 1). Ein NAS-Lauf wäre eine Datenaktion, die der Auftrag für diesen PR ausschließt.
 
-Stattdessen ist der Fill-Audit der erste Umsetzungs-PR (PR-28) und das Gate vor PR-32. Sein Ergebnis kann 2.3 und CD11 noch ändern. Der Merge des Plans wartet nicht auf einen Lauf, den dieses Repository nicht enthält. Die schriftliche Aufhebung des Gates ist überall dieselbe: `tz_assumption: waived` (2.3).
+Stattdessen ist der Fill-Audit der erste Umsetzungs-PR (PR-28) und das Gate vor dem Einschalten von `TVA_EXCLUSIVE_FILLS`. Sein Ergebnis kann 2.3 und CD11 noch ändern. Der Merge des Plans wartet nicht auf einen Lauf, den dieses Repository nicht enthält. Die schriftliche Aufhebung des Gates ist überall dieselbe: `tz_assumption: waived` (2.3).
