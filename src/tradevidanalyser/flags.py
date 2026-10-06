@@ -52,6 +52,10 @@ def trading_hours_enabled() -> bool:
     return env_flag(ENV_TRADING_HOURS)
 
 
+def allow_session_id_overwrite() -> bool:
+    return env_flag(ENV_ALLOW_SESSION_ID_OVERWRITE)
+
+
 def active_flag_names() -> list[str]:
     names = [
         ENV_PAUSE_GUARD,

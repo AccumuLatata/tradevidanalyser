@@ -1,9 +1,15 @@
+import shutil
 from pathlib import Path
 
 import pytest
 
-from tradevidanalyser import media, store
-from tradevidanalyser.ingest import ingest
+from tradevidanalyser import config, media, store
+from tradevidanalyser.cli import main
+from tradevidanalyser.flags import (
+    ENV_ALLOW_SESSION_ID_OVERWRITE,
+    allow_session_id_overwrite,
+)
+from tradevidanalyser.ingest import SESSION_ID_COLLISION_ERROR, IngestError, ingest
 from tradevidanalyser.pipeline import extract_session, run_latest, transcribe_session
 
 
@@ -180,9 +186,7 @@ def test_desktop_track_without_second_audio_does_not_claim_desktop(
     assert store.audio_path(tva_root, record.id).is_file()
 
 
-def test_new_split_part_invalidates_transcript(
-    tva_root: Path, tmp_path: Path, write_video
-) -> None:
+def test_new_split_part_invalidates_transcript(tva_root: Path, tmp_path: Path, write_video) -> None:
     part1 = write_video(tmp_path / "2026-09-11 14-30-00.mp4", seconds=2.0)
     record = ingest(part1, root=tva_root)
     transcribe_session(record.id, root=tva_root, provider_name="fake")
@@ -229,3 +233,92 @@ def test_later_part_alone_then_stitch_drops_orphan(
     assert stitched.id == "2026-09-11_143000"
     assert len(stitched.recording.parts) == 2
     assert store.list_session_ids(tva_root) == [stitched.id]
+
+
+def test_overwrite_flag_default_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(ENV_ALLOW_SESSION_ID_OVERWRITE, raising=False)
+    assert allow_session_id_overwrite() is False
+    for raw in ("", "0", "false", "off", "no"):
+        monkeypatch.setenv(ENV_ALLOW_SESSION_ID_OVERWRITE, raw)
+        assert allow_session_id_overwrite() is False
+
+
+def test_m8_same_start_different_prefix_is_collision(
+    tva_root: Path, tmp_path: Path, write_video
+) -> None:
+    first_src = write_video(tmp_path / "NY 2026-09-11 14-30-00.mp4", seconds=1.0)
+    second_src = write_video(tmp_path / "ES 2026-09-11 14-30-00.mp4", seconds=2.0)
+    first = ingest(first_src, root=tva_root)
+    first_json = store.session_json_path(tva_root, first.id).read_text(encoding="utf-8")
+    first_sha = first.recording.sha256
+    recordings = config.recordings_dir(tva_root)
+    assert (recordings / first_src.name).is_file()
+    with pytest.raises(IngestError, match=SESSION_ID_COLLISION_ERROR) as exc:
+        ingest(second_src, root=tva_root)
+    assert first.id in str(exc.value)
+    assert store.session_json_path(tva_root, first.id).read_text(encoding="utf-8") == first_json
+    again = store.load_session(tva_root, first.id)
+    assert again.recording.sha256 == first_sha
+    assert again.recording.filename == first_src.name
+    assert (recordings / first_src.name).is_file()
+    assert not (recordings / second_src.name).is_file()
+    assert store.list_session_ids(tva_root) == [first.id]
+    assert main(["--root", str(tva_root), "ingest", str(second_src)]) == 1
+
+
+def test_m8_overwrite_flag_keeps_today_overwrite(
+    tva_root: Path, tmp_path: Path, write_video, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ENV_ALLOW_SESSION_ID_OVERWRITE, "1")
+    first_src = write_video(tmp_path / "NY 2026-09-11 14-30-00.mp4", seconds=1.0)
+    second_src = write_video(tmp_path / "ES 2026-09-11 14-30-00.mp4", seconds=2.0)
+    first = ingest(first_src, root=tva_root)
+    second = ingest(second_src, root=tva_root)
+    assert second.id == first.id
+    assert second.recording.filename == second_src.name
+    assert second.recording.sha256 != first.recording.sha256
+    assert (config.recordings_dir(tva_root) / second_src.name).is_file()
+
+
+def test_same_filename_other_sha_overwrites_with_message(
+    tva_root: Path, tmp_path: Path, write_video, capsys
+) -> None:
+    path = write_video(tmp_path / "2026-09-11 14-30-00.mp4", seconds=1.0)
+    first = ingest(path, root=tva_root)
+    write_video(path, seconds=2.0)
+    second = ingest(path, root=tva_root)
+    assert second.id == first.id
+    assert second.recording.filename == path.name
+    assert second.recording.sha256 != first.recording.sha256
+    err = capsys.readouterr().err
+    assert first.id in err
+    assert "andere SHA" in err
+
+
+def test_empty_stored_filename_other_sha_is_collision(
+    tva_root: Path, tmp_path: Path, write_video
+) -> None:
+    first_src = write_video(tmp_path / "2026-09-11 14-30-00.mp4", seconds=1.0)
+    first = ingest(first_src, root=tva_root)
+    payload = store.read_json(store.session_json_path(tva_root, first.id))
+    payload["recording"]["filename"] = ""
+    store.write_json(store.session_json_path(tva_root, first.id), payload)
+    other = write_video(tmp_path / "NY 2026-09-11 14-30-00.mp4", seconds=2.0)
+    with pytest.raises(IngestError, match=SESSION_ID_COLLISION_ERROR):
+        ingest(other, root=tva_root)
+    assert store.load_session(tva_root, first.id).recording.sha256 == first.recording.sha256
+    assert not (config.recordings_dir(tva_root) / other.name).is_file()
+
+
+def test_l0_session_identity_with_overwrite_flag(
+    tva_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ENV_ALLOW_SESSION_ID_OVERWRITE, "1")
+    src = Path(__file__).parent / "fixtures" / "l0_main_f44d864" / "l0-ocr" / "session.json"
+    dest = config.session_dir(tva_root, "2026-05-14_160300")
+    dest.mkdir(parents=True)
+    shutil.copy2(src, dest / "session.json")
+    record = store.load_session(tva_root, "2026-05-14_160300")
+    assert record.id == "2026-05-14_160300"
+    assert (dest / "session.json").read_bytes() == src.read_bytes()
+    assert not (tva_root / "days").exists()

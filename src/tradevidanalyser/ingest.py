@@ -3,15 +3,22 @@
 from __future__ import annotations
 
 import shutil
+import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 from tradevidanalyser import __version__, config, media, store
+from tradevidanalyser.flags import allow_session_id_overwrite
 from tradevidanalyser.naming import FilenameError, obs_name_prefix, parse_obs_filename
 from tradevidanalyser.schema import Chapter, RecordingInfo, RecordingPart, SessionRecord
 
 SPLIT_GAP_S = 5.0
+SESSION_ID_COLLISION_ERROR = "Session-Id-Kollision"
+
+
+class IngestError(ValueError):
+    """Session-id collision or other ingest abort before copy (plan §2.9)."""
 
 
 @dataclass
@@ -35,14 +42,17 @@ def ingest(video: Path, *, root: Path, desktop_track: bool = False) -> SessionRe
     session_id = first.session_id
     start = first.start
 
-    dests = _copy_parts(chain, root=root)
-    parts = _recording_parts(dests, root=root)
-    digest = dests[0][1]
-    dest_files = [path for path, _digest in dests]
     existing_path = store.session_json_path(root, session_id)
     existing: SessionRecord | None = None
     if existing_path.is_file():
         existing = store.load_session(root, session_id)
+        _guard_session_id_collision(existing, first)
+
+    dests = _copy_parts(chain, root=root)
+    parts = _recording_parts(dests, root=root)
+    digest = dests[0][1]
+    dest_files = [path for path, _digest in dests]
+    if existing is not None:
         existing_shas = [p.sha256 for p in existing.recording.parts]
         planned_shas = [p.sha256 for p in parts]
         same_files = existing.recording.sha256 == digest and existing_shas == planned_shas
@@ -165,6 +175,23 @@ def _same_prefix(anchor: Path, other: Path) -> bool:
     return left is not None and left == right
 
 
+def _guard_session_id_collision(existing: SessionRecord, first: _Part) -> None:
+    """Abort a real id collision before ``_copy_parts`` (plan §2.9)."""
+    if existing.recording.sha256 == first.digest:
+        return
+    old_name = existing.recording.filename or ""
+    new_name = first.path.name
+    if old_name and old_name == new_name:
+        sys.stderr.write(f"Session {existing.id}: Datei {old_name} hat andere SHA, überschreibe\n")
+        return
+    if allow_session_id_overwrite():
+        return
+    raise IngestError(
+        f"{SESSION_ID_COLLISION_ERROR} {existing.id}: "
+        f"bestehende Datei {old_name!r}, neue Datei {new_name!r}"
+    )
+
+
 def _copy_parts(chain: list[_Part], *, root: Path) -> list[tuple[Path, str]]:
     recordings = config.recordings_dir(root)
     dests: list[tuple[Path, str]] = []
@@ -198,9 +225,7 @@ def _recording_parts(dests: list[tuple[Path, str]], *, root: Path) -> list[Recor
     return parts
 
 
-def _shifted_chapters(
-    chain: list[_Part], durations: list[float] | None = None
-) -> list[Chapter]:
+def _shifted_chapters(chain: list[_Part], durations: list[float] | None = None) -> list[Chapter]:
     chapters: list[Chapter] = []
     offset = 0.0
     for index, item in enumerate(chain):
