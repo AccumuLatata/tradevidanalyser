@@ -16,6 +16,7 @@ from tradevidanalyser.cli import main
 from tradevidanalyser.day_audit import run_day_audit
 from tradevidanalyser.evidence import evidence_session
 from tradevidanalyser.flags import (
+    ENV_ALLOW_SESSION_ID_OVERWRITE,
     ENV_DAY_MANIFEST,
     ENV_DAY_PUBLISH,
     ENV_DAY_RULES,
@@ -245,6 +246,11 @@ def test_flag_combo_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(ENV_EXCLUSIVE_FILLS, "1")
     with pytest.raises(ValueError, match=INVALID_FLAG_SET_ERROR):
         require_allowed_flag_set()
+    monkeypatch.setenv(ENV_ALLOW_SESSION_ID_OVERWRITE, "1")
+    with pytest.raises(ValueError, match=INVALID_FLAG_SET_ERROR):
+        require_allowed_flag_set()
+    monkeypatch.delenv(ENV_EXCLUSIVE_FILLS)
+    require_allowed_flag_set()
 
 
 def test_clock_text_resolution() -> None:
