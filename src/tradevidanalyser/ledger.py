@@ -864,9 +864,7 @@ def _summarize_ids(
     hours_basis = None
     span_zero = None
     outside = None
-    from tradevidanalyser.flags import trading_hours_enabled
-
-    if trading_hours_enabled() and root is not None:
+    if root is not None:
         hours, n_trades, reason, hours_basis, span_zero, outside = _hours_from_day_rollups(
             con,
             root,
@@ -908,7 +906,8 @@ def _hours_from_day_rollups(
         BASIS_MIXED,
         period_hours_reason,
     )
-    from tradevidanalyser.day_manifest import day_state
+    from tradevidanalyser.day_manifest import DayStale, day_state
+    from tradevidanalyser.flags import trading_hours_enabled
 
     stale: set[date] = set()
     day_path: set[date] = set()
@@ -918,14 +917,13 @@ def _hours_from_day_rollups(
             stale.add(day)
         elif day in day_dates and kind in {"current", "current_incomplete"}:
             day_path.add(day)
-    if not day_path and not stale:
+    # §2.6: day_state runs even when TVA_TRADING_HOURS is off; hours stay COUNT/SUM.
+    if not trading_hours_enabled():
         return default_hours, default_trades, None, BASIS_DURATION, None, None
-    if (
-        not day_path
-        and stale
-        and not any(by_session_day.get(sid) not in stale for sid in session_ids)
-    ):
-        return 0.0, 0, None, None, None, None
+    if stale:
+        raise DayStale(sorted(stale))
+    if not day_path:
+        return default_hours, default_trades, None, BASIS_DURATION, None, None
     legacy_ids = [
         sid
         for sid in session_ids
@@ -936,19 +934,18 @@ def _hours_from_day_rollups(
     span_zero = 0
     outside = 0
     entitled_cores = 0
-    if day_path:
-        rows = _select_day_rollups(con, day_path)
-        for _day, trade_count, day_hours, day_outside, _reason, day_span_zero in rows:
-            trades += int(trade_count or 0)
-            hours += float(day_hours or 0.0)
-            outside += int(day_outside or 0)
-            span_zero += int(day_span_zero or 0)
-            if _reason != "paused_clip":
-                entitled_cores += 1
-        if entitled_cores == 0 and rows:
-            entitled_cores = 0
-        elif rows:
-            entitled_cores = max(entitled_cores, 1)
+    rows = _select_day_rollups(con, day_path)
+    for _day, trade_count, day_hours, day_outside, _reason, day_span_zero in rows:
+        trades += int(trade_count or 0)
+        hours += float(day_hours or 0.0)
+        outside += int(day_outside or 0)
+        span_zero += int(day_span_zero or 0)
+        if _reason != "paused_clip":
+            entitled_cores += 1
+    if entitled_cores == 0 and rows:
+        entitled_cores = 0
+    elif rows:
+        entitled_cores = max(entitled_cores, 1)
     if legacy_ids:
         ph = ", ".join("?" for _ in legacy_ids)
         sess = con.execute(
@@ -962,12 +959,7 @@ def _hours_from_day_rollups(
         hours += float(sess[0]) if sess else 0.0
         trades += int(traded[0]) if traded else 0
         entitled_cores += 1
-    if day_path and legacy_ids:
-        basis: str | None = BASIS_MIXED
-    elif day_path:
-        basis = BASIS_FILL_SPAN
-    else:
-        basis = BASIS_DURATION
+    basis: str | None = BASIS_MIXED if legacy_ids else BASIS_FILL_SPAN
     reason = period_hours_reason(
         entitled_cores=entitled_cores,
         hours=hours,

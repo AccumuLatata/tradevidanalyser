@@ -17,9 +17,11 @@ from tradevidanalyser.day_hours import (
     REASON_MIXED,
     REASON_OUTSIDE,
     REASON_PAUSED,
+    REASON_SPAN_UNDEFINED,
     REASON_SPAN_ZERO_EXCLUDED,
+    _union_hours,
 )
-from tradevidanalyser.day_manifest import build_day
+from tradevidanalyser.day_manifest import DAY_STALE_ERROR, DayStale, build_day
 from tradevidanalyser.flags import (
     ENV_DAY_MANIFEST,
     ENV_DAY_PUBLISH,
@@ -446,3 +448,130 @@ def test_flag_off_ignores_day_rollups_hours(
     assert summary.hours == pytest.approx(_session_hours(tva_root, a.id) * 2)
     result = rollup(tva_root, week="2026-W38")
     assert "hours_basis" not in result.as_dict()
+
+
+def test_overlapping_fill_spans_are_unioned() -> None:
+    start_a = datetime(2026, 9, 14, 10, 0, tzinfo=timezone.utc)
+    end_a = datetime(2026, 9, 14, 10, 30, tzinfo=timezone.utc)
+    start_b = datetime(2026, 9, 14, 10, 20, tzinfo=timezone.utc)
+    end_b = datetime(2026, 9, 14, 10, 40, tzinfo=timezone.utc)
+    assert _union_hours([(start_a, end_a), (start_b, end_b)]) == pytest.approx(40.0 / 60.0)
+    assert _union_hours([(start_a, end_a), (end_a, end_b)]) == pytest.approx(40.0 / 60.0)
+
+
+def test_span_undefined_when_every_entry_has_zero_span(
+    tva_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _four_on(monkeypatch)
+    _session(
+        tva_root,
+        "2026-09-14_090000",
+        start=datetime(2026, 9, 14, 9, 0, tzinfo=VIENNA),
+        duration_s=600.0,
+    )
+    _session(
+        tva_root,
+        "2026-09-14_110000",
+        start=datetime(2026, 9, 14, 11, 0, tzinfo=VIENNA),
+        duration_s=600.0,
+        sha256="b" * 64,
+    )
+    csv = _write_csv(
+        tmp_path / "e.csv",
+        _win("2026-09-14T07:05:00+0000", "2026-09-14T08:30:00+0000", spread="one"),
+    )
+    build_day(tva_root, DAY, executions=csv, venue="amp")
+    summary = build_summary(tva_root, week="2026-W38")
+    dumped = summary.model_dump(mode="json")
+    assert summary.hours == 0.0
+    assert summary.trades == 0
+    assert summary.trades_per_hour is None
+    assert dumped["trades_per_hour_reason"] == REASON_SPAN_UNDEFINED
+    assert dumped["trades_span_zero"] == 1
+    assert dumped["hours_basis"] == BASIS_FILL_SPAN
+
+
+def test_mixed_basis_keeps_hours_basis_when_outside_present(
+    tva_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _four_on(monkeypatch)
+    _session(
+        tva_root,
+        "2026-09-14_090000",
+        start=datetime(2026, 9, 14, 9, 0, tzinfo=VIENNA),
+        duration_s=600.0,
+    )
+    _session(
+        tva_root,
+        "2026-09-14_110000",
+        start=datetime(2026, 9, 14, 11, 0, tzinfo=VIENNA),
+        duration_s=600.0,
+        sha256="b" * 64,
+    )
+    csv = _write_csv(
+        tmp_path / "e.csv",
+        [
+            *_win("2026-09-14T07:05:00+0000", "2026-09-14T07:06:00+0000", spread="a"),
+            *_win("2026-09-14T08:30:00+0000", "2026-09-14T08:31:00+0000", spread="gap"),
+        ],
+    )
+    build_day(tva_root, DAY, executions=csv, venue="amp")
+    legacy = _session(
+        tva_root,
+        "2026-09-16_143000",
+        start=datetime(2026, 9, 16, 14, 30, tzinfo=VIENNA),
+        duration_s=7200.0,
+        sha256="d" * 64,
+    )
+    table = pa.table(
+        {
+            "tva_trade_id": ["T01", "T02"],
+            "trade_id": ["jt-1", "jt-2"],
+            "entry_fill_id": ["fill-a", "fill-b"],
+            "direction": ["long", "short"],
+            "instrument": ["MNQ", "MNQ"],
+            "entry_price": [21000.0, 21010.0],
+            "exit_price": [20990.0, 21020.0],
+            "net_pnl_currency": [-10.0, 10.0],
+            "status": ["closed", "closed"],
+            "venue": ["amp", "amp"],
+        }
+    )
+    pq.write_table(table, store.trades_path(tva_root, legacy.id))
+    add_session(legacy.id, root=tva_root)
+    summary = build_summary(tva_root, week="2026-W38")
+    dumped = summary.model_dump(mode="json")
+    assert dumped["hours_basis"] == BASIS_MIXED
+    assert dumped["trades_per_hour_reason"] == REASON_OUTSIDE
+    assert dumped["trades_per_hour_reason"] != REASON_MIXED
+    assert dumped["trades_outside_clips"] == 1
+    assert summary.trades == 3
+    assert summary.hours == pytest.approx(60.0 / 3600.0 + 2.0)
+
+
+def test_stale_day_raises_instead_of_inventing_zero_rate(
+    tva_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _four_on(monkeypatch)
+    record = _session(
+        tva_root,
+        "2026-09-14_090000",
+        start=datetime(2026, 9, 14, 9, 0, tzinfo=VIENNA),
+        duration_s=600.0,
+    )
+    _session(
+        tva_root,
+        "2026-09-14_110000",
+        start=datetime(2026, 9, 14, 11, 0, tzinfo=VIENNA),
+        duration_s=600.0,
+        sha256="b" * 64,
+    )
+    csv = _write_csv(
+        tmp_path / "e.csv",
+        _win("2026-09-14T07:05:00+0000", "2026-09-14T07:06:00+0000", spread="a"),
+    )
+    build_day(tva_root, DAY, executions=csv, venue="amp")
+    recording = record.recording.model_copy(update={"duration_s": 601.0})
+    store.save_session(tva_root, record.model_copy(update={"recording": recording}))
+    with pytest.raises(DayStale, match=DAY_STALE_ERROR):
+        build_summary(tva_root, week="2026-W38")
