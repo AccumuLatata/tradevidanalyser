@@ -248,7 +248,7 @@ alignment:
   offset_s: 1.8          # wall_clock = video_t + start_wallclock + offset
   drift_s_per_h: 0.0
   confidence: 0.96       # 0–1
-  method: ocr_clock | filename | chapter_fill | manual
+  method: ocr_clock | filename | chapter_fill | manual | invalid
   samples: [{video_t, ocr_text, parsed_wallclock, residual_s}]
 ```
 

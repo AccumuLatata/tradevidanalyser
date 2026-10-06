@@ -16,6 +16,7 @@ import pyarrow.parquet as pq
 from tradevidanalyser import store
 from tradevidanalyser.fills_mirror import JOURNAL_EXCHANGE_TZ, JOURNAL_TICK_SIZE
 from tradevidanalyser.schema import (
+    ALIGNMENT_INVALID_REASON,
     Alignment,
     Evidence,
     EvidenceTrade,
@@ -24,6 +25,7 @@ from tradevidanalyser.schema import (
     RulesReport,
     SessionEvent,
     SessionRecord,
+    alignment_is_invalid,
 )
 
 SCHEMA_VERSION = "1"
@@ -61,6 +63,7 @@ TILT_COOLDOWN_S = 300.0
 HOURLY_MINUTE_LO = 45
 HOURLY_MINUTE_HI = 55
 ALIGNMENT_LOW = 0.8
+CLOCK_MAPPED_RULES = ("R-HOURLY", "R-ZONE", "R-TILT", "R-3C-CT", "R-ARRIVAL")
 SLTP_REASON = "order modifications not in TradesViz; needs a venue adapter"
 STATED_FIELD_NAMES = ("setup", "bias", "stop_raw", "target_raw", "playbook")
 _ARRIVAL_RE = re.compile(
@@ -770,6 +773,10 @@ def _event_segs(
     return _uniq(segs)
 
 
+def _alignment_invalid_check(rule: str) -> RuleCheck:
+    return _check(rule, "unverifiable", {"segs": []}, ALIGNMENT_INVALID_REASON)
+
+
 def _alignment_too_low(ctx: EvidenceCtx) -> bool:
     if ctx.alignment is not None:
         return ctx.alignment.confidence < ALIGNMENT_LOW
@@ -878,6 +885,8 @@ def _cited_matching(
 
 
 def _eval_3c_ct(ctx: EvidenceCtx) -> RuleCheck:
+    if alignment_is_invalid(ctx.alignment):
+        return _alignment_invalid_check("R-3C-CT")
     spoken = _spoken_trades(ctx)
     if not spoken:
         return _absent_speech("R-3C-CT")
@@ -915,6 +924,8 @@ def _eval_3c_ct(ctx: EvidenceCtx) -> RuleCheck:
 
 
 def _eval_arrival(ctx: EvidenceCtx) -> RuleCheck:
+    if alignment_is_invalid(ctx.alignment):
+        return _alignment_invalid_check("R-ARRIVAL")
     spoken = _spoken_trades(ctx)
     if not spoken:
         return _absent_speech("R-ARRIVAL")
@@ -947,6 +958,8 @@ def _eval_sltp(_ctx: EvidenceCtx) -> RuleCheck:
 
 
 def _eval_hourly(ctx: EvidenceCtx) -> RuleCheck:
+    if alignment_is_invalid(ctx.alignment):
+        return _alignment_invalid_check("R-HOURLY")
     if not _session_has_speech(ctx):
         return _absent_speech("R-HOURLY")
     if _alignment_too_low(ctx):
@@ -980,6 +993,8 @@ def _eval_hourly(ctx: EvidenceCtx) -> RuleCheck:
 
 
 def _eval_zone(ctx: EvidenceCtx) -> RuleCheck:
+    if alignment_is_invalid(ctx.alignment):
+        return _alignment_invalid_check("R-ZONE")
     if not _session_has_speech(ctx):
         return _absent_speech("R-ZONE")
     if _alignment_too_low(ctx):
@@ -1026,6 +1041,8 @@ def _eval_bias(ctx: EvidenceCtx) -> RuleCheck:
 
 
 def _eval_tilt(ctx: EvidenceCtx) -> RuleCheck:
+    if alignment_is_invalid(ctx.alignment):
+        return _alignment_invalid_check("R-TILT")
     tilts = [event for event in ctx.events if event.kind == "tilt"]
     if not tilts:
         return _check("R-TILT", "unverifiable", {"segs": []}, "no tilt language")
