@@ -85,6 +85,7 @@ class PublishResult:
     created: bool = False
     provider: str | None = None
     reason: str | None = None
+    replaced_existing_page: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -102,6 +103,8 @@ class PublishResult:
             payload["provider"] = self.provider
         if self.reason is not None:
             payload["reason"] = self.reason
+        if self.replaced_existing_page:
+            payload["replaced_existing_page"] = True
         return payload
 
 
@@ -117,14 +120,17 @@ def _one_sentence(text: str) -> str:
     return parts[0].strip()
 
 
-def _learning_lines(text: str) -> list[str]:
+def _nonempty_learning_lines(text: str) -> list[str]:
     lines: list[str] = []
     for raw in (text or "").splitlines():
         line = raw.strip().lstrip("-*").strip()
         if line:
             lines.append(line)
-        if len(lines) == 3:
-            break
+    return lines
+
+
+def _learning_lines(text: str) -> list[str]:
+    lines = _nonempty_learning_lines(text)[:3]
     while len(lines) < 3:
         lines.append("")
     return lines[:3]
@@ -775,6 +781,23 @@ def publish_session(
         raise ValueError(
             f"session.json id {record.id!r} does not match directory {session_id!r}"
         )
+    from tradevidanalyser.flags import day_publish_enabled
+
+    if day_publish_enabled():
+        from tradevidanalyser.day_manifest import DayStale, day_state, nominal_vienna_date
+        from tradevidanalyser.day_publish import publish_session_day_path
+
+        state = day_state(root, nominal_vienna_date(record))
+        if state.kind in {"stale", "missing"}:
+            raise DayStale([state.date])
+        if state.kind in {"current", "current_incomplete"}:
+            return publish_session_day_path(
+                record,
+                root=root,
+                provider_name=provider_name,
+                client=client,
+                now=now,
+            )
     report = _load_debrief(root, session_id)
     payload = payload_from_debrief(record, report)
     publisher = get_publish_client(provider_name, root=root, client=client)
