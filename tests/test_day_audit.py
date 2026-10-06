@@ -341,7 +341,7 @@ def test_stitch_and_mtime_hint(tva_root: Path, tmp_path: Path) -> None:
     assert gaps[0]["gap_s"] > SPLIT_GAP_S
 
 
-def test_cli_day_audit_and_no_sample_clocks(tva_root: Path, tmp_path: Path, capsys) -> None:
+def test_cli_day_audit_sample_clocks_json_only(tva_root: Path, tmp_path: Path, capsys) -> None:
     _session(tva_root, "2026-09-14_100000", start="2026-09-14T10:00:00+02:00")
     csv = _write_csv(
         tmp_path / "one.csv",
@@ -375,17 +375,31 @@ def test_cli_day_audit_and_no_sample_clocks(tva_root: Path, tmp_path: Path, caps
     assert out["fills_match"] == "ok"
     assert out["loader"] == "mirror"
     assert out["clock_note"] == "manual frame look"
+    assert "clock_samples" not in out
     assert (tva_root / "days" / "audit.json").is_file()
-    with pytest.raises(SystemExit):
+    assert (
         main(
             [
                 "--root",
                 str(tva_root),
                 "day",
                 "audit",
+                "--from",
+                "2026-09-14",
+                "--to",
+                "2026-09-14",
                 "--sample-clocks",
             ]
         )
+        == 0
+    )
+    sampled = json.loads(capsys.readouterr().out)
+    assert "clock_samples" in sampled
+    assert sampled["clock_samples"]
+    assert sampled["clock_samples"][0]["session_id"] == "2026-09-14_100000"
+    assert not (tva_root / "pause_checks").exists() or not any(
+        (tva_root / "pause_checks").glob("*.json")
+    )
 
 
 def test_default_to_is_vienna_today(tva_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:

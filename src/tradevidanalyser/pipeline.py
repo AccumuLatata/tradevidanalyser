@@ -463,10 +463,11 @@ def align_session(
     *,
     root: Path,
     manual_offset: float | None = None,
+    force: bool = False,
 ) -> Alignment:
     if not store.is_safe_path_name(session_id):
         raise ValueError(f"unsafe session id {session_id!r}")
-    return run_align(session_id, root=root, manual_offset=manual_offset)
+    return run_align(session_id, root=root, manual_offset=manual_offset, force=force)
 
 
 def run_latest(

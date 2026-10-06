@@ -227,10 +227,17 @@ def list_frame_jpgs(root: Path, session_id: str) -> list[Path]:
     )
 
 
+def pause_checks_path(root: Path, session_id: str) -> Path:
+    if not is_safe_path_name(session_id):
+        raise ValueError(f"unsafe session id {session_id!r}")
+    return Path(root) / "pause_checks" / f"{session_id}.json"
+
+
 def invalidate_downstream(root: Path, session_id: str) -> None:
-    """Drop transcript/insights/frames/clips/fills/evidence/rules/context/report/publish/proposals/ledger/alignment so a changed recording is not left looking complete."""
+    """Drop transcript/insights/frames/clips/fills/evidence/rules/context/report/publish/proposals/ledger/alignment/pause_checks so a changed recording is not left looking complete."""
     # Ledger first: a failed drop must not leave rows after the artifacts are gone.
     drop_ledger_session(root, session_id)
+    pause_checks_path(root, session_id).unlink(missing_ok=True)
     transcript_path(root, session_id).unlink(missing_ok=True)
     insights_path(root, session_id).unlink(missing_ok=True)
     ocr_path(root, session_id).unlink(missing_ok=True)

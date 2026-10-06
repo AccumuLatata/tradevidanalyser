@@ -128,6 +128,7 @@ def run_day_audit(
     executions: Path | None = None,
     loader: str = "unknown",
     clock_note: str | None = None,
+    sample_clocks: bool = False,
 ) -> DayAuditResult:
     start = parse_audit_date(date_from, default=DEFAULT_AUDIT_FROM)
     end = parse_audit_date(date_to, default=vienna_today())
@@ -171,6 +172,7 @@ def run_day_audit(
         date_from=start,
         date_to=end,
         visible_fills=visible_fills,
+        sample_clocks=sample_clocks,
     )
     dest.parent.mkdir(parents=True, exist_ok=True)
     store.write_json(dest, payload)
@@ -198,6 +200,7 @@ def _build_payload(
     date_from: date,
     date_to: date,
     visible_fills: list[Any] | None = None,
+    sample_clocks: bool = False,
 ) -> dict[str, Any]:
     parquet_by_session = _read_session_parquets(root, sessions)
     all_fill_ids: set[FillIdentity] = set()
@@ -278,7 +281,7 @@ def _build_payload(
         )
         for record in sessions
     ]
-    return {
+    payload = {
         "schema_version": AUDIT_SCHEMA_VERSION,
         "from": date_from.isoformat(),
         "to": date_to.isoformat(),
@@ -296,6 +299,13 @@ def _build_payload(
         "shifts": shifts_block,
         "mtime_pause_hint": MTIME_HINT_NOTE,
     }
+    if sample_clocks:
+        from tradevidanalyser.pause_guard import sample_clocks_readonly
+
+        payload["clock_samples"] = [
+            sample_clocks_readonly(record, root=root) for record in sessions
+        ]
+    return payload
 
 
 def _session_row(

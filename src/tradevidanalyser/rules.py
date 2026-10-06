@@ -15,6 +15,7 @@ import pyarrow.parquet as pq
 
 from tradevidanalyser import store
 from tradevidanalyser.fills_mirror import JOURNAL_EXCHANGE_TZ, JOURNAL_TICK_SIZE
+from tradevidanalyser.flags import pause_guard_enabled
 from tradevidanalyser.schema import (
     ALIGNMENT_INVALID_REASON,
     Alignment,
@@ -1260,6 +1261,23 @@ def rules_session(
         raise ValueError(
             f"session.json id {record.id!r} does not match directory {session_id!r}"
         )
+    if pause_guard_enabled():
+        from tradevidanalyser.pause_guard import ensure_pause_check, suspected_unforced
+
+        check = ensure_pause_check(record, root=root)
+        record = store.load_session(root, session_id)
+        if suspected_unforced(check) and not alignment_is_invalid(record.alignment):
+            record = record.model_copy(
+                update={
+                    "alignment": Alignment(
+                        offset_s=0.0,
+                        drift_s_per_h=0.0,
+                        confidence=0.0,
+                        method="invalid",
+                        samples=[],
+                    )
+                }
+            )
     report = build_rules_report(record, root=root, config=config, config_path=config_path)
     if report is None:
         path = store.rules_path(root, session_id)

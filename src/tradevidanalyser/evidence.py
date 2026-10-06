@@ -13,6 +13,7 @@ import pyarrow.parquet as pq
 
 from tradevidanalyser import store
 from tradevidanalyser.align import FILENAME_CONFIDENCE
+from tradevidanalyser.flags import pause_guard_enabled
 from tradevidanalyser.naming import VIENNA
 from tradevidanalyser.ocr import read_ocr_parquet
 from tradevidanalyser.providers.extract import (
@@ -319,6 +320,7 @@ def build_evidence(
         return None
     provider = get_extract_provider(provider_name)
     clock = effective_alignment(record)
+    clock_resolution_s = _pause_clock_resolution(record, root)
     start = _parse_dt(record.recording.start_wallclock_vienna)
     if start is None:
         raise ValueError(f"unparseable start_wallclock_vienna {record.recording.start_wallclock_vienna!r}")
@@ -327,6 +329,8 @@ def build_evidence(
     duration = float(record.recording.duration_s or 0.0)
     segments = list(transcript.segments) if transcript is not None else []
     align_flag = "low" if clock.confidence < ALIGNMENT_LOW else None
+    if clock_resolution_s == 60:
+        align_flag = "low"
     trades: list[EvidenceTrade] = []
     for tva_id, entry_ts, exit_ts in rows:
         entry_t = wall_to_video_t(
@@ -377,6 +381,17 @@ def build_evidence(
     )
 
 
+def _pause_clock_resolution(record: SessionRecord, root: Path) -> int | None:
+    if not pause_guard_enabled():
+        return None
+    from tradevidanalyser.pause_guard import key_matches, load_pause_check
+
+    check = load_pause_check(root, record.id)
+    if check is None or not key_matches(check, record):
+        return None
+    return check.clock_resolution_s
+
+
 def _has_window_speech(segments: list[TranscriptSegment]) -> bool:
     return any((seg.text or "").strip() for seg in segments)
 
@@ -395,6 +410,19 @@ def evidence_session(
         raise ValueError(
             f"session.json id {record.id!r} does not match directory {session_id!r}"
         )
+    if pause_guard_enabled():
+        from tradevidanalyser.pause_guard import ensure_pause_check, suspected_unforced
+
+        check = ensure_pause_check(record, root=root)
+        record = store.load_session(root, session_id)
+        if suspected_unforced(check):
+            store.evidence_path(root, session_id).unlink(missing_ok=True)
+            store.compute_status(root, session_id)
+            return EvidenceResult(
+                session_id=session_id,
+                status="skipped",
+                reason=ALIGNMENT_INVALID_REASON,
+            )
     if alignment_is_invalid(record.alignment):
         store.evidence_path(root, session_id).unlink(missing_ok=True)
         store.compute_status(root, session_id)
