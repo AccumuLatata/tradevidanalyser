@@ -402,7 +402,14 @@ def _compute_status_locked(
         error = previous.error
     if not any(state == "failed" for state in stages.values()):
         error = None
-    durable = SessionStatus(session_id=session_id, stages=stages, error=error, cost_usd=cost_usd)  # type: ignore[arg-type]
+    day_kind = _session_day_state(root, session_id)
+    durable = SessionStatus(
+        session_id=session_id,
+        stages=stages,
+        error=error,
+        cost_usd=cost_usd,
+        day_state=day_kind,
+    )  # type: ignore[arg-type]
     write_json(path, durable.model_dump(mode="json"))
     if not running:
         return durable
@@ -411,7 +418,28 @@ def _compute_status_locked(
         if view.get(name) != "ok":
             view[name] = "running"
     view_error = None if not any(state == "failed" for state in view.values()) else error
-    return SessionStatus(session_id=session_id, stages=view, error=view_error, cost_usd=cost_usd)  # type: ignore[arg-type]
+    return SessionStatus(
+        session_id=session_id,
+        stages=view,
+        error=view_error,
+        cost_usd=cost_usd,
+        day_state=day_kind,
+    )  # type: ignore[arg-type]
+
+
+def _session_day_state(root: Path, session_id: str) -> str | None:
+    from tradevidanalyser.day_manifest import day_state, nominal_vienna_date
+    from tradevidanalyser.flags import day_manifest_enabled
+
+    if not day_manifest_enabled():
+        return None
+    if not session_json_path(root, session_id).is_file():
+        return None
+    try:
+        record = load_session(root, session_id)
+        return day_state(root, nominal_vienna_date(record)).kind
+    except (ValueError, OSError):
+        return None
 
 
 def list_session_ids(root: Path) -> list[str]:

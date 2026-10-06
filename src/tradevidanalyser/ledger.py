@@ -867,6 +867,9 @@ def rollup(
     week: str | None = None,
     month: str | None = None,
 ) -> RollupResult:
+    from tradevidanalyser.day_manifest import require_fresh_store
+
+    require_fresh_store(root)
     chosen_week = week
     chosen_month = month
     path = ledger_db_path(root)
@@ -943,12 +946,28 @@ def ledger_add(session_id: str, *, root: Path) -> LedgerAddResult:
 def ledger_summary(root: Path, *, weeks: int = 4) -> LedgerSummary:
     if weeks < 1:
         raise LedgerError("weeks must be >= 1")
-    return build_summary(root, weeks=weeks)
+    from tradevidanalyser.day_manifest import (
+        incomplete_days,
+        legacy_unbuilt_days,
+        require_fresh_store,
+    )
+
+    states = require_fresh_store(root)
+    summary = build_summary(root, weeks=weeks)
+    return summary.model_copy(
+        update={
+            "incomplete_days": incomplete_days(states),
+            "legacy_unbuilt_days": legacy_unbuilt_days(states),
+        }
+    )
 
 
 def window_session_ids(root: Path, *, weeks: int) -> list[str]:
     if weeks < 1:
         raise LedgerError("weeks must be >= 1")
+    from tradevidanalyser.day_manifest import require_fresh_store
+
+    require_fresh_store(root)
     path = ledger_db_path(root)
     if not path.is_file() or path.stat().st_size == 0:
         return []

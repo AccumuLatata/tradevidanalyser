@@ -19,6 +19,7 @@ from tradevidanalyser import __version__, store
 from tradevidanalyser.doctor import run_doctor
 from tradevidanalyser.naming import VIENNA
 from tradevidanalyser.coach import load_latest
+from tradevidanalyser.day_manifest import DayStale, incomplete_days, legacy_unbuilt_days, require_fresh_store
 from tradevidanalyser.ledger import ledger_summary
 from tradevidanalyser.pipeline import extract_session, transcribe_session
 from tradevidanalyser.schema import (
@@ -102,6 +103,16 @@ def create_app(
     app.state.require_auth = require_auth
     app.state.jobs_lock = threading.Lock()
     app.state.jobs: dict[str, set[str]] = {}
+
+    @app.exception_handler(DayStale)
+    async def _day_stale(_request: Request, exc: DayStale) -> JSONResponse:
+        return JSONResponse(
+            {
+                "detail": str(exc),
+                "days": [item.isoformat() for item in exc.dates],
+            },
+            status_code=409,
+        )
 
     @app.middleware("http")
     async def _bearer_auth(request: Request, call_next):  # type: ignore[no-untyped-def]
@@ -232,10 +243,16 @@ def create_app(
 
     @app.get("/coach/latest", response_model=CoachReport)
     def get_coach_latest() -> dict:
+        states = require_fresh_store(app.state.root)
         report = load_latest(app.state.root)
         if report is None:
             raise HTTPException(status_code=404, detail="coach missing")
-        return report.model_dump(mode="json")
+        return report.model_copy(
+            update={
+                "incomplete_days": incomplete_days(states),
+                "legacy_unbuilt_days": legacy_unbuilt_days(states),
+            }
+        ).model_dump(mode="json")
 
     return app
 
