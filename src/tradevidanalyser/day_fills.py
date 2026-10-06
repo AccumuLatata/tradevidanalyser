@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
@@ -257,12 +258,16 @@ def apply_exclusive_build(
 ) -> ExclusiveBuildResult:
     """Write parquets, run cascade, rewrite ledger. Returns cascade per session."""
     prev_own = _previous_signatures(previous)
+    has_previous_build = previous is not None
     cascade: dict[str, str] = {}
     discarded: list[dict[str, Any]] = []
     remaps: list[dict[str, Any]] = []
     carry: dict[str, list[dict[str, Any]]] = {}
     for session_id, signature in ownership.signatures.items():
-        changed = session_id not in prev_own or prev_own[session_id] != signature
+        prev_sig = prev_own.get(session_id)
+        if prev_sig is None and has_previous_build:
+            prev_sig = _signature_from_existing(root, session_id)
+        changed = not _signatures_match(prev_sig, signature)
         cascade[session_id] = "changed" if changed else "unchanged"
         if not changed:
             continue
@@ -506,6 +511,89 @@ def _previous_signatures(payload: dict[str, Any] | None) -> dict[str, Any]:
     if isinstance(stored, dict):
         return stored
     return {}
+
+
+def _signature_from_existing(root: Path, session_id: str) -> dict[str, Any]:
+    fills_file = store.fills_path(root, session_id)
+    fill_identities = (
+        [item.as_dict() for item in _identities_from_parquet(fills_file)]
+        if fills_file.is_file()
+        else []
+    )
+    trade_ids = [
+        {"tva_trade_id": tva_id, "entry": identity.as_dict()}
+        for tva_id, identity in _trade_entry_identities(store.trades_path(root, session_id)).items()
+    ]
+    return {"fill_identities": fill_identities, "trade_ids": trade_ids}
+
+
+def _signatures_match(left: dict[str, Any] | None, right: dict[str, Any] | None) -> bool:
+    if left is None or right is None:
+        return False
+    left_fills = Counter(
+        _identity_key(item) for item in left.get("fill_identities") or [] if isinstance(item, dict)
+    )
+    right_fills = Counter(
+        _identity_key(item) for item in right.get("fill_identities") or [] if isinstance(item, dict)
+    )
+    if left_fills != right_fills:
+        return False
+    left_trades = Counter(
+        (str(item.get("tva_trade_id") or ""), _identity_key(item.get("entry") or {}))
+        for item in left.get("trade_ids") or []
+        if isinstance(item, dict)
+    )
+    right_trades = Counter(
+        (str(item.get("tva_trade_id") or ""), _identity_key(item.get("entry") or {}))
+        for item in right.get("trade_ids") or []
+        if isinstance(item, dict)
+    )
+    return left_trades == right_trades
+
+
+def _identity_key(payload: object) -> tuple[Any, ...]:
+    if not isinstance(payload, dict):
+        return ()
+    raw = payload.get("timestamp")
+    if isinstance(raw, datetime):
+        ts = _utc(raw).isoformat()
+    else:
+        ts = _norm_iso(str(raw or ""))
+    price = payload.get("price")
+    try:
+        price_n = round(float(price or 0.0), 6)
+    except (TypeError, ValueError):
+        price_n = 0.0
+    qty = payload.get("qty")
+    try:
+        qty_n: Any = None if qty is None else float(qty)
+    except (TypeError, ValueError):
+        qty_n = qty
+    return (
+        ts,
+        str(payload.get("side") or ""),
+        price_n,
+        qty_n,
+        str(payload.get("instrument") or ""),
+        payload.get("contract_month"),
+        payload.get("contract_year"),
+        payload.get("source_group_id"),
+    )
+
+
+def _norm_iso(text: str) -> str:
+    if not text:
+        return ""
+    cleaned = text.replace("Z", "+00:00")
+    if len(cleaned) >= 5 and cleaned[-5] in "+-" and cleaned[-3] != ":":
+        cleaned = cleaned[:-2] + ":" + cleaned[-2:]
+    try:
+        parsed = datetime.fromisoformat(cleaned)
+    except ValueError:
+        return text
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).isoformat()
 
 
 def _backup_session_artifacts(root: Path, session_id: str, dest: Path) -> None:

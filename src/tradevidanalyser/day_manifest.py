@@ -504,6 +504,7 @@ def build_day(
             proposal_remaps = list(built.remaps)
             proposals_discarded = list(built.discarded)
         else:
+            ownership = None
             build_id = new_ulid()
             dest = day_dir(root, day) / "builds" / build_id / "day.json"
             dest.parent.mkdir(parents=True, exist_ok=True)
@@ -532,6 +533,12 @@ def build_day(
         if exclusive_fills_enabled():
             for record in clips:
                 store.compute_status(root, record.id)
+        from tradevidanalyser.flags import day_rules_enabled
+
+        if day_rules_enabled() and ownership is not None:
+            from tradevidanalyser.day_rules import apply_day_rules
+
+            apply_day_rules(root, day, ownership, dest.parent, clips)
         return DayBuildResult(
             date=day,
             status="ok",

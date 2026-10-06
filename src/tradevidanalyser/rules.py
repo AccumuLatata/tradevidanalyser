@@ -49,6 +49,8 @@ RULE_IDS = (
     "R-TILT",
 )
 EVIDENCE_BACKED_RULE_IDS = RULE_IDS[6:]
+DAY_RULE_IDS = ("R-DLL", "R-MAX10", "R-3L30", "R-5M", "R-REENTRY")
+EVIDENCE_PENDING_REASON = "evidence_pending"
 STOP_ON_ENTRY_HOLD_S = 60.0
 SAME_LEVEL_TICKS = 2
 DEFAULT_MAX_TRADES = 10
@@ -1072,6 +1074,115 @@ def _eval_tilt(ctx: EvidenceCtx) -> RuleCheck:
     return _pass_cited("R-TILT", evidence)
 
 
+def day_rule_reason(day: date) -> str:
+    return f"evaluated on day {day.isoformat()}"
+
+
+def rule_trades_from_journal(trades: Sequence[Any], tva_ids: Sequence[str]) -> list[RuleTrade]:
+    rows: list[RuleTrade] = []
+    for trade, tva_id in zip(trades, tva_ids, strict=True):
+        entry = _as_dt(trade.entry_timestamp)
+        if entry is None:
+            continue
+        rows.append(
+            RuleTrade(
+                tva_trade_id=str(tva_id),
+                instrument=str(trade.instrument or ""),
+                direction=str(trade.direction or ""),
+                entry_timestamp=entry,
+                exit_timestamp=_as_dt(trade.exit_timestamp),
+                entry_price=_finite(trade.entry_price),
+                exit_price=_finite(trade.exit_price),
+                stop_price=_finite(trade.stop_price),
+                hold_seconds=_finite(trade.hold_seconds),
+                net_pnl_currency=_finite(trade.net_pnl_currency),
+                gross_pnl_currency=_finite(trade.gross_pnl_currency),
+                status=str(trade.status or "")
+                or ("closed" if trade.exit_timestamp is not None else "open"),
+            )
+        )
+    rows.sort(key=lambda item: (item.entry_timestamp, item.tva_trade_id))
+    return rows
+
+
+def evaluate_day_rules(
+    trades: list[RuleTrade],
+    config: RulesConfig | None = None,
+) -> list[RuleCheck]:
+    cfg = config or RulesConfig()
+    ordered = sorted(trades, key=lambda trade: (trade.entry_timestamp, trade.tva_trade_id))
+    return [
+        _eval_dll(ordered, cfg),
+        _eval_max10(ordered, cfg),
+        _eval_3l30(ordered, cfg),
+        _eval_5m(ordered, cfg),
+        _eval_reentry(ordered, cfg),
+    ]
+
+
+def _bias_without_evidence(events: Sequence[SessionEvent]) -> RuleCheck:
+    segs = _event_segs(events, kind="bias_statement")
+    if segs:
+        return _pass_cited("R-BIAS", {"segs": segs})
+    return _check("R-BIAS", "unverifiable", {"segs": []}, EVIDENCE_PENDING_REASON)
+
+
+def compose_day_session_rules(
+    trades: list[RuleTrade],
+    config: RulesConfig | None = None,
+    *,
+    day: date,
+    session_date: date | None = None,
+    evidence: Evidence | None = None,
+    session_events: Sequence[SessionEvent] | None = None,
+    session_start: datetime | None = None,
+    alignment: Alignment | None = None,
+) -> list[RuleCheck]:
+    """Session rules.json on the day path (plan §2.1 / §2.4)."""
+    cfg = config or RulesConfig()
+    events = tuple(session_events or ())
+    day_placeholder = {
+        rule: _check(rule, "unverifiable", {}, day_rule_reason(day)) for rule in DAY_RULE_IDS
+    }
+    by_rule: dict[str, RuleCheck] = dict(day_placeholder)
+    by_rule["R-CLOSE"] = _eval_close(trades, cfg, session_date)
+    by_rule["R-SLTP"] = _eval_sltp(
+        EvidenceCtx(
+            evidence=evidence,
+            events=events,
+            session_start=session_start,
+            alignment=alignment,
+            fills=tuple(trades),
+        )
+    )
+    invalid = alignment_is_invalid(alignment)
+    if evidence is not None:
+        full = evaluate_rules(
+            trades,
+            cfg,
+            session_date=session_date,
+            evidence=evidence,
+            session_events=events,
+            session_start=session_start,
+            alignment=alignment,
+        )
+        for check in full:
+            if check.rule in DAY_RULE_IDS:
+                continue
+            by_rule[check.rule] = check
+    else:
+        for rule in EVIDENCE_BACKED_RULE_IDS:
+            if rule == "R-SLTP":
+                continue
+            if invalid and rule in CLOCK_MAPPED_RULES:
+                by_rule[rule] = _alignment_invalid_check(rule)
+            elif rule == "R-BIAS":
+                by_rule[rule] = _bias_without_evidence(events)
+            else:
+                by_rule[rule] = _check(rule, "unverifiable", {"segs": []}, EVIDENCE_PENDING_REASON)
+    return [by_rule[rule] for rule in RULE_IDS]
+
+
 def evaluate_rules(
     trades: list[RuleTrade],
     config: RulesConfig | None = None,
@@ -1141,6 +1252,14 @@ def _record_session_date(record: SessionRecord) -> date | None:
     if parsed is None:
         return None
     return parsed.astimezone(JOURNAL_EXCHANGE_TZ).date()
+
+
+def session_start_utc(record: SessionRecord) -> datetime | None:
+    return _as_dt(record.recording.start_wallclock_vienna)
+
+
+def record_session_date(record: SessionRecord) -> date | None:
+    return _record_session_date(record)
 
 
 def _as_str(value: object) -> str:
@@ -1227,6 +1346,16 @@ def build_rules_report(
     )
 
 
+def _session_on_day_path(root: Path, record: SessionRecord) -> bool:
+    """True only for a built day path. legacy / legacy_unbuilt stay per-session (§2.1)."""
+    from tradevidanalyser.day_manifest import day_state, nominal_vienna_date
+
+    return day_state(root, nominal_vienna_date(record)).kind in {
+        "current",
+        "current_incomplete",
+    }
+
+
 def _load_evidence(root: Path, session_id: str) -> Evidence | None:
     path = store.evidence_path(root, session_id)
     if not path.is_file():
@@ -1278,6 +1407,14 @@ def rules_session(
                     )
                 }
             )
+    from tradevidanalyser.flags import day_rules_enabled
+
+    if day_rules_enabled() and _session_on_day_path(root, record):
+        from tradevidanalyser.day_rules import rules_session_day_path
+
+        return rules_session_day_path(
+            record, root=root, config=config, config_path=config_path
+        )
     report = build_rules_report(record, root=root, config=config, config_path=config_path)
     if report is None:
         path = store.rules_path(root, session_id)
