@@ -4,7 +4,7 @@
 **Stand geprüft:** TVA `main` @ `674a9bf` (PR-37 landed; PR-36 @ `c6029b8`). ThesisTester source: extract of `docs/research/TVA_TT_Research_Plan.md` with original line numbers (Revision 4, stand 12.10.2026; TT lesestand `251b5099`, TVA `c6029b8`) (TT:6).
 **Danach:** Review. Sidecar implementation remains the later series below. PR-38 does not start that code.
 **Authoritative source:** AccumuLatata/ThesisTester `docs/research/TVA_TT_Research_Plan.md` (German), via the attached line-numbered extract. `docs/JOURNAL_EXTENSION_PLAN.md` is **not** in that extract and stays [NV].
-**Markers** (TT:28–39): **[C]** code or docs self-read; **[T]** self-run on `/tmp` copies; **[Q]** vendor primary; **[Q2]** weaker secondary; **[R]** own arithmetic; **[G]** set in the briefing, not self-checked; **[Rv]** finding from the review of PR #631 on Accumu’s raw data (adopted, not self-checked here); **[NV]** not verified, deliberately not guessed. N4 path checks below are **[C]** at `c6029b8` (desk-check of this repo). TT **[Rv]** is only used where the extract itself uses it.
+**Markers** (TT:28–39): **[C]** code or docs self-read; **[T]** self-run on `/tmp` copies; **[Q]** vendor primary; **[Q2]** weaker secondary; **[R]** own arithmetic; **[G]** set in the briefing, not self-checked; **[Rv]** finding from the review of PR #631 on Accumu’s raw data (adopted, not self-checked here); **[NV]** not verified, deliberately not guessed. N4 path checks below are **[C]** at `CITE_HEAD` (base `4191dd5`); TT:900 left-column cites remain `c6029b8`. TT **[Rv]** is only used where the extract itself uses it.
 
 **Not in this file:** Phase 1 multi-clip / pause behaviour ([`multi-clip-day.md`](multi-clip-day.md)). Roadmap D1–D9 ([`../05_ROADMAP.md`](../05_ROADMAP.md)). Research-plan D7 / D8 / Q-15 are not those roadmap ids. Off-limits (TT:19): `~/thesistester` @`0ebc1494`, `~/tt_mw/rg_pilots`, `~/tt_mw/rg_reruns`, and the Run-2 outputs.
 
@@ -182,25 +182,25 @@ Source: TT:606, 898(a), 900. Confirmed exception to the Phase 1 flag rule (TT:60
 | `pipeline.py:64` ASR | `pipeline.py:64` `get_asr_provider(provider_name)` | **Match.** |
 | `pipeline.py:83` extract | `pipeline.py:83` `get_extract_provider(provider_name)` | **Match.** |
 | `pipeline.py:196` OCR | `pipeline.py:196` `get_ocr_provider(provider_name)` | **Match.** |
-| `evidence.py:321` extract | `evidence.py:321` `get_extract_provider(provider_name)` | **Match.** |
+| `evidence.py:321` extract | `evidence.py:325` `get_extract_provider(provider_name)` | **Match.** |
 | `pause_guard.py:401, 419, 559` OCR | `pause_guard.py:401`, `:419`, `:559` each call `get_ocr_provider()` | **Match.** Today `:401-403` already aborts fake OCR with `Guard braucht echten OCR-Provider` (`pause_guard.py:35`) — **different message** from `TVA_ASR_PROVIDER fehlt`; ASR is not involved here. |
-| CLI `tva transcribe` | `cli.py:70-72`, `:389-390` → `transcribe_session` | **Match.** |
-| CLI `tva extract` | `cli.py:74`, `:393-394` → `extract_session` | **Match.** |
-| CLI `tva run` | `cli.py:81-83`, `:402-404` → `run_latest` → transcribe + extract (`pipeline.py:522-523`) | **Match.** |
-| CLI `tva ocr` | `cli.py:118-124`, `:450-452` → `ocr_session`. Help no longer says “fake (default)” | **Match.** |
-| CLI `tva evidence` | `cli.py:177-186`, `:490-495` → `evidence_session` (extract at `evidence.py:321`) | **Match.** |
-| CLI commands that start OCR via `pause_guard` | `tva align` → `run_pause_guard` (`align.py:271-272`); `tva evidence` / `tva rules` → `ensure_pause_check` (`evidence.py:433-436`, `rules.py:1393-1396`, call at `:1396`); `tva day audit --sample-clocks` is read-only samples (`cli.py:247-249`) | Source does not name each command. These are the `c6029b8` callers that reach `pause_guard` OCR. |
+| CLI `tva transcribe` | `cli.py:397-399` → `transcribe_session` | **Match.** |
+| CLI `tva extract` | parser `cli.py:74-76`; handler `:401-403` → `extract_session` | **Match.** |
+| CLI `tva run` | parser `cli.py:81-88`; handler `:410-415` → `run_latest` → transcribe + extract (`pipeline.py:522-523`) | **Match.** |
+| CLI `tva ocr` | parser `cli.py:118-124`; handler `:458-462` → `ocr_session`. Help no longer says “fake (default)” | **Match.** |
+| CLI `tva evidence` | parser `cli.py:181-190`; handler `:498-505` → `evidence_session` (extract at `evidence.py:325`) | **Match.** |
+| CLI commands that start OCR via `pause_guard` | `tva align` → `run_pause_guard` (`align.py:271-272`); `tva evidence` / `tva rules` → `ensure_pause_check` (`evidence.py:448-451`, `rules.py:1393-1396`, call at `:1396`); `tva day audit --sample-clocks` is read-only samples (`cli.py:254-258`, dispatch `:529`) | Source does not name each command. These are the `c6029b8` callers that reach `pause_guard` OCR. |
 | `tva watch --run` `watch.py:387-389` | `watch.py:387-389`: if `run`: `transcribe_session` then `extract_session` | **Match.** |
 | `tva serve` `POST /sessions/{id}/run` `serve.py:206-282` | Route `serve.py:208-242`; `_require_run_providers` `:215-218` / `:266-270` raises HTTP **400** with `TVA_*_PROVIDER fehlt` before the worker starts. Worker still at `:288+` (`transcribe` then `extract`). No placeholder body | **Implemented.** Unset provider is a failed HTTP body with the message, not 202 + later `status.error`. Configured (including explicit `fake`) still 202. |
 | `scripts/windows/copy-after-obs.ps1` line 19 | Line 19: `tva --root $Root watch --source $Source --once` — **no** `--run` | **Match.** Does not reach ASR today. Stays runnable. Anyone who adds `--run` there needs a set provider (TT:900). |
 
-**Not on the source N4 list (TT:900).** Previous draft listed `tva doctor` and a bare `TVA_ASR_PROVIDER` env row as run entry points. They are **not** in the PR-43 row. Doctor remains a Phase 1 / PR-38 surface (TT:899): it does not run ASR, but it now reports unset ASR / OCR / extract as fail (`TVA_*_PROVIDER fehlt`) instead of pretending they are `fake`.
+**Not on the source N4 list (TT:900).** Previous draft listed `tva doctor` and a bare `TVA_ASR_PROVIDER` env row as run entry points. They are **not** in the PR-43 row. Doctor remains a Phase 1 / PR-38 surface (TT:899): it does not run ASR. Unset ASR / OCR / extract is **warn** (`TVA_*_PROVIDER fehlt`) so `ok` stays true on an install that never runs OCR; `/health` uses the same `run_doctor` report.
 
 **Listed expectation changes (TT:900 / 606):**
 
 - `tests/test_asr.py::test_default_asr_provider_is_fake` → unset raises `TVA_ASR_PROVIDER fehlt`.
 - `tests/conftest.py` sets `TVA_ASR_PROVIDER`, `TVA_OCR_PROVIDER`, `TVA_EXTRACT_PROVIDER` to `fake` (autouse).
-- Doctor: unset ASR / OCR / extract is `fail` (`TVA_*_PROVIDER fehlt`); new `ocr_provider` check. `test_asr_hosted.py::test_doctor_reports_hosted_keys` no longer unsets ASR (conftest fake keeps `report.ok`).
+- Doctor / `/health`: unset ASR / OCR / extract is `warn` (`TVA_*_PROVIDER fehlt`); new `ocr_provider` check. `report.ok` stays true when only those are unset.
 - `test_l0_with_guard_on_matches_snapshot`: L0 `evidence.json` files are **not** rewritten. Regenerated clipped windows keep the same `t0`/`t1` and add `window_clipped` + raw bounds; the test strips those new fields before compare.
 
 PR-43 is this implementation. N4 records the locked default and the list.
@@ -283,4 +283,4 @@ PR-43 implements N4 (no silent provider fallbacks) in code. This file stays the 
 - No merge.
 - No Program B results.
 - Report / Notion / coach / VLM factories keep their existing defaults (not on the N4 list).
-- Doctor is not an N4 run entry point (TT:900); it reports unset ASR / OCR / extract honestly.
+- Doctor is not an N4 run entry point (TT:900); unset ASR / OCR / extract is warn (`TVA_*_PROVIDER fehlt`), not fail.

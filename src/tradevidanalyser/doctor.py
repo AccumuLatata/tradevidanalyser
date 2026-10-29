@@ -157,7 +157,7 @@ def run_doctor(root: Path) -> DoctorReport:
 
     extract = (os.environ.get("TVA_EXTRACT_PROVIDER") or "").strip().lower()
     if not extract:
-        ex_status, ex_detail = "fail", "TVA_EXTRACT_PROVIDER fehlt"
+        ex_status, ex_detail = "warn", "TVA_EXTRACT_PROVIDER fehlt"
     elif extract in {"grok", "xai"}:
         if xai:
             ex_status, ex_detail = "ok", f"TVA_EXTRACT_PROVIDER={extract}"
@@ -172,7 +172,7 @@ def run_doctor(root: Path) -> DoctorReport:
     provider = (os.environ.get("TVA_ASR_PROVIDER") or "").strip().lower()
     known = {"fake", "whisperx", "whisper", "deepgram", "hosted"}
     if not provider:
-        asr_status, asr_detail = "fail", "TVA_ASR_PROVIDER fehlt"
+        asr_status, asr_detail = "warn", "TVA_ASR_PROVIDER fehlt"
     elif provider in {"scribe", "elevenlabs"}:
         asr_status, asr_detail = "warn", f"TVA_ASR_PROVIDER={provider}; PR-05 pick is deepgram"
     elif provider in known:
@@ -215,7 +215,7 @@ def run_doctor(root: Path) -> DoctorReport:
 
     ocr_provider = (os.environ.get("TVA_OCR_PROVIDER") or "").strip().lower()
     if not ocr_provider:
-        ocr_prov_status, ocr_prov_detail = "fail", "TVA_OCR_PROVIDER fehlt"
+        ocr_prov_status, ocr_prov_detail = "warn", "TVA_OCR_PROVIDER fehlt"
     elif ocr_provider in {"fake", "test"}:
         ocr_prov_status, ocr_prov_detail = "ok", f"TVA_OCR_PROVIDER={ocr_provider}"
     elif ocr_provider in {"paddleocr", "paddle", "ppocr"}:

@@ -723,7 +723,7 @@ def insights_from_chat_payload(payload: dict[str, Any]) -> Insights:
 
 
 class GrokExtractProvider:
-    """xAI Grok extractor. Opt-in via TVA_EXTRACT_PROVIDER=grok. Fake stays default."""
+    """xAI Grok extractor. Opt-in via TVA_EXTRACT_PROVIDER=grok. `fake` is explicit opt-in."""
 
     name = "grok"
     model = DEFAULT_GROK_MODEL

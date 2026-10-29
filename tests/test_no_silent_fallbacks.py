@@ -212,16 +212,16 @@ def test_serve_run_unset_asr_returns_error(
     assert not store.transcript_path(tva_root, record.id).is_file()
 
 
-def test_doctor_unset_providers_fail(
+def test_doctor_unset_providers_warn(
     tva_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _unset_n4_providers(monkeypatch)
     report = run_doctor(tva_root)
     ids = {c.id: c for c in report.checks}
-    assert ids["asr_provider"].status == "fail"
+    assert ids["asr_provider"].status == "warn"
     assert ids["asr_provider"].detail == missing_provider_error(ENV_ASR_PROVIDER)
-    assert ids["extract_provider"].status == "fail"
+    assert ids["extract_provider"].status == "warn"
     assert ids["extract_provider"].detail == missing_provider_error(ENV_EXTRACT_PROVIDER)
-    assert ids["ocr_provider"].status == "fail"
+    assert ids["ocr_provider"].status == "warn"
     assert ids["ocr_provider"].detail == missing_provider_error(ENV_OCR_PROVIDER)
-    assert not report.ok
+    assert report.ok
