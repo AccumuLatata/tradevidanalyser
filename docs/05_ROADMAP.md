@@ -130,6 +130,18 @@ writes cited claims (≥ N ledger row ids, N default 10) plus at most one
 `ledger.experiments`. `GET /coach/latest` is the bot read. Fake coach
 is the default.
 
+**Phase 2 — sidecar facts (docs).** [`plans/phase-2-sidecar-facts.md`](plans/phase-2-sidecar-facts.md)
+records the sidecar contract, flag rows (`TVA_SIDECAR`, `TVA_NET_FEES`),
+coach contract v2 (R8), and locked statements N4 / N5 / Q-15. Series
+PR-37 (this plan) → PR-38 → PR-43 → PR-39 → PR-40 → PR-42 (after
+JX1/JX2/JX8). Deferred: PR-41, 44 (only if Deepgram), 45, 46. Open
+before later PRs: research-plan D7 (`tva-watch` on ALTrading, before
+PR-38), D8 (`T:\tradevid` SMB vs SFTP `/trading`, before PR-39),
+Q-15 (fixed 1.043 s vs measured per clip, before PR-40) — not
+roadmap D7/D8.
+PR-37 is docs-only, no named parity test. No Phase 2 code in this
+roadmap cut.
+
 ---
 
 ## Risks and mitigations
