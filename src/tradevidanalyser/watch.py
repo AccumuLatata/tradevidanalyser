@@ -348,6 +348,7 @@ def process_source(
 
             if already_ingested(root, src, digest_fn=hasher):
                 event["reason"] = "ingested"
+                _maybe_copy_sidecar(event, src, dest_path(root, src))
                 continue
             if not mtime_stable(src, stable_s=stable_s, now=now):
                 event["reason"] = "unstable"
@@ -364,6 +365,7 @@ def process_source(
 
             if already_ingested(root, src, digest_fn=hasher):
                 event["reason"] = "ingested"
+                _maybe_copy_sidecar(event, src, dest_path(root, src))
                 continue
 
             dest = dest_path(root, src)
@@ -377,14 +379,12 @@ def process_source(
                     warn=False,
                 )
             if dest.is_file() and (same_copy(src, dest) or hasher(dest) == hasher(src)):
-                if sidecar_enabled():
-                    event["sidecar"] = copy_sidecar(src, dest)
+                _maybe_copy_sidecar(event, src, dest)
                 record = ingest(dest, root=root)
                 event["reason"] = "dest-exists"
             else:
                 dest = _copy_via_part(src, root=root, copy_fn=copier)
-                if sidecar_enabled():
-                    event["sidecar"] = copy_sidecar(src, dest)
+                _maybe_copy_sidecar(event, src, dest)
                 record = ingest(dest, root=root)
                 event["action"] = "copied"
                 event["dest"] = dest.name
@@ -405,6 +405,12 @@ def process_source(
             events.append(event)
 
     return events
+
+
+def _maybe_copy_sidecar(event: dict[str, Any], src: Path, dest: Path) -> None:
+    """Under TVA_SIDECAR, attach <stem>.jsonl if the dest sidecar is absent. Flag off: no keys."""
+    if sidecar_enabled():
+        event["sidecar"] = copy_sidecar(src, dest)
 
 
 def watch(

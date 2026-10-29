@@ -64,6 +64,48 @@ def test_classify_jsonl_ok_missing_invalid(tmp_path: Path) -> None:
     assert classify_jsonl(empty) == SIDECAR_OK
     bad = _write_jsonl(tmp_path / "bad.jsonl", "{not json\n")
     assert classify_jsonl(bad) == SIDECAR_INVALID_JSON
+    binary = tmp_path / "bin.jsonl"
+    binary.write_bytes(b"\xff\xfe not utf-8")
+    assert classify_jsonl(binary) == SIDECAR_INVALID_JSON
+
+
+def test_copy_sidecar_binary_is_invalid_json_and_still_copied(tmp_path: Path) -> None:
+    src_video = tmp_path / "src" / "clip.mp4"
+    dest_video = tmp_path / "dest" / "clip.mp4"
+    src_video.parent.mkdir()
+    dest_video.parent.mkdir()
+    src_video.write_bytes(b"x")
+    dest_video.write_bytes(b"x")
+    payload = b"\xff\xfe not utf-8"
+    src_video.with_suffix(".jsonl").write_bytes(payload)
+    assert copy_sidecar(src_video, dest_video) == SIDECAR_INVALID_JSON
+    dest = dest_video.with_suffix(".jsonl")
+    assert dest.is_file()
+    assert dest.read_bytes() == payload
+
+
+def test_failed_copy_leaves_old_dest_intact(tmp_path: Path) -> None:
+    src_video = tmp_path / "src" / "clip.mp4"
+    dest_video = tmp_path / "dest" / "clip.mp4"
+    src_video.parent.mkdir()
+    dest_video.parent.mkdir()
+    src_video.write_bytes(b"x")
+    dest_video.write_bytes(b"x")
+    _write_jsonl(src_video.with_suffix(".jsonl"), [{"event": "new"}])
+    dest = dest_video.with_suffix(".jsonl")
+    dest.write_text('{"event": "old"}\n', encoding="utf-8")
+    old = dest.read_text(encoding="utf-8")
+
+    def boom(_src: Path, part: Path) -> None:
+        assert part.name.endswith(".part")
+        assert part != dest
+        part.write_bytes(b"partial-sidecar")
+        raise OSError("disk full")
+
+    with pytest.raises(OSError, match="disk full"):
+        copy_sidecar(src_video, dest_video, only_if_absent=False, copy_fn=boom)
+    assert dest.read_text(encoding="utf-8") == old
+    assert not dest.with_name(dest.name + ".part").exists()
 
 
 def test_copy_sidecar_skips_events_jsonl(tmp_path: Path) -> None:
@@ -204,6 +246,79 @@ def test_ingest_split_parts_copy_each_sidecar(
     ingest(part2, root=tva_root)
     assert sidecar_dest_path(tva_root, part1).is_file()
     assert sidecar_dest_path(tva_root, part2).is_file()
+
+
+def test_flag_off_already_ingested_does_not_attach_sidecar(
+    tva_root: Path, tmp_path: Path, write_video
+) -> None:
+    source = tmp_path / "obs"
+    source.mkdir()
+    src = write_video(_obs_name(source))
+    first = watch(source, root=tva_root, once=True, stable_s=0)
+    assert first["events"][0]["action"] == "copied"
+    assert "sidecar" not in first
+    assert "sidecar" not in first["events"][0]
+    _write_jsonl(src.with_suffix(".jsonl"), [{"event": "late"}])
+    second = watch(source, root=tva_root, once=True, stable_s=0)
+    assert second["events"][0]["reason"] == "ingested"
+    assert "sidecar" not in second
+    assert "sidecar" not in second["events"][0]
+    assert not sidecar_dest_path(tva_root, src).exists()
+
+
+def test_ingest_attaches_late_sidecar(
+    tva_root: Path, tmp_path: Path, write_video, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ENV_SIDECAR, "1")
+    src = write_video(tmp_path / "2026-09-11 14-30-00.mp4")
+    ingest(src, root=tva_root)
+    assert not sidecar_dest_path(tva_root, src).exists()
+    _write_jsonl(src.with_suffix(".jsonl"), [{"event": "late"}])
+    ingest(src, root=tva_root)
+    sidecar = sidecar_dest_path(tva_root, src)
+    assert sidecar.is_file()
+    assert sidecar.read_text(encoding="utf-8") == src.with_suffix(".jsonl").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_watch_attaches_late_sidecar_when_already_ingested(
+    tva_root: Path, tmp_path: Path, write_video, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ENV_SIDECAR, "1")
+    source = tmp_path / "obs"
+    source.mkdir()
+    src = write_video(_obs_name(source))
+    first = watch(source, root=tva_root, once=True, stable_s=0)
+    assert first["events"][0]["action"] == "copied"
+    assert first["events"][0]["sidecar"] == SIDECAR_MISSING
+    assert not sidecar_dest_path(tva_root, src).exists()
+    _write_jsonl(src.with_suffix(".jsonl"), [{"event": "late"}])
+    second = watch(source, root=tva_root, once=True, stable_s=0)
+    assert second["events"][0]["reason"] == "ingested"
+    assert second["events"][0]["sidecar"] == SIDECAR_OK
+    sidecar = sidecar_dest_path(tva_root, src)
+    assert sidecar.is_file()
+    assert sidecar.read_text(encoding="utf-8") == src.with_suffix(".jsonl").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_watch_does_not_overwrite_existing_sidecar(
+    tva_root: Path, tmp_path: Path, write_video, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ENV_SIDECAR, "1")
+    source = tmp_path / "obs"
+    source.mkdir()
+    src = write_video(_obs_name(source))
+    _write_jsonl(src.with_suffix(".jsonl"), [{"event": "first"}])
+    watch(source, root=tva_root, once=True, stable_s=0)
+    sidecar = sidecar_dest_path(tva_root, src)
+    first = sidecar.read_text(encoding="utf-8")
+    _write_jsonl(src.with_suffix(".jsonl"), [{"event": "second"}])
+    report = watch(source, root=tva_root, once=True, stable_s=0)
+    assert report["events"][0]["reason"] == "ingested"
+    assert sidecar.read_text(encoding="utf-8") == first
 
 
 def test_dest_exists_still_copies_sidecar(

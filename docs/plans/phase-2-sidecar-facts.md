@@ -104,14 +104,14 @@ Revision 3 made the whole sidecar `invalid` on one outlier; this rule replaces t
 
 ## 4. Flag table
 
-Source: TT:887–894, 605. Phase 1 allowed sets stay in `multi-clip-day.md` §3.6 [C]. Unset/empty is off. Truth is `1` / `true` / `yes` / `on` (`flags.py:15`, `multi-clip-day.md:537`) [C].
+Source: TT:887–894, 605. Phase 1 allowed sets stay in `multi-clip-day.md` §3.6 [C]. Unset/empty is off. Truth is `1` / `true` / `yes` / `on` (`flags.py:16`, `multi-clip-day.md:537`) [C].
 
 | Flag | PR | Allowed combination |
 |---|---|---|
 | `TVA_SIDECAR` | 39, 40 | Orthogonal: combinable with every **existing allowed** row (TT:891). |
 | `TVA_NET_FEES` | 42 | Only together with the Vierer-Set `TVA_EXCLUSIVE_FILLS`, `TVA_DAY_RULES`, `TVA_DAY_PUBLISH`, `TVA_TRADING_HOURS`, because it changes day numbers (TT:892). |
 
-**Other combinations → `ungültige Flag-Kombination`** (TT:894). That string is already the Phase 1 abort (`flags.py:16` `INVALID_FLAG_SET_ERROR`) [C]. Every new row ships with a test in `flags.py` (TT:894, 605).
+**Other combinations → `ungültige Flag-Kombination`** (TT:894). That string is already the Phase 1 abort (`flags.py:17` `INVALID_FLAG_SET_ERROR`) [C]. Every new row ships with a test in `flags.py` (TT:894, 605).
 
 **`TVA_STRICT_FACTS` is dropped.** Revision 2 had it. It is gone: PR-43 is default without a flag (R6) (TT:894, 606, 900).
 
@@ -190,9 +190,9 @@ Source: TT:606, 898(a), 900. Confirmed exception to the Phase 1 flag rule (TT:60
 | CLI `tva ocr` | parser `cli.py:118-124`; handler `:458-462` → `ocr_session`. Help no longer says “fake (default)” | **Match.** |
 | CLI `tva evidence` | parser `cli.py:181-190`; handler `:498-505` → `evidence_session` (extract at `evidence.py:325`) | **Match.** |
 | CLI commands that start OCR via `pause_guard` | `tva align` → `run_pause_guard` (`align.py:271-272`); `tva evidence` / `tva rules` → `ensure_pause_check` (`evidence.py:448-451`, `rules.py:1393-1396`, call at `:1396`); `tva day audit --sample-clocks` is read-only samples (`cli.py:254-258`, dispatch `:529`) | Source does not name each command. These are the `c6029b8` callers that reach `pause_guard` OCR. |
-| `tva watch --run` `watch.py:387-389` | `watch.py:387-389`: if `run`: `transcribe_session` then `extract_session` | **Match.** |
+| `tva watch --run` `watch.py:393-395` | `watch.py:393-395`: if `run`: `transcribe_session` then `extract_session` | **Match.** |
 | `tva serve` `POST /sessions/{id}/run` `serve.py:206-282` | Route `serve.py:208-242`; `_require_run_providers` `:215-218` / `:266-270` raises HTTP **400** with `TVA_*_PROVIDER fehlt` before the worker starts. Worker still at `:288+` (`transcribe` then `extract`). No placeholder body | **Implemented.** Unset provider is a failed HTTP body with the message, not 202 + later `status.error`. Configured (including explicit `fake`) still 202. |
-| `scripts/windows/copy-after-obs.ps1` line 19 | Line 19: `tva --root $Root watch --source $Source --once` — **no** `--run` | **Match.** Does not reach ASR today. Stays runnable. Anyone who adds `--run` there needs a set provider (TT:900). |
+| `scripts/windows/copy-after-obs.ps1` line 21 | Line 21: `tva --root $Root watch --source $Source --once` — **no** `--run` | **Match.** Does not reach ASR today. Stays runnable. Anyone who adds `--run` there needs a set provider (TT:900). |
 
 **Not on the source N4 list (TT:900).** Previous draft listed `tva doctor` and a bare `TVA_ASR_PROVIDER` env row as run entry points. They are **not** in the PR-43 row. Doctor remains a Phase 1 / PR-38 surface (TT:899): it does not run ASR. Unset ASR / OCR / extract is **warn** (`TVA_*_PROVIDER fehlt`) so `ok` stays true on an install that never runs OCR; `/health` uses the same `run_doctor` report.
 
@@ -270,7 +270,7 @@ This repo [C] @ `c6029b8`:
 | `docs/plans/multi-clip-day.md:537-560` | Phase 1 allowed flag rows; Vierer-Set |
 | `docs/plans/multi-clip-day.md:779` | Phase 2 placeholder |
 | `src/tradevidanalyser/flags.py:16` | `ungültige Flag-Kombination` already |
-| N4 table in §7 | Provider factories, pipeline, evidence, pause_guard, CLI, watch, serve, `copy-after-obs.ps1:19` |
+| N4 table in §7 | Provider factories, pipeline, evidence, pause_guard, CLI, watch, serve, `copy-after-obs.ps1:21` |
 
 ---
 
@@ -280,7 +280,7 @@ Source: TT:901. `TVA_SIDECAR` is orthogonal (TT:891). Unset/empty is off; behavi
 
 | Surface | Flag on | Flag off |
 |---|---|---|
-| `watch` / `ingest` | copy exactly `<stem>.jsonl` next to the recording (`watch.py` `VIDEO_SUFFIXES`, `sidecar_copy.py`) | no `.jsonl` copy |
+| `watch` / `ingest` | copy exactly `<stem>.jsonl` next to the recording (`watch.py` `VIDEO_SUFFIXES`, `sidecar_copy.py`). Already-ingested watch attaches a missing/late sidecar the same way ingest does, only if the dest sidecar is absent | no `.jsonl` copy |
 | Pattern | `<stem>.jsonl` only; `.events.jsonl` is not copied | n/a |
 | Events | `sidecar: ok\|missing\|invalid_json` plus watch-report counts | no `sidecar` field |
 | Dest | `TVA_ROOT/recordings/<stem>.jsonl` from `--root` / `TVA_ROOT` | n/a |
