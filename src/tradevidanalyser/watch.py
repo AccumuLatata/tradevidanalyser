@@ -11,9 +11,11 @@ from pathlib import Path
 from typing import Any
 
 from tradevidanalyser import config, media, store
+from tradevidanalyser.flags import sidecar_enabled
 from tradevidanalyser.ingest import guard_session_id_collision, ingest
 from tradevidanalyser.naming import FilenameError, parse_obs_filename
 from tradevidanalyser.pipeline import extract_session, transcribe_session
+from tradevidanalyser.sidecar_copy import classify_jsonl, copy_sidecar, sidecar_counts
 
 VIDEO_SUFFIXES = {".mp4", ".mkv"}
 DEFAULT_STABLE_S = 15.0
@@ -346,6 +348,16 @@ def process_source(
 
             if already_ingested(root, src, digest_fn=hasher):
                 event["reason"] = "ingested"
+                if sidecar_enabled():
+                    dest = dest_path(root, src)
+                    dest_sidecar = dest.with_suffix(".jsonl")
+                    if dest_sidecar.is_file():
+                        event["sidecar"] = classify_jsonl(dest_sidecar)
+                    else:
+                        lock = lock_path(root, src)
+                        if try_acquire_lock(lock):
+                            acquired = True
+                            event["sidecar"] = copy_sidecar(src, dest)
                 continue
             if not mtime_stable(src, stable_s=stable_s, now=now):
                 event["reason"] = "unstable"
@@ -362,6 +374,7 @@ def process_source(
 
             if already_ingested(root, src, digest_fn=hasher):
                 event["reason"] = "ingested"
+                _maybe_copy_sidecar(event, src, dest_path(root, src))
                 continue
 
             dest = dest_path(root, src)
@@ -375,10 +388,12 @@ def process_source(
                     warn=False,
                 )
             if dest.is_file() and (same_copy(src, dest) or hasher(dest) == hasher(src)):
+                _maybe_copy_sidecar(event, src, dest)
                 record = ingest(dest, root=root)
                 event["reason"] = "dest-exists"
             else:
                 dest = _copy_via_part(src, root=root, copy_fn=copier)
+                _maybe_copy_sidecar(event, src, dest)
                 record = ingest(dest, root=root)
                 event["action"] = "copied"
                 event["dest"] = dest.name
@@ -399,6 +414,12 @@ def process_source(
             events.append(event)
 
     return events
+
+
+def _maybe_copy_sidecar(event: dict[str, Any], src: Path, dest: Path) -> None:
+    """Under TVA_SIDECAR, attach <stem>.jsonl if the dest sidecar is absent. Flag off: no keys."""
+    if sidecar_enabled():
+        event["sidecar"] = copy_sidecar(src, dest)
 
 
 def watch(
@@ -441,7 +462,7 @@ def watch(
             break
         sleep_fn(poll)
 
-    return {
+    report: dict[str, Any] = {
         "source": str(source),
         "root": str(root),
         "once": once,
@@ -449,3 +470,6 @@ def watch(
         "stable_s": stable,
         "events": all_events,
     }
+    if sidecar_enabled():
+        report["sidecar"] = sidecar_counts(all_events)
+    return report

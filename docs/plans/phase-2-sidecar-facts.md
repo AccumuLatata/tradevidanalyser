@@ -1,6 +1,6 @@
 # Phase 2 — Sidecar facts (PR-37)
 
-**Status:** Plan (PR-37, docs-only) plus owner facts recorded in PR-38 (D7 / D8 / Q-15 = B). PR-38 ships the autostart guard and a read-only `tva doctor` query; it does not implement sidecar code, Q-15, or D8 path changes.
+**Status:** Plan (PR-37, docs-only) plus owner facts recorded in PR-38 (D7 / D8 / Q-15 = B). PR-39 ships the opt-in `<stem>.jsonl` copy under `TVA_SIDECAR` and resolves D8 path examples. It does not implement `sidecar.py` facts or `time_anchor.json` (PR-40).
 **Stand geprüft:** TVA `main` @ `674a9bf` (PR-37 landed; PR-36 @ `c6029b8`). ThesisTester source: extract of `docs/research/TVA_TT_Research_Plan.md` with original line numbers (Revision 4, stand 12.10.2026; TT lesestand `251b5099`, TVA `c6029b8`) (TT:6).
 **Danach:** Review. Sidecar implementation remains the later series below. PR-38 does not start that code.
 **Authoritative source:** AccumuLatata/ThesisTester `docs/research/TVA_TT_Research_Plan.md` (German), via the attached line-numbered extract. `docs/JOURNAL_EXTENSION_PLAN.md` is **not** in that extract and stays [NV].
@@ -36,7 +36,7 @@ Source: TT §10.3 (TT:883–907), order R6 / R10 (TT:885).
 | 1 | **PR-37** | This file. Docs only (TT:898). |
 | 2 | **PR-38** | Autostart guard (TT:899). D7 checked 2026-10-29: nothing registered, nothing to disable. |
 | 3 | **PR-43** | No silent fallbacks. Default, no flag (N4). After PR-38 (TT:885, 900). |
-| 4 | **PR-39** | Copy sidecar. After D8 (TT:901, 923). |
+| 4 | **PR-39** | Copy sidecar (this implementation). D8 resolved (TT:901, 923). |
 | 5 | **PR-40** | Sidecar reader and time anchor. After Q-15 (TT:441, 902, 1100). |
 | 6 | **PR-42** | Facts mirror. After JX1, JX2, JX8 (TT:885, 903). |
 
@@ -104,14 +104,14 @@ Revision 3 made the whole sidecar `invalid` on one outlier; this rule replaces t
 
 ## 4. Flag table
 
-Source: TT:887–894, 605. Phase 1 allowed sets stay in `multi-clip-day.md` §3.6 [C]. Unset/empty is off. Truth is `1` / `true` / `yes` / `on` (`flags.py:15`, `multi-clip-day.md:537`) [C].
+Source: TT:887–894, 605. Phase 1 allowed sets stay in `multi-clip-day.md` §3.6 [C]. Unset/empty is off. Truth is `1` / `true` / `yes` / `on` (`flags.py:16`, `multi-clip-day.md:537`) [C].
 
 | Flag | PR | Allowed combination |
 |---|---|---|
 | `TVA_SIDECAR` | 39, 40 | Orthogonal: combinable with every **existing allowed** row (TT:891). |
 | `TVA_NET_FEES` | 42 | Only together with the Vierer-Set `TVA_EXCLUSIVE_FILLS`, `TVA_DAY_RULES`, `TVA_DAY_PUBLISH`, `TVA_TRADING_HOURS`, because it changes day numbers (TT:892). |
 
-**Other combinations → `ungültige Flag-Kombination`** (TT:894). That string is already the Phase 1 abort (`flags.py:16` `INVALID_FLAG_SET_ERROR`) [C]. Every new row ships with a test in `flags.py` (TT:894, 605).
+**Other combinations → `ungültige Flag-Kombination`** (TT:894). That string is already the Phase 1 abort (`flags.py:17` `INVALID_FLAG_SET_ERROR`) [C]. Every new row ships with a test in `flags.py` (TT:894, 605).
 
 **`TVA_STRICT_FACTS` is dropped.** Revision 2 had it. It is gone: PR-43 is default without a flag (R6) (TT:894, 606, 900).
 
@@ -190,9 +190,9 @@ Source: TT:606, 898(a), 900. Confirmed exception to the Phase 1 flag rule (TT:60
 | CLI `tva ocr` | parser `cli.py:118-124`; handler `:458-462` → `ocr_session`. Help no longer says “fake (default)” | **Match.** |
 | CLI `tva evidence` | parser `cli.py:181-190`; handler `:498-505` → `evidence_session` (extract at `evidence.py:325`) | **Match.** |
 | CLI commands that start OCR via `pause_guard` | `tva align` → `run_pause_guard` (`align.py:271-272`); `tva evidence` / `tva rules` → `ensure_pause_check` (`evidence.py:448-451`, `rules.py:1393-1396`, call at `:1396`); `tva day audit --sample-clocks` is read-only samples (`cli.py:254-258`, dispatch `:529`) | Source does not name each command. These are the `c6029b8` callers that reach `pause_guard` OCR. |
-| `tva watch --run` `watch.py:387-389` | `watch.py:387-389`: if `run`: `transcribe_session` then `extract_session` | **Match.** |
+| `tva watch --run` `watch.py:402-404` | `watch.py:402-404`: if `run`: `transcribe_session` then `extract_session` | **Match.** |
 | `tva serve` `POST /sessions/{id}/run` `serve.py:206-282` | Route `serve.py:208-242`; `_require_run_providers` `:215-218` / `:266-270` raises HTTP **400** with `TVA_*_PROVIDER fehlt` before the worker starts. Worker still at `:288+` (`transcribe` then `extract`). No placeholder body | **Implemented.** Unset provider is a failed HTTP body with the message, not 202 + later `status.error`. Configured (including explicit `fake`) still 202. |
-| `scripts/windows/copy-after-obs.ps1` line 19 | Line 19: `tva --root $Root watch --source $Source --once` — **no** `--run` | **Match.** Does not reach ASR today. Stays runnable. Anyone who adds `--run` there needs a set provider (TT:900). |
+| `scripts/windows/copy-after-obs.ps1` line 21 | Line 21: `tva --root $Root watch --source $Source --once` — **no** `--run` | **Match.** Does not reach ASR today. Stays runnable. Anyone who adds `--run` there needs a set provider (TT:900). |
 
 **Not on the source N4 list (TT:900).** Previous draft listed `tva doctor` and a bare `TVA_ASR_PROVIDER` env row as run entry points. They are **not** in the PR-43 row. Doctor remains a Phase 1 / PR-38 surface (TT:899): it does not run ASR. Unset ASR / OCR / extract is **warn** (`TVA_*_PROVIDER fehlt`) so `ok` stays true on an install that never runs OCR; `/health` uses the same `run_doctor` report.
 
@@ -230,7 +230,7 @@ Owner facts below are Accumu 2026-10-29. They are not in the extract (TT:922–9
 | Id | Gate | Extract text | Owner fact (2026-10-29) |
 |---|---|---|---|
 | **D7** | Before **PR-38** (TT:899) | Check whether `tva-watch` is registered on ALTrading; if yes, disable it by hand. Accumu only, after trading (TT:922). PR-38 documents “nicht für ALTrading (B.5)” and a read-only `doctor` query; Accumu disables by hand (TT:899). | Checked on the trading PC: no scheduled task matches tva/tradevid; no TVA entries in the Startup folders or HKCU/HKLM Run keys. Nothing has to be disabled. |
-| **D8** | Before **PR-39** (TT:923) | Clarify whether `T:\tradevid` points at the NAS (SMB). If yes, that conflicts with “NAS only SFTP, only `/trading`” and is resolved **before PR-39** (TT:923, 24). | There is no T: drive. The TVA folder is `Z:\tradevid`; Z: is the SMB share `\\AHORNBUSINESS\trading`. Noted for PR-39; not implemented here. Scripts still say `T:\tradevid`. |
+| **D8** | Before **PR-39** (TT:923) | Clarify whether `T:\tradevid` points at the NAS (SMB). If yes, that conflicts with “NAS only SFTP, only `/trading`” and is resolved **before PR-39** (TT:923, 24). | There is no T: drive. The TVA folder is `Z:\tradevid`; Z: is the SMB share `\\AHORNBUSINESS\trading`. **Resolved in PR-39:** scripts/docs no longer say `T:\tradevid`. Sidecar dest is `$TVA_ROOT/recordings/<stem>.jsonl` from `--root` / `TVA_ROOT`, never a hardcoded NAS / UNC path. |
 | **Q-15** | Before **PR-40** | Extract: fixed first-frame offset (≈ 1.043 s) vs estimate per clip (TT:441, 1100). | **B:** measured per clip; 1.043 s is a loud fallback (warning plus a flag in the output, never silent). Recorded here; implementation is PR-40. |
 
 D1–D6 and D9–D11 are Accumu desk tasks in TT:913–926. They are not gates on this PR series beyond what the rows above say. Not restated as new product decisions.
@@ -270,15 +270,31 @@ This repo [C] @ `c6029b8`:
 | `docs/plans/multi-clip-day.md:537-560` | Phase 1 allowed flag rows; Vierer-Set |
 | `docs/plans/multi-clip-day.md:779` | Phase 2 placeholder |
 | `src/tradevidanalyser/flags.py:16` | `ungültige Flag-Kombination` already |
-| N4 table in §7 | Provider factories, pipeline, evidence, pause_guard, CLI, watch, serve, `copy-after-obs.ps1:19` |
+| N4 table in §7 | Provider factories, pipeline, evidence, pause_guard, CLI, watch, serve, `copy-after-obs.ps1:21` |
 
 ---
 
-## 10. Out of scope for this PR
+## 10. PR-39 shipped (copy only)
 
-PR-43 implements N4 (no silent provider fallbacks) in code. This file stays the Phase 2 plan.
+Source: TT:901. `TVA_SIDECAR` is orthogonal (TT:891). Unset/empty is off; behaviour then matches main (video only, no sidecar key).
 
-- No `TVA_SIDECAR` / `TVA_NET_FEES` implementation (PR-39, PR-40, PR-42).
+| Surface | Flag on | Flag off |
+|---|---|---|
+| `watch` / `ingest` | copy exactly `<stem>.jsonl` next to the recording (`watch.py` `VIDEO_SUFFIXES`, `sidecar_copy.py`). Already-ingested watch attaches a missing/late sidecar the same way ingest does, only if the dest sidecar is absent, and only after the video lock (skip the write if the lock is held; classify-only stays unlocked when dest is present) | no `.jsonl` copy |
+| Pattern | `<stem>.jsonl` only; `.events.jsonl` is not copied | n/a |
+| Events | `sidecar: ok\|missing\|invalid_json` plus watch-report counts | no `sidecar` field |
+| Dest | `TVA_ROOT/recordings/<stem>.jsonl` from `--root` / `TVA_ROOT` | n/a |
+
+**Not in this PR (PR-40):** `sidecar.py` facts, pause/file/first-frame checks, `time_anchor.json`, alignment method.
+
+**D8:** remaining `T:\tradevid` examples in `tva-watch.xml`, `copy-after-obs.ps1`, README, and `04_ARCHITECTURE.md` §2.1 are `Z:\tradevid` or `TVA_ROOT`. No UNC sidecar dest in code.
+
+## 11. Out of scope for this PR
+
+PR-39 implements the TT:901 copy. This file stays the Phase 2 plan.
+
+- No `sidecar.py` / `time_anchor.json` (PR-40).
+- No `TVA_NET_FEES` (PR-42).
 - No golden regeneration. Unclipped / no-media-error fixtures stay bit-identical.
 - No merge.
 - No Program B results.

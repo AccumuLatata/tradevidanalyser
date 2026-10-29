@@ -18,6 +18,6 @@ Build contract:
 Plans:
 
 - [`plans/multi-clip-day.md`](plans/multi-clip-day.md) — Phase 1: several clips per day and pauses (PR-28…PR-36).
-- [`plans/phase-2-sidecar-facts.md`](plans/phase-2-sidecar-facts.md) — Phase 2 sidecar facts (PR-37 plan; PR-38 autostart guard; PR-43 no silent fallbacks).
+- [`plans/phase-2-sidecar-facts.md`](plans/phase-2-sidecar-facts.md) — Phase 2 sidecar facts (PR-37 plan; PR-38 autostart guard; PR-43 no silent fallbacks; PR-39 sidecar copy).
 
 Planned: `SESSION_RECORD_SCHEMA.md` (generated from Pydantic).

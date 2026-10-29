@@ -81,8 +81,16 @@ multi-GB video.
    `schtasks /Query` (list argv; skipped off Windows). On ALTrading run
    `doctor` only after trading. Accumu disables a registered task by
    hand (D7). Doctor never deletes or changes a task.
+   Under `TVA_SIDECAR` (default off; PR-39) `watch` / `ingest` also copy
+   exactly `<stem>.jsonl` next to the recording — not `.events.jsonl`.
+   Events report `sidecar: ok|missing|invalid_json` and the watch report
+   counts those. Destination is `$TVA_ROOT/recordings/<stem>.jsonl` from
+   `--root` / `TVA_ROOT`, never a hardcoded NAS path. Flag unset is the
+   old copy (video only).
 2. **One env var, same layout everywhere.** `TVA_ROOT=/Volumes/tradevid` or
-   `T:\tradevid`. Layout:
+   `Z:\tradevid` (D8: there is no T: drive; Z: is the SMB share
+   `\\AHORNBUSINESS\trading` — operator-set, never hardcoded as a
+   sidecar dest). Layout:
    `recordings/`, `sessions/<id>/`, `fixtures/`. The API and the CLI both
    take `--root` / `TVA_ROOT`.
 3. **Snapshots, not just RAID.** The tapes are irreplaceable. Synology

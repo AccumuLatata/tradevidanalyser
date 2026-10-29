@@ -43,6 +43,7 @@ def _explicit_fake_providers(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TVA_ASR_PROVIDER", "fake")
     monkeypatch.setenv("TVA_OCR_PROVIDER", "fake")
     monkeypatch.setenv("TVA_EXTRACT_PROVIDER", "fake")
+    monkeypatch.delenv("TVA_SIDECAR", raising=False)
 
 
 @pytest.fixture
