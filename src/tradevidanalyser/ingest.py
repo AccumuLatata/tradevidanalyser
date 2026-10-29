@@ -12,6 +12,7 @@ from tradevidanalyser import __version__, config, media, store
 from tradevidanalyser.flags import allow_session_id_overwrite, sidecar_enabled
 from tradevidanalyser.naming import FilenameError, obs_name_prefix, parse_obs_filename
 from tradevidanalyser.schema import Chapter, RecordingInfo, RecordingPart, SessionRecord
+from tradevidanalyser.sidecar import write_session_time_anchor
 from tradevidanalyser.sidecar_copy import copy_sidecar
 
 SPLIT_GAP_S = 5.0
@@ -106,6 +107,8 @@ def ingest(video: Path, *, root: Path, desktop_track: bool = False) -> SessionRe
     )
     store.save_session(root, record)
     _drop_orphan_part_sessions(root, chain, keep_id=session_id)
+    if sidecar_enabled():
+        write_session_time_anchor(record, root=root, probe=first.probe, duration_s=first.duration_s)
     if audio_error is not None:
         store.compute_status(root, session_id, error=audio_error, failed=AUDIO_STAGE)
         raise IngestError(audio_error)
@@ -293,6 +296,8 @@ def _refresh_existing_audio(
                 }
             )
             store.save_session(root, existing)
+    if sidecar_enabled():
+        write_session_time_anchor(existing, root=root)
     store.compute_status(root, session_id)
     return existing
 

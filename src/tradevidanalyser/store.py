@@ -47,6 +47,10 @@ def read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def time_anchor_path(root: Path, session_id: str) -> Path:
+    return config.session_dir(root, session_id) / "time_anchor.json"
+
+
 def session_json_path(root: Path, session_id: str) -> Path:
     return config.session_dir(root, session_id) / "session.json"
 
@@ -238,6 +242,7 @@ def invalidate_downstream(root: Path, session_id: str) -> None:
     # Ledger first: a failed drop must not leave rows after the artifacts are gone.
     drop_ledger_session(root, session_id)
     pause_checks_path(root, session_id).unlink(missing_ok=True)
+    time_anchor_path(root, session_id).unlink(missing_ok=True)
     transcript_path(root, session_id).unlink(missing_ok=True)
     insights_path(root, session_id).unlink(missing_ok=True)
     ocr_path(root, session_id).unlink(missing_ok=True)

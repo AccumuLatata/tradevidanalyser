@@ -747,6 +747,11 @@ def ingest_fills(
     store.drop_debrief(root, record.id)
     store.drop_proposals(root, record.id)
     store.drop_ledger_session(root, record.id)
+    from tradevidanalyser.flags import sidecar_enabled
+    from tradevidanalyser.sidecar import write_session_time_anchor
+
+    if sidecar_enabled():
+        write_session_time_anchor(record, root=root)
     store.compute_status(root, record.id)
     return FillsResult(
         session_id=record.id,

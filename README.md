@@ -92,7 +92,11 @@ disk, then `tva watch --source <obs dir>` copies into `$TVA_ROOT/recordings/`
 (or pass the path to `tva ingest`). Watch never deletes the source and
 never records onto the NAS. With `TVA_SIDECAR=1` (default off), watch and
 ingest also copy `<stem>.jsonl` next to the recording (not `.events.jsonl`)
-into `$TVA_ROOT/recordings/`. The dest is `--root` / `TVA_ROOT`, never a
+into `$TVA_ROOT/recordings/`. Ingest then writes
+`sessions/<id>/time_anchor.json` (`schema_version "1"`): measured
+first-frame offset per clip (Q-15 = B), 1.043 s only as a loud fallback
+(`offset_source: fallback` plus a warning). Flag off does not write the
+file. The dest is `--root` / `TVA_ROOT`, never a
 hardcoded NAS path. Watch is not an autostart: nothing in this
 package registers `tva-watch` or starts it at boot or login. OBS auto-split
 siblings (same filename prefix, next start within 5 s of the previous
