@@ -8,6 +8,35 @@ import pytest
 from tradevidanalyser import config
 
 
+def _is_schtasks_argv(cmd: object) -> bool:
+    if isinstance(cmd, (list, tuple)):
+        if not cmd:
+            return False
+        name = Path(str(cmd[0])).name.lower()
+    else:
+        name = Path(str(cmd)).name.lower()
+    return name in {"schtasks", "schtasks.exe"}
+
+
+@pytest.fixture(autouse=True)
+def _never_call_real_schtasks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PR-38: tests must never hit a real Windows scheduler API."""
+    real_run = subprocess.run
+
+    def guarded(cmd, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if _is_schtasks_argv(cmd):
+            return subprocess.CompletedProcess(
+                list(cmd) if isinstance(cmd, (list, tuple)) else [str(cmd)],
+                0,
+                stdout="",
+                stderr="",
+            )
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", guarded)
+    monkeypatch.setattr("tradevidanalyser.doctor.subprocess.run", guarded)
+
+
 @pytest.fixture
 def tva_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "store"

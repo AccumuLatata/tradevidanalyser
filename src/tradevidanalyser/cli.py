@@ -76,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
     p_ex.add_argument("--provider", default=None)
 
     sub.add_parser("status", help="list sessions and stage states")
-    sub.add_parser("doctor", help="check ffmpeg, TVA_ROOT, GPU, keys")
+    sub.add_parser("doctor", help="check ffmpeg, TVA_ROOT, GPU, keys, autostart")
 
     p_run = sub.add_parser("run", help="ingest (optional) + transcribe + extract")
     p_run.add_argument("--latest", action="store_true", help="use the newest session")

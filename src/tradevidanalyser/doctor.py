@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -12,6 +13,78 @@ from tradevidanalyser.fills import thesistester_available
 from tradevidanalyser.ocr import paddleocr_importable
 from tradevidanalyser.providers.asr import cuda_available, whisperx_importable
 from tradevidanalyser.schema import DoctorCheck, DoctorReport
+
+# Read-only list argv (TT:899). Query only; never create, change, delete, end, or run a task.
+SCHTASKS_QUERY = ["schtasks", "/Query"]
+TVA_WATCH_MARKERS = ("tva-watch", "tva watch", "com.tva.watch")
+TVA_WATCH_CHECK_ID = "tva_watch"
+
+
+def _is_windows() -> bool:
+    return sys.platform == "win32"
+
+
+def _query_scheduled_tasks() -> subprocess.CompletedProcess[str]:
+    """Read-only `schtasks /Query`. List argv only. Never mutates a task."""
+    return subprocess.run(
+        list(SCHTASKS_QUERY),
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=15,
+        shell=False,
+    )
+
+
+def _tva_watch_match_lines(text: str) -> list[str]:
+    hits: list[str] = []
+    for raw in text.splitlines():
+        lowered = raw.lower()
+        if any(marker in lowered for marker in TVA_WATCH_MARKERS):
+            hits.append(raw.strip())
+    return hits
+
+
+def autostart_check() -> DoctorCheck:
+    """Report a registered tva-watch task. Read-only. Skipped off Windows (TT:899)."""
+    if not _is_windows():
+        return DoctorCheck(
+            id=TVA_WATCH_CHECK_ID,
+            status="ok",
+            detail="skipped (not Windows); schtasks /Query not run",
+        )
+    try:
+        result = _query_scheduled_tasks()
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return DoctorCheck(
+            id=TVA_WATCH_CHECK_ID,
+            status="warn",
+            detail=f"schtasks /Query failed (read-only; Accumu disables by hand, D7): {exc}",
+        )
+    blob = f"{result.stdout or ''}\n{result.stderr or ''}"
+    matches = _tva_watch_match_lines(blob)
+    if matches:
+        return DoctorCheck(
+            id=TVA_WATCH_CHECK_ID,
+            status="warn",
+            detail=(
+                "registered tva-watch task found (read-only; Accumu disables by hand, D7)"
+            ),
+        )
+    if result.returncode != 0:
+        return DoctorCheck(
+            id=TVA_WATCH_CHECK_ID,
+            status="warn",
+            detail=(
+                f"schtasks /Query exit {result.returncode} "
+                "(read-only; Accumu disables by hand, D7)"
+            ),
+        )
+    return DoctorCheck(
+        id=TVA_WATCH_CHECK_ID,
+        status="ok",
+        detail="no tva-watch scheduled task",
+    )
 
 
 def run_doctor(root: Path) -> DoctorReport:
@@ -273,6 +346,8 @@ def run_doctor(root: Path) -> DoctorReport:
             ),
         )
     )
+
+    checks.append(autostart_check())
 
     ok = all(c.status != "fail" for c in checks)
     return DoctorReport(

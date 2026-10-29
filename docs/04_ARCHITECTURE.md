@@ -75,6 +75,12 @@ multi-GB video.
    (one-shot),
    [`scripts/mac/com.tva.watch.plist`](../scripts/mac/com.tva.watch.plist)
    (launchd).
+   Those templates are **nicht für ALTrading (B.5)**. This package never
+   registers a task and never starts TVA / `tva-watch` at boot or login.
+   `tva doctor` reports a registered `tva-watch` task via read-only
+   `schtasks /Query` (list argv; skipped off Windows). On ALTrading run
+   `doctor` only after trading. Accumu disables a registered task by
+   hand (D7). Doctor never deletes or changes a task.
 2. **One env var, same layout everywhere.** `TVA_ROOT=/Volumes/tradevid` or
    `T:\tradevid`. Layout:
    `recordings/`, `sessions/<id>/`, `fixtures/`. The API and the CLI both
@@ -118,7 +124,7 @@ Every stage is a CLI subcommand, idempotent, writing into
 | VLM | `tva vlm <session>` | CLI (not a bot run stage; off unless `TVA_VLM_PROVIDER`) | `visual_notes.json` + `insights.visual_notes` | yes, optional |
 | Status | `tva status` | `GET /sessions`, `GET /sessions/latest` | stage states | yes |
 | Read | — | `GET /sessions/{id}`, `/transcript`, `/insights` | JSON | yes |
-| Doctor | `tva doctor` | `GET /health` | ffmpeg / GPU / keys / NAS mount | yes |
+| Doctor | `tva doctor` | `GET /health` | ffmpeg / GPU / keys / NAS mount / autostart | yes |
 | Fills | `tva fills <session> --executions <csv> --venue topstepx\|amp` | CLI (not a bot run stage) | `fills.parquet` / `trades.parquet` | yes, optional |
 | Align | `tva align <session> [--manual-offset s]` | CLI (not a bot run stage) | `session.alignment` (offset/drift/confidence/method/samples) | yes, optional |
 | Evidence | `tva evidence <session>` | CLI (not a bot run stage) | `evidence.json` per-trade windows + cited stated fields | yes, optional |

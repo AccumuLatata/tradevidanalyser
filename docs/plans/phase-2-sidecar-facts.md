@@ -1,9 +1,8 @@
 # Phase 2 — Sidecar facts (PR-37)
 
-**Status:** Plan. No code, configuration, test, fixture, or golden change in this PR.
-**Stand geprüft:** TVA `main` @ `c6029b8` (PR-36 landed). ThesisTester source: extract of `docs/research/TVA_TT_Research_Plan.md` with original line numbers (Revision 4, stand 12.10.2026; TT lesestand `251b5099`, TVA `c6029b8`) (TT:6).
-**Danach:** Review. Implementation is the later series below. This PR does not start that code.
-**This PR:** docs-only, no named parity test.
+**Status:** Plan (PR-37, docs-only) plus owner facts recorded in PR-38 (D7 / D8 / Q-15 = B). PR-38 ships the autostart guard and a read-only `tva doctor` query; it does not implement sidecar code, Q-15, or D8 path changes.
+**Stand geprüft:** TVA `main` @ `674a9bf` (PR-37 landed; PR-36 @ `c6029b8`). ThesisTester source: extract of `docs/research/TVA_TT_Research_Plan.md` with original line numbers (Revision 4, stand 12.10.2026; TT lesestand `251b5099`, TVA `c6029b8`) (TT:6).
+**Danach:** Review. Sidecar implementation remains the later series below. PR-38 does not start that code.
 **Authoritative source:** AccumuLatata/ThesisTester `docs/research/TVA_TT_Research_Plan.md` (German), via the attached line-numbered extract. `docs/JOURNAL_EXTENSION_PLAN.md` is **not** in that extract and stays [NV].
 **Markers** (TT:28–39): **[C]** code or docs self-read; **[T]** self-run on `/tmp` copies; **[Q]** vendor primary; **[Q2]** weaker secondary; **[R]** own arithmetic; **[G]** set in the briefing, not self-checked; **[Rv]** finding from the review of PR #631 on Accumu’s raw data (adopted, not self-checked here); **[NV]** not verified, deliberately not guessed. N4 path checks below are **[C]** at `c6029b8` (desk-check of this repo). TT **[Rv]** is only used where the extract itself uses it.
 
@@ -35,7 +34,7 @@ Source: TT §10.3 (TT:883–907), order R6 / R10 (TT:885).
 | Order | PR | Notes |
 |---|---|---|
 | 1 | **PR-37** | This file. Docs only (TT:898). |
-| 2 | **PR-38** | Autostart guard. After D7 (TT:899, 922). |
+| 2 | **PR-38** | Autostart guard (TT:899). D7 checked 2026-10-29: nothing registered, nothing to disable. |
 | 3 | **PR-43** | No silent fallbacks. Default, no flag (N4). After PR-38 (TT:885, 900). |
 | 4 | **PR-39** | Copy sidecar. After D8 (TT:901, 923). |
 | 5 | **PR-40** | Sidecar reader and time anchor. After Q-15 (TT:441, 902, 1100). |
@@ -81,7 +80,7 @@ Source: TT:439–441, 463–468, 902. First-frame measurement [Rv] in the extrac
 | Sidecar duration | ±0.1 s vs video / `ffprobe` (TT:467, 902). |
 | Fill ↔ spoken time | ≤ 2 s (TT:468). |
 
-`time_anchor.json` stamps `first_frame_offset_source: fixed | measured`. A fixed value must not silently replace a missing measurement (TT:441). Whether the offset is the fixed 1.043 s or is measured per clip is **Q-15**, still OPEN (section 8).
+`time_anchor.json` stamps `first_frame_offset_source: fixed | measured`. A fixed value must not silently replace a missing measurement (TT:441). **Q-15 = B** (Accumu, 2026-10-29): measure the first-frame offset per clip; 1.043 s is a loud fallback (warning plus a flag in the output, never silent). Implementation is PR-40, not this PR. Extract text at TT:441 / TT:1100 still called this open; the owner decision is recorded here.
 
 ### 3.4 Per-section judgment (N5) and alignment method (M2)
 
@@ -205,13 +204,13 @@ PR-43 is not this PR. N4 only records the locked default and the list.
 
 Source: TT:450–456, 898(b), 902. Accumu decided 12.10.2026 (TT:450). Full rule in §3.4.
 
-### Q-15 — first-frame offset rule is OPEN
+### Q-15 — first-frame offset rule is B (measured per clip)
 
-> Q-15 explicitly OPEN (fixed 1.043 s vs measured per clip), must be decided before PR-40.
+> Q-15 = B: measure the first-frame offset per clip; 1.043 s is a loud fallback (warning plus a flag in the output, never silent).
 
 Source text (TT:441): whether the first-frame offset is used as a **fixed** value (1.043 s) or **estimated per clip** (e.g. from `ffprobe` start time and `record_start`). Accumu decides before PR-40; PR-37 holds the decision. Repeated at TT:1100.
 
-The decision is **not** entered yet. Do not treat 1.043 s as locked for PR-40 work until Accumu decides. In both variants `time_anchor.json` stamps `first_frame_offset_source: fixed | measured` (TT:441).
+**Owner fact (Accumu, 2026-10-29), recorded in PR-38:** variant **B** — per clip. The 1.043 s figure remains the expected value / loud fallback (TT:440, 465), never a silent substitute for a missing measurement (TT:441). `time_anchor.json` still stamps `first_frame_offset_source: fixed | measured`. Implementation belongs to PR-40; this PR does not change sidecar code.
 
 ---
 
@@ -219,11 +218,13 @@ The decision is **not** entered yet. Do not treat 1.043 s as locked for PR-40 wo
 
 These are research-plan desk tasks / questions, not roadmap D1–D9.
 
-| Id | Gate | Text from extract |
-|---|---|---|
-| **D7** | Before **PR-38** (TT:899) | Check whether `tva-watch` is registered on ALTrading; if yes, disable it by hand. Accumu only, after trading (TT:922). PR-38 documents “nicht für ALTrading (B.5)” and a read-only `doctor` query; Accumu disables by hand (TT:899). |
-| **D8** | Before **PR-39** (TT:923) | Clarify whether `T:\tradevid` points at the NAS (SMB). If yes, that conflicts with “NAS only SFTP, only `/trading`” and is resolved **before PR-39** (TT:923, 24). |
-| **Q-15** | Before **PR-40** | OPEN: fixed first-frame offset (≈ 1.043 s) vs estimate per clip (TT:441, 1100). |
+Owner facts below are Accumu 2026-10-29. They are not in the extract (TT:922–923, 441, 1100 still describe the tasks / question). Not [C] from the extract.
+
+| Id | Gate | Extract text | Owner fact (2026-10-29) |
+|---|---|---|---|
+| **D7** | Before **PR-38** (TT:899) | Check whether `tva-watch` is registered on ALTrading; if yes, disable it by hand. Accumu only, after trading (TT:922). PR-38 documents “nicht für ALTrading (B.5)” and a read-only `doctor` query; Accumu disables by hand (TT:899). | Checked on the trading PC: no scheduled task matches tva/tradevid; no TVA entries in the Startup folders or HKCU/HKLM Run keys. Nothing has to be disabled. |
+| **D8** | Before **PR-39** (TT:923) | Clarify whether `T:\tradevid` points at the NAS (SMB). If yes, that conflicts with “NAS only SFTP, only `/trading`” and is resolved **before PR-39** (TT:923, 24). | There is no T: drive. The TVA folder is `Z:\tradevid`; Z: is the SMB share `\\AHORNBUSINESS\trading`. Noted for PR-39; not implemented here. Scripts still say `T:\tradevid`. |
+| **Q-15** | Before **PR-40** | Extract: fixed first-frame offset (≈ 1.043 s) vs estimate per clip (TT:441, 1100). | **B:** measured per clip; 1.043 s is a loud fallback (warning plus a flag in the output, never silent). Recorded here; implementation is PR-40. |
 
 D1–D6 and D9–D11 are Accumu desk tasks in TT:913–926. They are not gates on this PR series beyond what the rows above say. Not restated as new product decisions.
 
