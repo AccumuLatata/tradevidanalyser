@@ -1,205 +1,268 @@
 # Phase 2 — Sidecar facts (PR-37)
 
 **Status:** Plan. No code, configuration, test, fixture, or golden change in this PR.
-**Stand geprüft:** `main` @ `c6029b8` (PR-36 landed).
-**Danach:** Review. Implementation is the later series below, each PR reviewed on its own. This PR does not start that code.
+**Stand geprüft:** TVA `main` @ `c6029b8` (PR-36 landed). ThesisTester source: extract of `docs/research/TVA_TT_Research_Plan.md` with original line numbers (Revision 4, stand 12.10.2026; TT lesestand `251b5099`, TVA `c6029b8`) (TT:6).
+**Danach:** Review. Implementation is the later series below. This PR does not start that code.
 **This PR:** docs-only, no named parity test.
-**Authoritative source:** AccumuLatata/ThesisTester `docs/research/TVA_TT_Research_Plan.md` (German) and `docs/JOURNAL_EXTENSION_PLAN.md`. Line cites below use those files.
-**Access:** This agent's GitHub App token can read only `AccumuLatata/tradevidanalyser`. Clone and contents API for `AccumuLatata/ThesisTester` return 404. Facts that exist only in ThesisTester are marked **[NV]** and restated only from the PR-37 task extract. Nothing else is added. Program B Run 2 results, `results/` trees, and ThesisTester `docs/ROLL_PRIOR_LEVEL_GATE_IMPLEMENTATION_PLAN.md` line 25 were not used.
-**Markers:** **[Rv]** = checked against this repo at `c6029b8`. **[NV]** = not opened in ThesisTester in this environment. The `[Rv]` / `[NV]` convention is TT plan lines 38–39 [NV].
-**Not in this file:** Phase 1 multi-clip / pause behaviour. That stays in [`multi-clip-day.md`](multi-clip-day.md). Roadmap D1–D9 stay in [`../05_ROADMAP.md`](../05_ROADMAP.md). Research-plan D7 / D8 / Q-15 below are not those roadmap ids.
+**Authoritative source:** AccumuLatata/ThesisTester `docs/research/TVA_TT_Research_Plan.md` (German), via the attached line-numbered extract. `docs/JOURNAL_EXTENSION_PLAN.md` is **not** in that extract and stays [NV].
+**Markers** (TT:28–39): **[C]** code or docs self-read; **[T]** self-run on `/tmp` copies; **[Q]** vendor primary; **[Q2]** weaker secondary; **[R]** own arithmetic; **[G]** set in the briefing, not self-checked; **[Rv]** finding from the review of PR #631 on Accumu’s raw data (adopted, not self-checked here); **[NV]** not verified, deliberately not guessed. N4 path checks below are **[C]** at `c6029b8` (desk-check of this repo). TT **[Rv]** is only used where the extract itself uses it.
+
+**Not in this file:** Phase 1 multi-clip / pause behaviour ([`multi-clip-day.md`](multi-clip-day.md)). Roadmap D1–D9 ([`../05_ROADMAP.md`](../05_ROADMAP.md)). Research-plan D7 / D8 / Q-15 are not those roadmap ids. Program B Run 2 results, `results/` trees, and ThesisTester `docs/ROLL_PRIOR_LEVEL_GATE_IMPLEMENTATION_PLAN.md` line 25 were not used (TT:19).
 
 ---
 
 ## 1. Scope
 
-PR-37 records the Phase 2 sidecar contract, flag rows, coach contract v2, and the three locked statements N4, N5, and Q-15. It does not implement flags, parsers, tests, or goldens.
+PR-37 is the Phase 2 plan, docs only (TT:898). It records:
 
-Companion (this repo, already landed): Phase 1 plan [`multi-clip-day.md`](multi-clip-day.md). Phase 1 said Phase 2 is the data contract for the Trading Coach (transcript, manifest, clock only when verified, completeness counts, no judgments) plus a second, independent computation from the raw export (`multi-clip-day.md:779`) [Rv].
+- sidecar contract with pause rule and `file` check (§7.1)
+- tolerances, first-frame offset ≈ 1.043 s as expected value, band 0.8–1.3 s
+- flag table
+- contract v2 with **coach independence** (R8; already recorded here, implemented later in PR-46) (TT:885, 907)
+- coach profile without judgments, account field, CD list, B.5 rules
+- three locked statements: **N4**, **N5**, **Q-15**
+
+It does not implement flags, parsers, tests, or goldens. Code is forbidden in this PR (TT:898).
+
+Companion already landed: Phase 1 [`multi-clip-day.md`](multi-clip-day.md). Phase 1 left Phase 2 as the coach data contract plus a second, independent compute from the raw export (`multi-clip-day.md:779`) [C].
 
 ---
 
 ## 2. Series order
 
-Source: TT `TVA_TT_Research_Plan.md` §10.3 lines 883–907; PR-37 row line 898 [NV].
+Source: TT §10.3 (TT:883–907), order R6 / R10 (TT:885).
 
 | Order | PR | Notes |
 |---|---|---|
-| 1 | **PR-37** | This file. Docs only. |
-| 2 | **PR-38** | After D7. |
-| 3 | **PR-43** | After PR-38. Default behaviour; see N4. |
-| 4 | **PR-39** | After D8. |
-| 5 | **PR-40** | After Q-15. |
-| 6 | **PR-42** | After PR-40. |
+| 1 | **PR-37** | This file. Docs only (TT:898). |
+| 2 | **PR-38** | Autostart guard. After D7 (TT:899, 922). |
+| 3 | **PR-43** | No silent fallbacks. Default, no flag (N4). After PR-38 (TT:885, 900). |
+| 4 | **PR-39** | Copy sidecar. After D8 (TT:901, 923). |
+| 5 | **PR-40** | Sidecar reader and time anchor. After Q-15 (TT:441, 902, 1100). |
+| 6 | **PR-42** | Facts mirror. After JX1, JX2, JX8 (TT:885, 903). |
 
-**Deferred:** PR-41, PR-44, PR-45, PR-46 [NV].
+**Deferred:** PR-41, PR-44 (only if Deepgram is used), PR-45, PR-46 (TT:885, 904–907). Coach independence (R8) is already in PR-37; PR-46 later puts it on the v2 contract (TT:885).
 
-These are series numbers, not GitHub pull-request numbers. They continue `docs/IMPLEMENTATION_PLAN.md` / Phase 1 (last landed series PR-36 @ `c6029b8`) [Rv].
+These are series numbers, not GitHub pull-request numbers. They continue Phase 1 (last landed series PR-36 @ `c6029b8`) [C].
 
 ---
 
 ## 3. Sidecar contract
 
-Source: TT §7.1 around line 440; Q-15 at lines 441 and 1100 [NV]. Also `JOURNAL_EXTENSION_PLAN.md` lines 830–845 and 1139–1147 [NV] (wording not opened here).
+Source: TT §7.1 RQ-1 (TT:435–468) and PR-40 row (TT:902).
 
-### 3.1 Pause rule
+### 3.1 Pause rule (R13)
 
-Media time continues at the pause `video_s`. The resume value is a plausibility check only, not a clock reset. Plausibility band: **0.4–0.8 s** [NV].
+Source: TT:447–458, 902.
 
-### 3.2 File check
+Media time continues at the pause `video_s`. The `resume` value is a plausibility check only (band **0.4–0.8 s**). Each section is anchored on its `resume` wall clock (TT:449, 902).
 
-A file check is part of the sidecar contract (TT §7.1 ~440) [NV]. Fail modes and required sidecar path are not restated here; they were not opened in ThesisTester.
+A section runs from `record_start` or a `resume` to the next `pause` or `record_stop` (TT:450). Measured resume-minus-pause is about 0.58–0.6 s and does not grow (TT:448) [Rv] in the extract.
 
-### 3.3 Tolerances — first-frame offset
+### 3.2 File check and fail modes (R14)
 
-Expected first-frame offset is about **1.043 s**. Acceptance band: **0.8–1.3 s** [NV].
+Source: TT:443–446, 459–462, 467, 902.
 
-Whether that 1.043 s is a fixed constant or is measured per clip is **Q-15**, still OPEN (section 7).
+- Sidecar path is `<stem>.jsonl` beside `<stem>.mkv` / `<stem>.mp4`, not `.events.jsonl` (TT:460, 901).
+- TVA rejects a sidecar whose `file` does not match the video: **name equal**, and **duration ±0.1 s vs `ffprobe`**. Otherwise status `sidecar_mismatch`, no time anchor (TT:462, 467, 902).
+- No `record_stop` (crash) → `incomplete` (TT:444).
+- No `record_start` (script loaded late) → `no_sidecar` (TT:445).
+- Clock / NTP on ALTrading is [NV] in the source itself (TT:446).
+
+### 3.3 First-frame offset and other tolerances
+
+Source: TT:439–441, 463–468, 902. First-frame measurement [Rv] in the extract (#13).
+
+| Check | Rule |
+|---|---|
+| First-frame offset | Expected value ≈ **1.043 s** after `record_start`. Band **0.8–1.3 s** per OBS version. Outside → sidecar `invalid`, reason `first_frame_offset_out_of_band` (TT:440, 465, 902). |
+| Span residual | `\|wall_span − video_span − first_frame_offset\| ≤ 0.10 s` (TT:464). |
+| Resume band | 0.4–0.8 s; outside → `resume_offset_out_of_band` on that section (TT:449–452, 466, 902). |
+| Sidecar duration | ±0.1 s vs video / `ffprobe` (TT:467, 902). |
+| Fill ↔ spoken time | ≤ 2 s (TT:468). |
+
+`time_anchor.json` stamps `first_frame_offset_source: fixed | measured`. A fixed value must not silently replace a missing measurement (TT:441). Whether the offset is the fixed 1.043 s or is measured per clip is **Q-15**, still OPEN (section 8).
+
+### 3.4 Per-section judgment (N5) and alignment method (M2)
+
+Source: TT:450–457, 898(b), 902.
+
+- Sections **before** a resume outlier stay `verified`.
+- From the outlier on (that section and every later one): `segment_invalid` with reason `resume_offset_out_of_band`. Media time is no longer attested.
+- Fills in a `segment_invalid` section get **`video_s = null`**, reason `segment_invalid`. **No** silent fallback onto a filename estimate or the pause detector. **No** legacy path for those sections (TT:453, 902).
+- The sidecar as a whole is `partial` with the section list; `time_anchor.json` holds per-section status (TT:454).
+- **M2 alignment method** (TT:455, 902):
+  - `verified` → method `sidecar`
+  - `partial` → `sidecar` for `verified` sections, `null` for `segment_invalid` sections
+  - unchanged legacy path **only** when there is **no** valid sidecar: `no_sidecar` / `invalid` / `sidecar_mismatch`, and then always with that status
+  - a `partial` sidecar never falls back to legacy as a whole
+- JX8 reports the day `video_incomplete`, with the affected fills (TT:456, 898).
+- With **`TVA_PAUSE_GUARD`**: verified sidecar pauses **replace** the detector (`pause_checks.method = sidecar`) (TT:902).
+
+Revision 3 made the whole sidecar `invalid` on one outlier; this rule replaces that (TT:457).
 
 ---
 
 ## 4. Flag table
 
-Source: TT §10.3 flag lines 889–894; PR-37 row line 898 [NV].
+Source: TT:887–894, 605. Phase 1 allowed sets stay in `multi-clip-day.md` §3.6 [C]. Unset/empty is off. Truth is `1` / `true` / `yes` / `on` (`flags.py:15`, `multi-clip-day.md:538`) [C].
 
-Phase 1 allowed production sets stay as written in `multi-clip-day.md` §3.6 [Rv]. Ungeset or empty is off. Truth is `1`, `true`, `yes`, or `on` (`multi-clip-day.md:538`) [Rv].
-
-| Flag | Combines with | Notes |
+| Flag | PR | Allowed combination |
 |---|---|---|
-| `TVA_SIDECAR` | Freely with every **allowed** Phase 1 row | New in this series. Not implemented in this PR. |
-| `TVA_NET_FEES` | **Only** together with `TVA_EXCLUSIVE_FILLS`, `TVA_DAY_RULES`, `TVA_DAY_PUBLISH`, `TVA_TRADING_HOURS` | Same four flags as the Phase 1 Vierer-Set (`multi-clip-day.md:543-546`) [Rv]. Not implemented in this PR. |
+| `TVA_SIDECAR` | 39, 40 | Orthogonal: combinable with every **existing allowed** row (TT:891). |
+| `TVA_NET_FEES` | 42 | Only together with the Vierer-Set `TVA_EXCLUSIVE_FILLS`, `TVA_DAY_RULES`, `TVA_DAY_PUBLISH`, `TVA_TRADING_HOURS`, because it changes day numbers (TT:892). |
 
-`TVA_SIDECAR` does not, by itself, license `TVA_NET_FEES` without that four-flag set.
+**Other combinations → `ungültige Flag-Kombination`** (TT:894). That string is already the Phase 1 abort (`flags.py:16` `INVALID_FLAG_SET_ERROR`) [C]. Every new row ships with a test in `flags.py` (TT:894, 605).
 
-`TVA_ALLOW_SESSION_ID_OVERWRITE` remains orthogonal (Phase 1 §3.6) [Rv]. This plan does not change that.
+**`TVA_STRICT_FACTS` is dropped.** Revision 2 had it. It is gone: PR-43 is default without a flag (R6) (TT:894, 606, 900).
 
-No other new flags are named here.
+`TVA_SIDECAR` does not, by itself, license `TVA_NET_FEES` without the four-flag set.
+
+`TVA_ALLOW_SESSION_ID_OVERWRITE` remains orthogonal (Phase 1 §3.6) [C]. This plan does not change that.
+
+N4 (PR-43) is the confirmed exception to the Phase 1 “new behaviour behind a default-off flag” rule (TT:606, 898).
 
 ---
 
 ## 5. Contract v2 — coach independence (R8)
 
-Source: TT coach / TVA rules lines 602–612 [NV].
+Source: TT:885, 907. §7.2 heading is in the extract (TT:470); the §7.2 body is **not** in the extract [NV].
 
-Contract **v2**: the coach is independent of TVA’s derived positions and net (R8). The coach recomputes positions and net from the **raw TopstepX export**. Differences against TVA (or other derived numbers) are reported as **findings**, not silently adopted [NV].
+R8 is recorded in this PR-37 plan. PR-46 later implements the v2 HTTP contract (TT:885).
 
-This matches the Phase 1 placeholder: “Fakten-Spezifikation und die zweite, unabhängige Rechnung aus dem Rohexport” (`multi-clip-day.md:779`) [Rv]. Schema fields for that finding object are not invented here.
+Contract text (TT:907): the coach recomputes positions and net independently from the **raw TopstepX export** and reports differences as a **finding**. v1 stays unchanged. A deviation must not be resolved silently. `/v2/…` endpoints carry facts only; each record has `account`. An unknown field is an error (PR-46 tests; not this PR).
+
+Phase 1 placeholder is the same idea (`multi-clip-day.md:779`) [C]. No extra schema fields are invented here.
 
 ---
 
-## 6. Coach profile
+## 6. Coach profile, CD list, B.5
 
-Source: TT coach / TVA rules lines 602–612; B.5 / ops lines 23–24 [NV].
+### 6.1 Profile
 
-The Phase 2 coach profile:
+Source: TT:26, 612, 898, 907.
 
-- carries **no judgments**
-- includes an **account** field
-- includes the **CD list**
-- follows **B.5** ops rules: **no autostart / no agent on ALTrading**; **NAS only via SFTP read-only `/trading`**
+- **No judgments** in new fact files. TVA delivers facts, not judgments; no silent fallbacks (TT:26, 612).
+- **Account field** on each v2 record (`account`) (TT:898, 907).
+- **CD list** is required on the profile (TT:898). This extract **does not enumerate** the CDs [NV]. Phase 1 CD1–CD14 stay in `multi-clip-day.md` §6 and are not copied here [C].
+- **B.5** ops rules (below).
 
-The CD list itself is not copied from Phase 1 CD1–CD14. Those remain in `multi-clip-day.md` §6 [Rv]. The ThesisTester list at lines 602–612 was not opened [NV].
+### 6.2 B.5 ops rules
 
-Full ops-rule wording at TT lines 23–24 was not opened [NV]. Only the B.5 constraints above are recorded.
+Source: TT:21–26, 595–598, 613, 899, 911. Quoted, not extended.
+
+- **ALTrading:** no agent and no automatic run. Nothing outside `C:\whisperx`, no drivers, no autostart, GPU only after trading. Any change to scheduled tasks (`schtasks`), including D7, Accumu does himself, by hand, after trading (TT:23, 595, 613).
+- **NAS:** agents and box only via SFTP, read-only, only `/trading`. Accumu places files only under `/trading`. Workers never read the NAS (no `/mnt/nas-trading`, no SMB) (TT:24, 595, 598).
+- **Tick runs:** `--workers` ≤ 9. Committed YAML stays `workers: 1` (TT:25, 596).
+- No PR ships scripts or tasks that run by themselves on ALTrading (TT:595). `tva doctor` on ALTrading only after trading (TT:613, 899).
+- TVA delivers facts, not judgments; no silent fallbacks (TT:26).
+
+Tick-weekend / farm-slot rules in TT:597 are ThesisTester ops, not a TVA code change in this PR.
 
 ---
 
 ## 7. Mandatory statements
 
-These three statements are locked for this series. Wording is fixed.
+Wording is locked (TT:898).
 
 ### N4 — PR-43 is default behaviour, no flag
 
 > N4: PR-43 becomes default behaviour without a flag (exception confirmed by Accumu 2026-10-12); list affected entry points; `fake` only when set explicitly; no real ASR provider = fail loudly.
 
-Source: TT §10.3 / exception note (task extract; exact TT line for the Accumu 2026-10-12 exception not separately numbered in the extract) [NV].
+Source: TT:606, 898(a), 900. Confirmed exception to the Phase 1 flag rule (TT:606). A silent fallback is a briefing violation, not protected legacy (TT:606).
 
-Today every ASR path defaults to `fake` when `TVA_ASR_PROVIDER` and `--provider` are unset (`src/tradevidanalyser/providers/asr.py:1`, `asr.py:367-368`) [Rv]. PR-43 removes that default. `fake` is used only when it is set explicitly. If no real ASR provider is configured, the process fails loudly.
+**PR-43 target (TT:900):** unset `get_asr_provider` / `get_ocr_provider` / extract provider → error “Provider fehlt”; `fake` only when set explicitly. Without a real ASR provider every run aborts loudly: exit ≠ 0, message **`TVA_ASR_PROVIDER fehlt`**. `tva serve` `POST /sessions/{id}/run` answers with an error plus message, **never** placeholder text.
 
-**Affected entry points (this repo @ `c6029b8`) [Rv]:**
+**Affected entry points — source list (TT:900), desk-checked @ `c6029b8` [C].** Locations match. Today’s **behaviour** still defaults to `fake`; that is PR-43 work, not a silent rewrite of this list. Mismatches are named.
 
-| Surface | Path | Today |
+| Source cite (TT:900) | @ `c6029b8` [C] | Desk-check |
 |---|---|---|
-| Provider factory | `src/tradevidanalyser/providers/asr.py` `get_asr_provider` | `name or TVA_ASR_PROVIDER or "fake"` |
-| Session transcribe | `src/tradevidanalyser/pipeline.py` `transcribe_session` | calls `get_asr_provider(provider_name)` |
-| CLI | `tva transcribe --provider` (`cli.py`) | `--provider` default `None` → factory fake |
-| CLI run | `tva run` → `run_latest` (`pipeline.py:512-522`) | `transcribe_session` with no provider name |
-| Watch | `tva watch --run` (`watch.py`) | `transcribe_session` with no provider name |
-| HTTP | `POST /sessions/{id}/run` transcribe stage (`serve.py:280-282`) | `transcribe_session` with no provider name |
-| Doctor | `tva doctor` (`doctor.py:97`) | treats unset `TVA_ASR_PROVIDER` as `"fake"` |
-| Env | `TVA_ASR_PROVIDER` | unset → fake |
+| `providers/asr.py:367-370` `get_asr_provider` | `asr.py:367-370`: `name or TVA_ASR_PROVIDER or "fake"` | **Location match.** **Behaviour mismatch (expected until PR-43):** unset → `FakeAsrProvider`, not “Provider fehlt” / `TVA_ASR_PROVIDER fehlt`. That string is absent in this repo today. |
+| `ocr.py:26, 133` `get_ocr_provider` | `ocr.py:26` `DEFAULT_PROVIDER = "fake"`; `ocr.py:132-136` unset → `DEFAULT_PROVIDER` | **Location match.** **Behaviour mismatch (expected until PR-43):** unset → fake. |
+| `providers/extract.py:882` extract provider | `extract.py:881-884`: `name or TVA_EXTRACT_PROVIDER or "fake"` | **Location match** (factory starts at 881; default fake is 882–883). **Behaviour mismatch (expected until PR-43).** |
+| `pipeline.py:64` ASR | `pipeline.py:64` `get_asr_provider(provider_name)` | **Match.** |
+| `pipeline.py:83` extract | `pipeline.py:83` `get_extract_provider(provider_name)` | **Match.** |
+| `pipeline.py:196` OCR | `pipeline.py:196` `get_ocr_provider(provider_name)` | **Match.** |
+| `evidence.py:321` extract | `evidence.py:321` `get_extract_provider(provider_name)` | **Match.** |
+| `pause_guard.py:401, 419, 559` OCR | `pause_guard.py:401`, `:419`, `:559` each call `get_ocr_provider()` | **Match.** Today `:401-403` already aborts fake OCR with `Guard braucht echten OCR-Provider` (`pause_guard.py:35`) — **different message** from `TVA_ASR_PROVIDER fehlt`; ASR is not involved here. |
+| CLI `tva transcribe` | `cli.py:70-72`, `:389-390` → `transcribe_session` | **Match.** |
+| CLI `tva extract` | `cli.py:74`, `:393-394` → `extract_session` | **Match.** |
+| CLI `tva run` | `cli.py:81-83`, `:402-404` → `run_latest` → transcribe + extract (`pipeline.py:522-523`) | **Match.** |
+| CLI `tva ocr` | `cli.py:118-120`, `:450-452` → `ocr_session`. Help still says “fake (default)” (`cli.py:120`) | **Match** on command. Help text will be wrong after PR-43 (not changed here). |
+| CLI `tva evidence` | `cli.py:177-182`, `:490-495` → `evidence_session` (extract at `evidence.py:321`). Help still says “fake (default)” (`cli.py:182`) | **Match** on command. |
+| CLI commands that start OCR via `pause_guard` | `tva align` → `run_pause_guard` (`align.py:271-272`); `tva evidence` / `tva rules` → `ensure_pause_check` (`evidence.py:433-436`, `rules.py:1393-1394`); `tva day audit --sample-clocks` is read-only samples (`cli.py:247-249`) | Source does not name each command. These are the `c6029b8` callers that reach `pause_guard` OCR. |
+| `tva watch --run` `watch.py:387-389` | `watch.py:387-389`: if `run`: `transcribe_session` then `extract_session` | **Match.** |
+| `tva serve` `POST /sessions/{id}/run` `serve.py:206-282` | Route `serve.py:206-236`; worker `serve.py:275-282` calls `transcribe_session` / `extract_session`. On exception, `_run_stages` stores `error = str(exc)` on status (`serve.py:287-292`). No placeholder transcript/insights body. HTTP stays **202** today | **Location match.** **Behaviour note for PR-43:** source wants an error **with message**, never placeholder text. Today the message lands on `status.error`, not as a failed HTTP body. `TVA_ASR_PROVIDER fehlt` is not returned yet. |
+| `scripts/windows/copy-after-obs.ps1` line 19 | Line 19: `tva --root $Root watch --source $Source --once` — **no** `--run` | **Match.** Does not reach ASR today. Stays runnable. Anyone who adds `--run` there needs a set provider (TT:900). |
 
-A source-plan list that differs from this inventory was not opened [NV]. This table is the current code, not a new API.
+**Not on the source N4 list (TT:900).** Previous draft listed `tva doctor` (`doctor.py:97`, unset → `"fake"`) and a bare `TVA_ASR_PROVIDER` env row. They are **not** in the PR-43 row. They are not added back. Doctor remains a Phase 1 / PR-38 surface (TT:899), not an N4 entry point.
 
-PR-43 is not this PR. N4 only records the locked default.
+PR-43 is not this PR. N4 only records the locked default and the list.
 
 ### N5 — sidecar resume outlier is per-section
 
 > N5: sidecars judged per section; sections before a resume outlier stay `verified`, from the outlier on `segment_invalid` with no video time for their fills; JX8 reports the day `video_incomplete`.
 
-Source: TT §10.3 / N5 (task extract) [NV].
-
-No extra statuses are invented. The three tokens in the statement are the ones that stand: `verified`, `segment_invalid`, `video_incomplete`.
+Source: TT:450–456, 898(b), 902. Accumu decided 12.10.2026 (TT:450). Full rule in §3.4.
 
 ### Q-15 — first-frame offset rule is OPEN
 
 > Q-15 explicitly OPEN (fixed 1.043 s vs measured per clip), must be decided before PR-40.
 
-Source: TT lines 441 and 1100 [NV].
+Source text (TT:441): whether the first-frame offset is used as a **fixed** value (1.043 s) or **estimated per clip** (e.g. from `ffprobe` start time and `record_start`). Accumu decides before PR-40; PR-37 holds the decision. Repeated at TT:1100.
 
-Do not treat 1.043 s as locked for PR-40 work until Accumu decides.
+The decision is **not** entered yet. Do not treat 1.043 s as locked for PR-40 work until Accumu decides. In both variants `time_anchor.json` stamps `first_frame_offset_source: fixed | measured` (TT:441).
 
 ---
 
 ## 8. Open decisions
 
-These are research-plan decisions, not roadmap D1–D9.
+These are research-plan desk tasks / questions, not roadmap D1–D9.
 
-| Id | Gate | What is recorded here |
+| Id | Gate | Text from extract |
 |---|---|---|
-| **D7** | Before **PR-38** | Open. Question text: TT line 922 [NV]. Not roadmap D7 (Grok voice on the tape). |
-| **D8** | Before **PR-39** | Open. Question text: TT line 923 [NV]. Not roadmap D8 (practice vs live tape). |
-| **Q-15** | Before **PR-40** | OPEN: fixed 1.043 s vs measured per clip (section 7). |
+| **D7** | Before **PR-38** (TT:899) | Check whether `tva-watch` is registered on ALTrading; if yes, disable it by hand. Accumu only, after trading (TT:922). PR-38 documents “nicht für ALTrading (B.5)” and a read-only `doctor` query; Accumu disables by hand (TT:899). |
+| **D8** | Before **PR-39** (TT:923) | Clarify whether `T:\tradevid` points at the NAS (SMB). If yes, that conflicts with “NAS only SFTP, only `/trading`” and is resolved **before PR-39** (TT:923, 24). |
+| **Q-15** | Before **PR-40** | OPEN: fixed first-frame offset (≈ 1.043 s) vs estimate per clip (TT:441, 1100). |
 
-Source: TT lines 922–923 (D7/D8) and 441 / 1100 (Q-15) [NV].
+D1–D6 and D9–D11 are Accumu desk tasks in TT:913–926. They are not gates on this PR series beyond what the rows above say. Not restated as new product decisions.
 
 ---
 
 ## 9. Source line index
 
-ThesisTester `docs/research/TVA_TT_Research_Plan.md` [NV] (file not opened in this environment):
+ThesisTester `docs/research/TVA_TT_Research_Plan.md` (extract):
 
 | Lines | Topic |
 |---|---|
-| 23–24 | Ops rules (B.5 excerpt recorded in §6) |
-| 38–39 | `[Rv]` / `[NV]` markers |
-| ~440 | §7.1 sidecar contract |
-| 441 | Q-15 |
-| 602–612 | Coach / TVA rules; contract v2 R8; coach profile |
-| 883–907 | §10.3 series (PR-37 at 898; flags 889–894) |
+| 6 | Lesestand TT `251b5099`, TVA `c6029b8` |
+| 19 | Off-limits Run-2 trees (not opened) |
+| 21–26 | B.5 ops; facts not judgments |
+| 28–39 | Marker table |
+| 435–468 | §7.1 sidecar contract (pause R13, file R14, N5, M2, tolerances, Q-15) |
+| 441, 1100 | Q-15 |
+| 470 | §7.2 heading only; body not in extract [NV] |
+| 595–613 | B.5 again; TVA PR-37 ff. rules; N4 exception |
+| 883–907 | §10.3 series, flags, PR rows |
+| 885 | Order; R8 already in PR-37 |
+| 889–894 | Flag table; `TVA_STRICT_FACTS` dropped; `ungültige Flag-Kombination` |
+| 898 | PR-37 row (this file) |
+| 900 | PR-43 / N4 entry points |
+| 902 | PR-40 / file check / N5 / M2 / pause_checks.method |
+| 907 | Vertrag v2 / R8 text |
 | 922 | D7 |
 | 923 | D8 |
-| 1100 | Q-15 |
 
-ThesisTester `docs/JOURNAL_EXTENSION_PLAN.md` [NV] (file not opened):
+`docs/JOURNAL_EXTENSION_PLAN.md` lines 830–845 and 1139–1147: **not in the extract** [NV]. Not restated.
 
-| Lines | Topic |
-|---|---|
-| 830–845 | Journal-extension companion (not restated) |
-| 1139–1147 | Journal-extension companion (not restated) |
-
-This repo [Rv]:
+This repo [C] @ `c6029b8`:
 
 | Path | Topic |
 |---|---|
 | `docs/plans/multi-clip-day.md:538-560` | Phase 1 allowed flag rows; Vierer-Set |
-| `docs/plans/multi-clip-day.md:779` | Phase 2 placeholder (coach contract + independent raw-export compute) |
-| `src/tradevidanalyser/providers/asr.py:367-368` | ASR default `fake` (N4 inventory) |
-| `src/tradevidanalyser/pipeline.py:54-64`, `:512-522` | transcribe / `tva run` |
-| `src/tradevidanalyser/cli.py` `transcribe` | CLI provider default |
-| `src/tradevidanalyser/watch.py` `--run` | watch transcribe |
-| `src/tradevidanalyser/serve.py:280-282` | HTTP transcribe |
-| `src/tradevidanalyser/doctor.py:97` | doctor treats unset ASR as fake |
+| `docs/plans/multi-clip-day.md:779` | Phase 2 placeholder |
+| `src/tradevidanalyser/flags.py:16` | `ungültige Flag-Kombination` already |
+| N4 table in §7 | Provider factories, pipeline, evidence, pause_guard, CLI, watch, serve, `copy-after-obs.ps1:19` |
 
 ---
 
@@ -209,5 +272,5 @@ This repo [Rv]:
 - No named parity test.
 - No merge, no ready-for-review flip on the implementation series.
 - No Program B results.
-- No new sidecar JSON schema beyond the pause rule, bands, and N5 tokens above.
 - No implementation of `TVA_SIDECAR`, `TVA_NET_FEES`, or PR-43.
+- No silent “fix” of `c6029b8` defaults; mismatches stay in §7 N4.
