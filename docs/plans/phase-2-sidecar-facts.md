@@ -80,7 +80,7 @@ Source: TT:439–441, 463–468, 902. First-frame measurement [Rv] in the extrac
 | Sidecar duration | ±0.1 s vs video / `ffprobe` (TT:467, 902). |
 | Fill ↔ spoken time | ≤ 2 s (TT:468). |
 
-`time_anchor.json` stamps `first_frame_offset_source: fixed | measured`. A fixed value must not silently replace a missing measurement (TT:441). **Q-15 = B** (Accumu, 2026-10-29): measure the first-frame offset per clip; 1.043 s is a loud fallback (warning plus `offset_source: fallback`, never silent). Implemented in PR-40. Extract text at TT:441 / TT:1100 still called this open; the owner decision is recorded here.
+`time_anchor.json` stamps `first_frame_offset_source: fixed | measured`. A fixed value must not silently replace a missing measurement (TT:441). **Q-15 = B** (Accumu, 2026-10-29): measure the first-frame offset per clip as `wall_span − video_span` (TT:439–440): `record_stop`−`record_start` wall minus pause spans, minus ffprobe duration. `start_time` below 0.1 s is unusable. 1.043 s is a loud fallback (warning on every clip plus `offset_source: fallback`, never silent). Implemented in PR-40. Extract text at TT:441 / TT:1100 still called this open; the owner decision is recorded here.
 
 ### 3.4 Per-section judgment (N5) and alignment method (M2)
 
@@ -217,7 +217,7 @@ Source: TT:450–456, 898(b), 902. Accumu decided 12.10.2026 (TT:450). Full rule
 
 Source text (TT:441): whether the first-frame offset is used as a **fixed** value (1.043 s) or **estimated per clip** (e.g. from `ffprobe` start time and `record_start`). Accumu decides before PR-40; PR-37 holds the decision. Repeated at TT:1100.
 
-**Owner fact (Accumu, 2026-10-29), recorded in PR-38:** variant **B** — per clip. The 1.043 s figure remains the expected value / loud fallback (TT:440, 465), never a silent substitute for a missing measurement (TT:441). `time_anchor.json` stamps `first_frame_offset_source: fixed | measured` and, on fallback, `offset_source: fallback`. Implemented in PR-40.
+**Owner fact (Accumu, 2026-10-29), recorded in PR-38:** variant **B** — per clip as `wall_span − video_span` (TT:439–440). The 1.043 s figure remains the expected value / loud fallback (TT:440, 465), never a silent substitute for a missing measurement (TT:441). `time_anchor.json` stamps `first_frame_offset_source: fixed | measured` and, on fallback, `offset_source: fallback`. Implemented in PR-40.
 
 ---
 
@@ -296,7 +296,7 @@ Source: TT:902, Q-15 = B (TT:441, 1100; owner 2026-10-29). `TVA_SIDECAR` remains
 | Surface | Flag on | Flag off |
 |---|---|---|
 | `sidecar.py` | parse `<stem>.jsonl` including `file_changed`; pause rule R13; N5 per-section; file + duration ±0.1 s; first-frame band 0.8–1.3 s | not called |
-| Q-15 | measure ffprobe video `start_time` per clip; unusable/0 → **1.043 s** + warning + `first_frame_offset_source: fixed` + `offset_source: fallback` | n/a |
+| Q-15 | measure `wall_span − video_span` per clip (TT:439–440): record_stop−record_start wall minus pause spans, minus ffprobe duration. `start_time` &lt; 0.1 s unused. Failed measure → **1.043 s** + warning on every clip + `first_frame_offset_source: fixed` + `offset_source: fallback` | n/a |
 | `time_anchor.json` | `schema_version "1"` under `sessions/<id>/`; M2 method `sidecar` / `null` | not written |
 | `TVA_PAUSE_GUARD` | verified/partial sidecar replaces the detector (`pause_checks.method = sidecar`) | detector unchanged |
 

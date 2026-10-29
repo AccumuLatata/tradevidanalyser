@@ -368,9 +368,11 @@ def ensure_pause_check(
     """Load a matching pause_checks file, or run the guard / abort (plan §2.2)."""
     loaded = load_pause_check(root, record.id)
     if loaded is not None and key_matches(loaded, record):
-        if apply_alignment:
-            _apply_suspected_alignment(root, record, loaded)
-        return loaded
+        leftover_ocr = sidecar_enabled() and loaded.method != "sidecar"
+        if not leftover_ocr:
+            if apply_alignment:
+                _apply_suspected_alignment(root, record, loaded)
+            return loaded
     sidecar_check = _pause_check_from_sidecar(record, root)
     if sidecar_check is not None:
         return run_pause_guard(

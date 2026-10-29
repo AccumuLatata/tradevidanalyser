@@ -1,12 +1,16 @@
 """OBS sidecar reader and ``time_anchor.json`` (PR-40). Opt-in via ``TVA_SIDECAR``.
 
-Q-15 = B: measure the first-frame offset per clip (ffprobe start_time).
+Q-15 = B: measure the first-frame offset per clip as
+``wall_span − video_span`` (TT:439–440): record_stop−record_start wall,
+minus pause wall spans, minus ffprobe duration. ffprobe ``start_time``
+below 0.1 s is unusable (container default), never a measured value.
 1.043 s is a loud fallback (warning + ``offset_source: fallback``), never silent.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import math
 import warnings
 from dataclasses import dataclass, field
@@ -41,6 +45,11 @@ REASON_RESUME = "resume_offset_out_of_band"
 REASON_SEGMENT_INVALID = "segment_invalid"
 REASON_SPAN = "span_residual_out_of_band"
 REASON_OUTSIDE = "outside_sections"
+REASON_INVALID_JSON = "invalid_json"
+
+START_TIME_USABLE_MIN_S = 0.1
+
+_LOG = logging.getLogger(__name__)
 
 SOURCE_MEASURED = "measured"
 SOURCE_FIXED = "fixed"
@@ -215,26 +224,89 @@ def parse_sidecar_jsonl(path: Path) -> list[SidecarEvent]:
 
 
 def probe_start_time_s(probe: dict[str, Any] | None) -> float | None:
-    """ffprobe first-packet start_time. 0 / missing is unusable (container convention)."""
+    """ffprobe first-packet start_time. Values below 0.1 s are unusable."""
     if not probe:
         return None
+    found: float | None = None
     for stream in probe.get("streams") or []:
         if stream.get("codec_type") != "video":
             continue
         value = _finite_float(stream.get("start_time"))
         if value is not None:
-            return value
-    fmt = probe.get("format") or {}
-    return _finite_float(fmt.get("start_time"))
+            found = value
+            break
+    if found is None:
+        fmt = probe.get("format") or {}
+        found = _finite_float(fmt.get("start_time"))
+    if found is None or found < START_TIME_USABLE_MIN_S:
+        return None
+    return found
 
 
-def measure_first_frame_offset(probe: dict[str, Any] | None) -> tuple[float, OffsetSource, str | None]:
-    """Q-15 = B: measure per clip. Failed measurement → 1.043 s + fallback flag."""
-    start = probe_start_time_s(probe)
-    if start is None or start == 0.0:
-        warnings.warn(FALLBACK_WARNING, SidecarFallbackWarning, stacklevel=2)
+def _emit_fallback_warning() -> None:
+    """Fire on every clip. Default ``once`` filtering would hide later clips."""
+    _LOG.warning(FALLBACK_WARNING)
+    with warnings.catch_warnings():
+        warnings.simplefilter("always", SidecarFallbackWarning)
+        warnings.warn(FALLBACK_WARNING, SidecarFallbackWarning, stacklevel=3)
+
+
+def _pause_wall_span_s(events: list[SidecarEvent]) -> float | None:
+    """Sum of ``resume.wall − pause.wall``. None if a pause pair is incomplete."""
+    total = 0.0
+    last_pause: SidecarEvent | None = None
+    for item in events:
+        if item.event == EVENT_PAUSE:
+            last_pause = item
+            continue
+        if item.event == EVENT_RESUME:
+            if last_pause is None or last_pause.wall is None or item.wall is None:
+                return None
+            total += (item.wall - last_pause.wall).total_seconds()
+            last_pause = None
+            continue
+        if item.event == EVENT_RECORD_STOP and last_pause is not None:
+            return None
+    if last_pause is not None:
+        return None
+    return total
+
+
+def _wall_span_minus_video_s(
+    events: list[SidecarEvent], video_duration_s: float | None
+) -> float | None:
+    """``wall_span − video_span`` (TT:439–440). Pause wall time is not media (TT:449)."""
+    start = next((item for item in events if item.event == EVENT_RECORD_START), None)
+    stop = next((item for item in reversed(events) if item.event == EVENT_RECORD_STOP), None)
+    if start is None or stop is None or start.wall is None or stop.wall is None:
+        return None
+    if video_duration_s is None or not math.isfinite(video_duration_s):
+        return None
+    pause_span = _pause_wall_span_s(events)
+    if pause_span is None:
+        return None
+    wall_span = (stop.wall - start.wall).total_seconds() - pause_span
+    return wall_span - float(video_duration_s)
+
+
+def measure_first_frame_offset(
+    events: list[SidecarEvent],
+    video_duration_s: float | None,
+    *,
+    probe: dict[str, Any] | None = None,
+) -> tuple[float, OffsetSource, str | None]:
+    """Q-15 = B: measure per clip as ``wall_span − video_span`` (TT:439–440).
+
+    ``ffprobe`` ``start_time`` is not the offset (TT:441 only names it as an
+    example). Values below 0.1 s are ignored. Failed measurement → 1.043 s
+    + fallback flag, never silent (TT:441).
+    """
+    probe_start_time_s(probe)  # classify only; never treat < 0.1 as measured
+    measured = _wall_span_minus_video_s(events, video_duration_s)
+    if measured is None:
+        _emit_fallback_warning()
         return FIRST_FRAME_OFFSET_EXPECTED_S, SOURCE_FIXED, OFFSET_SOURCE_FALLBACK
-    return _r(start), SOURCE_MEASURED, None
+    return _r(measured), SOURCE_MEASURED, None
 
 
 def build_time_anchor(
@@ -258,8 +330,14 @@ def build_time_anchor(
             return TimeAnchor(session_id=session_id, status=STATUS_NO_SIDECAR)
         try:
             events = parse_sidecar_jsonl(sidecar_path)
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        except FileNotFoundError:
             return TimeAnchor(session_id=session_id, status=STATUS_NO_SIDECAR)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            return TimeAnchor(
+                session_id=session_id,
+                status=STATUS_INVALID,
+                reason=REASON_INVALID_JSON,
+            )
 
     ours = _events_for_file(events, video_name)
     has_start = any(item.event == EVENT_RECORD_START for item in ours)
@@ -315,7 +393,9 @@ def build_time_anchor(
         source: OffsetSource = SOURCE_MEASURED
         offset_source = None
     else:
-        offset, source, offset_source = measure_first_frame_offset(probe)
+        offset, source, offset_source = measure_first_frame_offset(
+            ours, video_duration, probe=probe
+        )
 
     if not (FIRST_FRAME_OFFSET_MIN_S <= offset <= FIRST_FRAME_OFFSET_MAX_S):
         return TimeAnchor(
@@ -331,8 +411,8 @@ def build_time_anchor(
         )
 
     sections, partial = _build_sections(ours, video_name)
-    residual = _span_residual(sections, offset)
-    if residual is None or residual > SPAN_RESIDUAL_MAX_S:
+    residual = _span_residual(ours, video_duration, offset)
+    if residual is not None and residual > SPAN_RESIDUAL_MAX_S:
         return TimeAnchor(
             session_id=session_id,
             status=STATUS_INVALID,
@@ -507,20 +587,14 @@ def _sidecar_duration_s(events: list[SidecarEvent]) -> float | None:
     return None
 
 
-def _span_residual(sections: list[TimeAnchorSection], offset: float) -> float | None:
-    """``|sum(section wall) − sum(section video) − first_frame_offset|`` (TT:464)."""
-    if not sections:
+def _span_residual(
+    events: list[SidecarEvent], video_duration_s: float | None, offset: float
+) -> float | None:
+    """``|wall_span − video_span − first_frame_offset|`` (TT:464)."""
+    span = _wall_span_minus_video_s(events, video_duration_s)
+    if span is None:
         return None
-    wall_span = 0.0
-    video_span = 0.0
-    for section in sections:
-        start = _parse_wall(section.wall_start)
-        end = _parse_wall(section.wall_end)
-        if start is None or end is None:
-            return None
-        wall_span += (end - start).total_seconds()
-        video_span += section.video_s_end - section.video_s_start
-    return abs(wall_span - video_span - offset)
+    return abs(span - offset)
 
 
 def _build_sections(

@@ -141,7 +141,8 @@ matching scheduled task / Startup / Run-key TVA entries, nothing to
 disable. D8: no T: drive; TVA is `Z:\tradevid` on SMB
 `\\AHORNBUSINESS\trading` — resolved in PR-39 (scripts/docs; sidecar
 dest is `$TVA_ROOT/recordings/<stem>.jsonl`, never a hardcoded NAS
-path). Q-15 = B: measure first-frame offset per clip; 1.043 s is a
+path). Q-15 = B: measure first-frame offset per clip as
+`wall_span − video_span` (TT:439–440); 1.043 s is a
 loud fallback (warning plus a flag; never silent). PR-40 implements
 that: `sidecar.py` + `time_anchor.json` under `TVA_SIDECAR` (default off).
 PR-37 is docs-only, no named parity test. PR-38 is the autostart

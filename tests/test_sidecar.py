@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import warnings
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -12,7 +13,13 @@ import pytest
 from tradevidanalyser import config, store
 from tradevidanalyser.flags import ENV_PAUSE_GUARD, ENV_SIDECAR
 from tradevidanalyser.ingest import ingest
-from tradevidanalyser.pause_guard import load_pause_check, run_pause_guard
+from tradevidanalyser.pause_guard import (
+    PauseCheck,
+    ensure_pause_check,
+    load_pause_check,
+    run_pause_guard,
+    write_pause_check,
+)
 from tradevidanalyser.schema import RecordingInfo, SessionRecord
 from tradevidanalyser.sidecar import (
     EVENT_FILE_CHANGED,
@@ -25,6 +32,7 @@ from tradevidanalyser.sidecar import (
     METHOD_SIDECAR,
     OFFSET_SOURCE_FALLBACK,
     REASON_FIRST_FRAME,
+    REASON_INVALID_JSON,
     REASON_SEGMENT_INVALID,
     SOURCE_FIXED,
     SOURCE_MEASURED,
@@ -39,6 +47,7 @@ from tradevidanalyser.sidecar import (
     build_time_anchor,
     load_time_anchor,
     parse_sidecar_jsonl,
+    sidecar_replaces_detector,
     time_anchor_path,
     write_session_time_anchor,
     write_time_anchor,
@@ -131,7 +140,7 @@ def test_verified_sidecar_measured_offset() -> None:
         video_name=VIDEO,
         events=items,
         duration_s=duration,
-        measured_offset_s=OFFSET,
+        probe={"streams": [{"codec_type": "video", "start_time": "0.0"}]},
     )
     assert anchor.status == STATUS_VERIFIED
     assert anchor.method == METHOD_SIDECAR
@@ -144,22 +153,62 @@ def test_verified_sidecar_measured_offset() -> None:
     assert abs((items[-1].wall - T0).total_seconds() - duration - OFFSET - 5.0) < 1e-9
 
 
-def test_fallback_is_loud(tmp_path: Path) -> None:
-    events = [_event_from_raw(row) for row in _verified_events()]
-    duration = events[-1].video_s or 0.0
+def _nowall_events() -> list:
+    return [
+        _event_from_raw({"event": EVENT_RECORD_START, "video_s": 0.0, "file": VIDEO}),
+        _event_from_raw({"event": EVENT_RECORD_STOP, "video_s": 100.0}),
+    ]
+
+
+def test_fallback_is_loud() -> None:
+    events = _nowall_events()
     with pytest.warns(SidecarFallbackWarning, match="offset_source=fallback"):
         anchor = build_time_anchor(
             session_id=SESSION_ID,
             video_name=VIDEO,
             events=events,
-            duration_s=duration,
+            duration_s=100.0,
             probe={"streams": [{"codec_type": "video", "start_time": "0.0"}]},
         )
-    assert anchor.status == STATUS_VERIFIED
     assert anchor.first_frame_offset_s == FIRST_FRAME_OFFSET_EXPECTED_S
     assert anchor.first_frame_offset_source == SOURCE_FIXED
     assert anchor.offset_source == OFFSET_SOURCE_FALLBACK
     assert FALLBACK_WARNING in FALLBACK_WARNING
+
+
+def test_fallback_warning_fires_every_clip() -> None:
+    events = _nowall_events()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", SidecarFallbackWarning)
+        build_time_anchor(
+            session_id=SESSION_ID,
+            video_name=VIDEO,
+            events=events,
+            duration_s=100.0,
+        )
+        build_time_anchor(
+            session_id=SESSION_ID,
+            video_name=VIDEO,
+            events=events,
+            duration_s=100.0,
+        )
+    fallbacks = [item for item in caught if issubclass(item.category, SidecarFallbackWarning)]
+    assert len(fallbacks) == 2
+
+
+def test_start_time_below_0_1_is_not_measured() -> None:
+    items = [_event_from_raw(row) for row in _verified_events()]
+    duration = items[-1].video_s or 0.0
+    anchor = build_time_anchor(
+        session_id=SESSION_ID,
+        video_name=VIDEO,
+        events=items,
+        duration_s=duration,
+        probe={"streams": [{"codec_type": "video", "start_time": "0.05"}]},
+    )
+    assert anchor.first_frame_offset_source == SOURCE_MEASURED
+    assert anchor.first_frame_offset_s == OFFSET
+    assert anchor.offset_source is None
 
 
 def test_first_frame_out_of_band() -> None:
@@ -246,6 +295,19 @@ def test_duration_plus_0_2_is_mismatch() -> None:
     assert anchor.method is None
 
 
+def test_corrupt_jsonl_is_invalid_not_no_sidecar(tmp_path: Path) -> None:
+    path = tmp_path / "broken.jsonl"
+    path.write_text("{not json\n", encoding="utf-8")
+    anchor = build_time_anchor(
+        session_id=SESSION_ID,
+        video_name=VIDEO,
+        sidecar_path=path,
+    )
+    assert anchor.status == STATUS_INVALID
+    assert anchor.reason == REASON_INVALID_JSON
+    assert sidecar_replaces_detector(anchor) is False
+
+
 def test_no_record_start_is_no_sidecar() -> None:
     events = [_event_from_raw(_event(EVENT_RECORD_STOP, wall=_wall(10.0), video_s=10.0))]
     anchor = build_time_anchor(session_id=SESSION_ID, video_name=VIDEO, events=events)
@@ -318,6 +380,47 @@ def test_flag_on_writes_time_anchor(tva_root: Path, monkeypatch: pytest.MonkeyPa
     path = time_anchor_path(tva_root, SESSION_ID)
     assert path.is_file()
     assert json.loads(path.read_text(encoding="utf-8"))["schema_version"] == "1"
+
+
+def test_ensure_pause_check_ignores_leftover_ocr(
+    tva_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TT:902: leftover OCR pause_checks must not replace a sidecar when the flag is on."""
+    monkeypatch.setenv(ENV_SIDECAR, "1")
+    monkeypatch.setenv(ENV_PAUSE_GUARD, "1")
+    record = _session(tva_root)
+    rows = _verified_events()
+    duration = float(rows[-1]["video_s"])
+    record = record.model_copy(
+        update={
+            "recording": record.recording.model_copy(update={"duration_s": duration})
+        }
+    )
+    store.save_session(tva_root, record)
+    _write_jsonl(config.recordings_dir(tva_root) / VIDEO.replace(".mp4", ".jsonl"), rows)
+    write_session_time_anchor(
+        record, root=tva_root, duration_s=duration, measured_offset_s=OFFSET
+    )
+    leftover = PauseCheck(
+        session_id=record.id,
+        recording_sha256=record.recording.sha256,
+        part_shas=[],
+        duration_s=duration,
+        pause_check="suspected",
+        pause_total_s=300.0,
+        clock_resolution_s=1,
+        pause_detectable_from_s=30.0,
+        ocr_provider="paddleocr",
+        ocr_model="ocr-v1",
+    )
+    write_pause_check(tva_root, leftover)
+    check = ensure_pause_check(record, root=tva_root, apply_alignment=False)
+    assert check.method == METHOD_SIDECAR
+    assert check.pause_check == "clear"
+    loaded = load_pause_check(tva_root, record.id)
+    assert loaded is not None
+    assert loaded.method == METHOD_SIDECAR
+    assert loaded.pause_check == "clear"
 
 
 def test_pause_guard_uses_sidecar_method(
