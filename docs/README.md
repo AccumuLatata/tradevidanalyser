@@ -15,4 +15,9 @@ Build contract:
 - [`GOLDEN_EXCERPT.md`](GOLDEN_EXCERPT.md) — how to cut, redact and hand-correct the WER reference.
 - [`GLOSSARY.md`](GLOSSARY.md) — German speech + English level tokens for ASR.
 
+Plans:
+
+- [`plans/multi-clip-day.md`](plans/multi-clip-day.md) — Phase 1: several clips per day and pauses (PR-28…PR-36).
+- [`plans/phase-2-sidecar-facts.md`](plans/phase-2-sidecar-facts.md) — Phase 2 sidecar facts (PR-37, docs only).
+
 Planned: `SESSION_RECORD_SCHEMA.md` (generated from Pydantic).
