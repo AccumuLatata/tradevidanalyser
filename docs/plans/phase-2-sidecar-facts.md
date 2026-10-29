@@ -7,7 +7,7 @@
 **Authoritative source:** AccumuLatata/ThesisTester `docs/research/TVA_TT_Research_Plan.md` (German), via the attached line-numbered extract. `docs/JOURNAL_EXTENSION_PLAN.md` is **not** in that extract and stays [NV].
 **Markers** (TT:28–39): **[C]** code or docs self-read; **[T]** self-run on `/tmp` copies; **[Q]** vendor primary; **[Q2]** weaker secondary; **[R]** own arithmetic; **[G]** set in the briefing, not self-checked; **[Rv]** finding from the review of PR #631 on Accumu’s raw data (adopted, not self-checked here); **[NV]** not verified, deliberately not guessed. N4 path checks below are **[C]** at `c6029b8` (desk-check of this repo). TT **[Rv]** is only used where the extract itself uses it.
 
-**Not in this file:** Phase 1 multi-clip / pause behaviour ([`multi-clip-day.md`](multi-clip-day.md)). Roadmap D1–D9 ([`../05_ROADMAP.md`](../05_ROADMAP.md)). Research-plan D7 / D8 / Q-15 are not those roadmap ids. Program B Run 2 results, `results/` trees, and ThesisTester `docs/ROLL_PRIOR_LEVEL_GATE_IMPLEMENTATION_PLAN.md` line 25 were not used (TT:19).
+**Not in this file:** Phase 1 multi-clip / pause behaviour ([`multi-clip-day.md`](multi-clip-day.md)). Roadmap D1–D9 ([`../05_ROADMAP.md`](../05_ROADMAP.md)). Research-plan D7 / D8 / Q-15 are not those roadmap ids. Off-limits (TT:19): `~/thesistester` @`0ebc1494`, `~/tt_mw/rg_pilots`, `~/tt_mw/rg_reruns`, and the Run-2 outputs.
 
 ---
 
@@ -190,9 +190,9 @@ Source: TT:606, 898(a), 900. Confirmed exception to the Phase 1 flag rule (TT:60
 | CLI `tva run` | `cli.py:81-83`, `:402-404` → `run_latest` → transcribe + extract (`pipeline.py:522-523`) | **Match.** |
 | CLI `tva ocr` | `cli.py:118-120`, `:450-452` → `ocr_session`. Help still says “fake (default)” (`cli.py:120`) | **Match** on command. Help text will be wrong after PR-43 (not changed here). |
 | CLI `tva evidence` | `cli.py:177-182`, `:490-495` → `evidence_session` (extract at `evidence.py:321`). Help still says “fake (default)” (`cli.py:182`) | **Match** on command. |
-| CLI commands that start OCR via `pause_guard` | `tva align` → `run_pause_guard` (`align.py:271-272`); `tva evidence` / `tva rules` → `ensure_pause_check` (`evidence.py:433-436`, `rules.py:1393-1394`); `tva day audit --sample-clocks` is read-only samples (`cli.py:247-249`) | Source does not name each command. These are the `c6029b8` callers that reach `pause_guard` OCR. |
+| CLI commands that start OCR via `pause_guard` | `tva align` → `run_pause_guard` (`align.py:271-272`); `tva evidence` / `tva rules` → `ensure_pause_check` (`evidence.py:433-436`, `rules.py:1393-1396`, call at `:1396`); `tva day audit --sample-clocks` is read-only samples (`cli.py:247-249`) | Source does not name each command. These are the `c6029b8` callers that reach `pause_guard` OCR. |
 | `tva watch --run` `watch.py:387-389` | `watch.py:387-389`: if `run`: `transcribe_session` then `extract_session` | **Match.** |
-| `tva serve` `POST /sessions/{id}/run` `serve.py:206-282` | Route `serve.py:206-236`; worker `serve.py:275-282` calls `transcribe_session` / `extract_session`. On exception, `_run_stages` stores `error = str(exc)` on status (`serve.py:287-292`). No placeholder transcript/insights body. HTTP stays **202** today | **Location match.** **Behaviour note for PR-43:** source wants an error **with message**, never placeholder text. Today the message lands on `status.error`, not as a failed HTTP body. `TVA_ASR_PROVIDER fehlt` is not returned yet. |
+| `tva serve` `POST /sessions/{id}/run` `serve.py:206-282` | Route `serve.py:206-236`; worker `serve.py:275-285` (`transcribe_session` `:282`, `extract_session` `:285`). The TT:900 span `206-282` stops before extract. On exception, `_run_stages` stores `error = str(exc)` on status (`serve.py:287-292`). No placeholder transcript/insights body. HTTP stays **202** today | **Location match** on the route. **Cite mismatch (named, not silently fixed):** TT:900's `serve.py:206-282` covers the route and `transcribe_session` (`:282`) and ends before `extract_session` (`:285`). **Behaviour note for PR-43:** source wants an error **with message**, never placeholder text. Today the message lands on `status.error`, not as a failed HTTP body. `TVA_ASR_PROVIDER fehlt` is not returned yet. |
 | `scripts/windows/copy-after-obs.ps1` line 19 | Line 19: `tva --root $Root watch --source $Source --once` — **no** `--run` | **Match.** Does not reach ASR today. Stays runnable. Anyone who adds `--run` there needs a set provider (TT:900). |
 
 **Not on the source N4 list (TT:900).** Previous draft listed `tva doctor` (`doctor.py:97`, unset → `"fake"`) and a bare `TVA_ASR_PROVIDER` env row. They are **not** in the PR-43 row. They are not added back. Doctor remains a Phase 1 / PR-38 surface (TT:899), not an N4 entry point.
@@ -253,7 +253,7 @@ ThesisTester `docs/research/TVA_TT_Research_Plan.md` (extract):
 | 922 | D7 |
 | 923 | D8 |
 
-`docs/JOURNAL_EXTENSION_PLAN.md` lines 830–845 and 1139–1147: **not in the extract** [NV]. Not restated.
+`docs/JOURNAL_EXTENSION_PLAN.md` is **not in the extract** [NV]. Not restated.
 
 This repo [C] @ `c6029b8`:
 
