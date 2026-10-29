@@ -28,6 +28,7 @@ from tradevidanalyser.flags import (
     ENV_DAY_PUBLISH,
     ENV_DAY_RULES,
     ENV_EXCLUSIVE_FILLS,
+    ENV_NET_FEES,
     ENV_PAUSE_GUARD,
     ENV_TRADING_HOURS,
     day_publish_enabled,
@@ -390,6 +391,61 @@ def test_flag_off_second_clip_still_overwrites_title(
     assert page is not None
     assert page.properties["Summaries"] == "Second clip sentence."
     assert not day_publish_path(tva_root, DAY).is_file()
+
+
+def test_net_fees_publish_requires_built_locked_day(
+    tva_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TVA_NET_FEES publish needs a built day lock; legacy clip publish is closed (TT:892)."""
+    _four_on(monkeypatch)
+    monkeypatch.setenv(ENV_NET_FEES, "1")
+    lone = _session(
+        tva_root,
+        "2026-09-16_093000",
+        start=datetime(2026, 9, 16, 9, 30, tzinfo=VIENNA),
+        duration_s=600.0,
+        sha256="c" * 64,
+    )
+    _write_debrief(tva_root, lone.id)
+    with pytest.raises(DayStale, match=DAY_STALE_ERROR):
+        pipeline_publish(lone.id, root=tva_root, notion=True)
+    assert not day_publish_path(tva_root, date(2026, 9, 16)).is_file()
+    assert not store.publish_path(tva_root, lone.id).is_file()
+
+    a, b = _build_two(tva_root, tmp_path, monkeypatch)
+    _write_debrief(tva_root, a.id, learnings="Alpha one.")
+    _write_debrief(tva_root, b.id, learnings="Bravo one.")
+    lock = day_lock_path(tva_root, DAY)
+    assert try_acquire_lock(lock)
+    try:
+        with pytest.raises(DayManifestError, match=LOCK_ERROR):
+            pipeline_publish(a.id, root=tva_root, notion=True)
+        assert not day_publish_path(tva_root, DAY).is_file()
+    finally:
+        release_lock(lock)
+    result = pipeline_publish(a.id, root=tva_root, notion=True)
+    assert result.page_id
+    assert not lock.exists()
+    assert day_publish_path(tva_root, DAY).is_file()
+
+
+def test_net_fees_direct_publish_no_legacy_fallback(
+    tva_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unlocked clip publish is not a fallback under TVA_NET_FEES (TT:892)."""
+    _four_on(monkeypatch)
+    monkeypatch.setenv(ENV_NET_FEES, "1")
+    lone = _session(
+        tva_root,
+        "2026-09-16_093000",
+        start=datetime(2026, 9, 16, 9, 30, tzinfo=VIENNA),
+        duration_s=600.0,
+        sha256="c" * 64,
+    )
+    _write_debrief(tva_root, lone.id)
+    with pytest.raises(DayStale, match=DAY_STALE_ERROR):
+        publish_session(lone.id, root=tva_root, notion=True)
+    assert not store.publish_path(tva_root, lone.id).is_file()
 
 
 def test_concurrent_publish_one_gets_lock(

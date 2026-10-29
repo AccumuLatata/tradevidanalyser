@@ -19,6 +19,7 @@ from tradevidanalyser.fills_mirror import FillRecord
 from tradevidanalyser.flags import (
     active_flag_names,
     day_manifest_enabled,
+    net_fees_enabled,
     pause_guard_enabled,
 )
 from tradevidanalyser.naming import VIENNA, vienna_today
@@ -732,8 +733,15 @@ def csv_window_fill_identities(fills: list[FillRecord], day: date) -> list[FillI
 
 
 def acquire_day_publish_lock(root: Path, session_id: str) -> Path | None:
-    """Lock a built day-path day for ``tva publish``. Does not create ``days/<date>/``."""
+    """Lock a built day-path day for ``tva publish``. Does not create ``days/<date>/``.
+
+    ``TVA_NET_FEES`` (TT:892) may only publish under a held day lock. A missing
+    built day is ``DayStale``, not an unlocked clip publish.
+    """
+    require_lock = net_fees_enabled()
     if not day_manifest_enabled():
+        if require_lock:
+            raise DayStale([])
         return None
     if not store.is_safe_path_name(session_id):
         raise ValueError(f"unsafe session id {session_id!r}")
@@ -742,9 +750,9 @@ def acquire_day_publish_lock(root: Path, session_id: str) -> Path | None:
     record = store.load_session(root, session_id)
     day = nominal_vienna_date(record)
     folder = day_dir(root, day)
-    if not folder.is_dir():
-        return None
-    if not is_day_path(root, clips_for_day(root, day)):
+    if not folder.is_dir() or not is_day_path(root, clips_for_day(root, day)):
+        if require_lock:
+            raise DayStale([day])
         return None
     lock = day_lock_path(root, day)
     if not try_acquire_lock(lock, create_parent=False):

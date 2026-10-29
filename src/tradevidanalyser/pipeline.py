@@ -455,11 +455,18 @@ def publish_session(
 ) -> PublishResult:
     if not store.is_safe_path_name(session_id):
         raise ValueError(f"unsafe session id {session_id!r}")
-    from tradevidanalyser.day_manifest import acquire_day_publish_lock, require_fresh_for_session
+    from tradevidanalyser.day_manifest import (
+        DayStale,
+        acquire_day_publish_lock,
+        require_fresh_for_session,
+    )
+    from tradevidanalyser.flags import net_fees_enabled
     from tradevidanalyser.watch import release_lock
 
     require_fresh_for_session(root, session_id)
     lock = acquire_day_publish_lock(root, session_id)
+    if net_fees_enabled() and lock is None and store.session_json_path(root, session_id).is_file():
+        raise DayStale([])
     try:
         return run_publish(
             session_id, root=root, notion=notion, provider_name=provider_name

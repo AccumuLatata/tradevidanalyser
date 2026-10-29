@@ -4,7 +4,8 @@ Used when the ``tradevidanalyser[journal]`` extra is not installed. Must
 produce the same ``FILL_RECORD_COLUMNS`` / ``JOURNAL_TRADE_COLUMNS`` frames
 as ``thesistester.journal.tradesviz.load_tradesviz_executions`` and
 ``thesistester.journal.pair.pair_journal_trades``. ``commission`` / ``fees``
-are read then discarded (TJ1).
+are read then discarded (TJ1). ``TVA_NET_FEES`` (TT:892) does not change
+this discard: the JX fee formula is not in the §10.3 extract (TT:903).
 """
 
 from __future__ import annotations

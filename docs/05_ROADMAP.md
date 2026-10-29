@@ -148,6 +148,8 @@ that: `sidecar.py` + `time_anchor.json` under `TVA_SIDECAR` (default off).
 PR-37 is docs-only, no named parity test. PR-38 is the autostart
 guard plus read-only `tva doctor` (`tva-watch` via `schtasks /Query`).
 PR-39 copies `<stem>.jsonl` under `TVA_SIDECAR` (default off).
+PR-42 adds `TVA_NET_FEES` (Vierer-Set only, TT:892) and refuses
+unlocked clip publish when that flag is on.
 
 ---
 

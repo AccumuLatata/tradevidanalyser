@@ -32,6 +32,7 @@ from tradevidanalyser.fills_mirror import (
     load_tradesviz_executions,
     pair_journal_trades,
 )
+from tradevidanalyser.flags import ENV_NET_FEES
 from tradevidanalyser.ingest import ingest
 from tradevidanalyser.pipeline import extract_session, fills_session, transcribe_session
 from tradevidanalyser.schema import RecordingInfo, SessionRecord
@@ -86,6 +87,21 @@ def test_import_and_mirror_produce_identical_frames() -> None:
     assert i_loader == "import"
     assert contract_fills_table(m_fills).equals(contract_fills_table(i_fills))
     assert contract_trades_table(m_trades).equals(contract_trades_table(i_trades))
+
+
+def test_mirror_pairing_unchanged_when_net_fees_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TVA_NET_FEES does not invent a JX fee formula (TT:903); pairing stays TJ1."""
+    fills = load_tradesviz_executions(SYNTHETIC, profile="tradesviz_executions")
+    off = contract_trades_table(pair_journal_trades(fills, include_manual=False))
+    monkeypatch.setenv(ENV_NET_FEES, "1")
+    on = contract_trades_table(pair_journal_trades(fills, include_manual=False))
+    assert on.equals(off)
+    exp_trades = pq.read_table(EXPECTED_TRADES)
+    assert on.equals(exp_trades)
+    for name in FORBIDDEN_COST_COLUMNS:
+        assert name not in on.column_names
 
 
 def test_commission_fees_discarded() -> None:
