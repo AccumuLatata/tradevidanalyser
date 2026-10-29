@@ -305,6 +305,28 @@ def test_watch_attaches_late_sidecar_when_already_ingested(
     )
 
 
+def test_copy_sidecar_raise_releases_lock(
+    tva_root: Path, tmp_path: Path, write_video, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ENV_SIDECAR, "1")
+    source = tmp_path / "obs"
+    source.mkdir()
+    src = write_video(_obs_name(source))
+    watch(source, root=tva_root, once=True, stable_s=0)
+    _write_jsonl(src.with_suffix(".jsonl"), [{"event": "late"}])
+
+    def boom(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("tradevidanalyser.watch.copy_sidecar", boom)
+    report = watch(source, root=tva_root, once=True, stable_s=0)
+    dest_sidecar = sidecar_dest_path(tva_root, src)
+    assert report["events"][0]["action"] == "error"
+    assert not dest_sidecar.exists()
+    assert not dest_sidecar.with_name(dest_sidecar.name + ".part").exists()
+    assert not lock_path(tva_root, src).exists()
+
+
 def test_held_lock_skips_late_sidecar_write(
     tva_root: Path, tmp_path: Path, write_video, monkeypatch: pytest.MonkeyPatch
 ) -> None:

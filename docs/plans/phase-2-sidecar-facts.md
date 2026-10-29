@@ -190,7 +190,7 @@ Source: TT:606, 898(a), 900. Confirmed exception to the Phase 1 flag rule (TT:60
 | CLI `tva ocr` | parser `cli.py:118-124`; handler `:458-462` → `ocr_session`. Help no longer says “fake (default)” | **Match.** |
 | CLI `tva evidence` | parser `cli.py:181-190`; handler `:498-505` → `evidence_session` (extract at `evidence.py:325`) | **Match.** |
 | CLI commands that start OCR via `pause_guard` | `tva align` → `run_pause_guard` (`align.py:271-272`); `tva evidence` / `tva rules` → `ensure_pause_check` (`evidence.py:448-451`, `rules.py:1393-1396`, call at `:1396`); `tva day audit --sample-clocks` is read-only samples (`cli.py:254-258`, dispatch `:529`) | Source does not name each command. These are the `c6029b8` callers that reach `pause_guard` OCR. |
-| `tva watch --run` `watch.py:393-395` | `watch.py:393-395`: if `run`: `transcribe_session` then `extract_session` | **Match.** |
+| `tva watch --run` `watch.py:402-404` | `watch.py:402-404`: if `run`: `transcribe_session` then `extract_session` | **Match.** |
 | `tva serve` `POST /sessions/{id}/run` `serve.py:206-282` | Route `serve.py:208-242`; `_require_run_providers` `:215-218` / `:266-270` raises HTTP **400** with `TVA_*_PROVIDER fehlt` before the worker starts. Worker still at `:288+` (`transcribe` then `extract`). No placeholder body | **Implemented.** Unset provider is a failed HTTP body with the message, not 202 + later `status.error`. Configured (including explicit `fake`) still 202. |
 | `scripts/windows/copy-after-obs.ps1` line 21 | Line 21: `tva --root $Root watch --source $Source --once` — **no** `--run` | **Match.** Does not reach ASR today. Stays runnable. Anyone who adds `--run` there needs a set provider (TT:900). |
 

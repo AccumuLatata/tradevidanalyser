@@ -348,7 +348,16 @@ def process_source(
 
             if already_ingested(root, src, digest_fn=hasher):
                 event["reason"] = "ingested"
-                lock, acquired = _attach_sidecar_ingested(event, src, root)
+                if sidecar_enabled():
+                    dest = dest_path(root, src)
+                    dest_sidecar = dest.with_suffix(".jsonl")
+                    if dest_sidecar.is_file():
+                        event["sidecar"] = classify_jsonl(dest_sidecar)
+                    else:
+                        lock = lock_path(root, src)
+                        if try_acquire_lock(lock):
+                            acquired = True
+                            event["sidecar"] = copy_sidecar(src, dest)
                 continue
             if not mtime_stable(src, stable_s=stable_s, now=now):
                 event["reason"] = "unstable"
@@ -411,28 +420,6 @@ def _maybe_copy_sidecar(event: dict[str, Any], src: Path, dest: Path) -> None:
     """Under TVA_SIDECAR, attach <stem>.jsonl if the dest sidecar is absent. Flag off: no keys."""
     if sidecar_enabled():
         event["sidecar"] = copy_sidecar(src, dest)
-
-
-def _attach_sidecar_ingested(
-    event: dict[str, Any], src: Path, root: Path
-) -> tuple[Path | None, bool]:
-    """Late attach for already-ingested. Write only under the video lock if dest is absent.
-
-    Classify-only when the dest sidecar is already present (no lock). Flag off: no keys,
-    no lock. If the lock is held, skip the write; the next poll retries.
-    """
-    if not sidecar_enabled():
-        return None, False
-    dest = dest_path(root, src)
-    dest_sidecar = dest.with_suffix(".jsonl")
-    if dest_sidecar.is_file():
-        event["sidecar"] = classify_jsonl(dest_sidecar)
-        return None, False
-    lock = lock_path(root, src)
-    if not try_acquire_lock(lock):
-        return None, False
-    event["sidecar"] = copy_sidecar(src, dest)
-    return lock, True
 
 
 def watch(
