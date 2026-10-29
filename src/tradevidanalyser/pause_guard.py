@@ -12,6 +12,7 @@ from typing import Any, Literal
 
 from tradevidanalyser import store
 from tradevidanalyser.align import compute_alignment
+from tradevidanalyser.flags import sidecar_enabled
 from tradevidanalyser.frames import _extract_one, get_layout, media_for_time
 from tradevidanalyser.media import MediaError
 from tradevidanalyser.naming import VIENNA
@@ -92,10 +93,11 @@ class PauseCheck:
     rejected_samples: list[Sample] = field(default_factory=list)
     fit_before: dict[str, Any] | None = None
     override: Literal["force"] | None = None
+    method: str | None = None
     schema_version: str = SCHEMA_VERSION
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "schema_version": self.schema_version,
             "session_id": self.session_id,
             "recording_sha256": self.recording_sha256,
@@ -112,6 +114,9 @@ class PauseCheck:
             "fit_before": self.fit_before,
             "override": self.override,
         }
+        if self.method:
+            payload["method"] = self.method
+        return payload
 
 
 def pause_checks_dir(root: Path) -> Path:
@@ -334,6 +339,15 @@ def run_pause_guard(
     override: Literal["force"] | None = None,
 ) -> PauseCheck:
     """Write pause_checks. Optionally set session.alignment to invalid on suspected."""
+    sidecar_check = _pause_check_from_sidecar(record, root)
+    if sidecar_check is not None:
+        check = sidecar_check
+        check.fit_before = _fit_before(record, root)
+        check.override = override
+        write_pause_check(root, check)
+        if apply_alignment and check.pause_check == "suspected" and override != "force":
+            _write_invalid_alignment(root, record)
+        return check
     _require_can_sample(record, root, reader=reader)
     check = detect_pauses(record, root=root, reader=reader or get_clock_reader())
     check.fit_before = _fit_before(record, root)
@@ -354,9 +368,16 @@ def ensure_pause_check(
     """Load a matching pause_checks file, or run the guard / abort (plan §2.2)."""
     loaded = load_pause_check(root, record.id)
     if loaded is not None and key_matches(loaded, record):
-        if apply_alignment:
-            _apply_suspected_alignment(root, record, loaded)
-        return loaded
+        leftover_ocr = sidecar_enabled() and loaded.method != "sidecar"
+        if not leftover_ocr:
+            if apply_alignment:
+                _apply_suspected_alignment(root, record, loaded)
+            return loaded
+    sidecar_check = _pause_check_from_sidecar(record, root)
+    if sidecar_check is not None:
+        return run_pause_guard(
+            record, root=root, reader=reader, apply_alignment=apply_alignment
+        )
     if not _video_readable(record, root) and (reader or get_clock_reader()) is None:
         _require_can_sample(record, root, reader=reader)
         raise ValueError(VIDEO_UNREADABLE_ERROR)
@@ -382,6 +403,10 @@ def sample_clocks_readonly(
 ) -> dict[str, Any]:
     """Same detector as the guard, no session or pause_checks write (audit --sample-clocks)."""
     try:
+        sidecar_check = _pause_check_from_sidecar(record, root)
+        if sidecar_check is not None:
+            sidecar_check.fit_before = _fit_before(record, root)
+            return sidecar_check.as_dict()
         _require_can_sample(record, root, reader=reader)
         check = detect_pauses(record, root=root, reader=reader or get_clock_reader())
         check.fit_before = _fit_before(record, root)
@@ -418,6 +443,56 @@ def _provider_label(reader: ClockReader | None) -> tuple[str, str]:
         return "injected", "injected-v1"
     provider = get_ocr_provider()
     return provider.name, provider.model
+
+
+def _pause_check_from_sidecar(record: SessionRecord, root: Path) -> PauseCheck | None:
+    """Under TVA_SIDECAR + verified/partial anchor, replace the OCR detector (TT:902)."""
+    if not sidecar_enabled():
+        return None
+    from tradevidanalyser.sidecar import (
+        METHOD_SIDECAR,
+        STATUS_VERIFIED,
+        load_time_anchor,
+        sidecar_replaces_detector,
+        write_session_time_anchor,
+    )
+
+    anchor = load_time_anchor(root, record.id)
+    if anchor is None:
+        anchor = write_session_time_anchor(record, root=root)
+    if not sidecar_replaces_detector(anchor):
+        return None
+    assert anchor is not None
+    sha, parts, duration = recording_key(record)
+    pause_total = _sidecar_pause_total_s(anchor)
+    status: PauseStatus = "clear" if anchor.status == STATUS_VERIFIED else "unverifiable"
+    return PauseCheck(
+        session_id=record.id,
+        recording_sha256=sha,
+        part_shas=list(parts),
+        duration_s=duration,
+        pause_check=status,
+        pause_total_s=pause_total,
+        clock_resolution_s=None,
+        pause_detectable_from_s=None,
+        ocr_provider=METHOD_SIDECAR,
+        ocr_model=METHOD_SIDECAR,
+        method=METHOD_SIDECAR,
+    )
+
+
+def _sidecar_pause_total_s(anchor: Any) -> float:
+    total = 0.0
+    for prev, nxt in zip(anchor.sections, anchor.sections[1:], strict=False):
+        if nxt.start_event != "resume" or prev.end_event != "pause":
+            continue
+        try:
+            start = datetime.fromisoformat(prev.wall_end)
+            end = datetime.fromisoformat(nxt.wall_start)
+        except (TypeError, ValueError):
+            continue
+        total += (end - start).total_seconds()
+    return _r(total, 6)
 
 
 def _fit_before(record: SessionRecord, root: Path) -> dict[str, Any] | None:
@@ -720,6 +795,7 @@ def _from_payload(raw: dict[str, Any]) -> PauseCheck | None:
             rejected_samples=rejected,
             fit_before=raw.get("fit_before") if isinstance(raw.get("fit_before"), dict) else None,
             override=override,
+            method=str(raw["method"]) if raw.get("method") else None,
             schema_version=SCHEMA_VERSION,
         )
     except (KeyError, TypeError, ValueError):

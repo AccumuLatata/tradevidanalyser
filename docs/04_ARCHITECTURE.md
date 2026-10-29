@@ -165,6 +165,16 @@ session:
     method: ocr_clock | filename | chapter_fill | manual | invalid
     samples: [{video_t, ocr_text, parsed_wallclock, residual_s}]
 
+time_anchor:                     # PR-40; omit unless TVA_SIDECAR; schema_version "1"
+  status: verified | partial | invalid | incomplete | no_sidecar | sidecar_mismatch
+  method: sidecar | null         # M2: sidecar when verified/partial; null = legacy
+  first_frame_offset_s           # Q-15 = B: wall_span − video_span (TT:439–440)
+  first_frame_offset_source: measured | fixed
+  offset_source: fallback        # only when measurement failed (never silent)
+  sections: [{index, status: verified | segment_invalid, method, reason,
+              wall_start, wall_end, video_s_start, video_s_end, resume_offset_s}]
+  fills: [{fill_id, video_s | null, reason: segment_invalid?}]
+
 transcript:
   provider: whisperx; model: large-v3; prompt_version: jargon-v1
   segments: [{id, t0, t1, lang, text, words: [{w, t0, t1, p}]}]
@@ -266,6 +276,20 @@ PR-09: additive `session_events` / `summary_de` / `summary_en` on the same
 and the closed `kind` set above. The citation guard covers events and
 rejects summaries whose digit runs are not exact runs in a valid cited
 segment (`summary_de` also capped at 120 words).
+
+PR-40: under `TVA_SIDECAR` (default off) `sidecar.py` reads `<stem>.jsonl`
+and writes `sessions/<id>/time_anchor.json`. Pause rule R13 (media time
+continues at pause `video_s`; resume band 0.4–0.8 s). N5 per-section
+judgment. Q-15 = B: first-frame offset is measured per clip as
+`wall_span − video_span` (TT:439–440): `record_stop`−`record_start`
+wall minus pause spans, minus ffprobe duration. `start_time` below
+0.1 s is unusable. 1.043 s is a loud fallback (`offset_source: fallback`
+plus a warning on every clip). Corrupt JSONL is `invalid` /
+`invalid_json` (legacy path). File name + duration ±0.1 s vs ffprobe,
+else `sidecar_mismatch`. Flag off does not write the file and leaves
+alignment unchanged. With `TVA_PAUSE_GUARD`, a verified/partial sidecar
+replaces the detector (`pause_checks.method = sidecar`); a leftover OCR
+check is not reused.
 
 PR-15: additive `visual_notes` on the same `schema_version: "1"` (default
 `[]`). `tva vlm` is off unless `TVA_VLM_PROVIDER` is set. Grok sends

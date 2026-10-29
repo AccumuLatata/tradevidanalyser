@@ -1,6 +1,6 @@
 # Phase 2 — Sidecar facts (PR-37)
 
-**Status:** Plan (PR-37, docs-only) plus owner facts recorded in PR-38 (D7 / D8 / Q-15 = B). PR-39 ships the opt-in `<stem>.jsonl` copy under `TVA_SIDECAR` and resolves D8 path examples. It does not implement `sidecar.py` facts or `time_anchor.json` (PR-40).
+**Status:** Plan (PR-37, docs-only) plus owner facts recorded in PR-38 (D7 / D8 / Q-15 = B). PR-39 ships the opt-in `<stem>.jsonl` copy. **PR-40** ships `sidecar.py` facts and `time_anchor.json` (Q-15 = B, measured per clip; 1.043 s loud fallback).
 **Stand geprüft:** TVA `main` @ `674a9bf` (PR-37 landed; PR-36 @ `c6029b8`). ThesisTester source: extract of `docs/research/TVA_TT_Research_Plan.md` with original line numbers (Revision 4, stand 12.10.2026; TT lesestand `251b5099`, TVA `c6029b8`) (TT:6).
 **Danach:** Review. Sidecar implementation remains the later series below. PR-38 does not start that code.
 **Authoritative source:** AccumuLatata/ThesisTester `docs/research/TVA_TT_Research_Plan.md` (German), via the attached line-numbered extract. `docs/JOURNAL_EXTENSION_PLAN.md` is **not** in that extract and stays [NV].
@@ -80,7 +80,7 @@ Source: TT:439–441, 463–468, 902. First-frame measurement [Rv] in the extrac
 | Sidecar duration | ±0.1 s vs video / `ffprobe` (TT:467, 902). |
 | Fill ↔ spoken time | ≤ 2 s (TT:468). |
 
-`time_anchor.json` stamps `first_frame_offset_source: fixed | measured`. A fixed value must not silently replace a missing measurement (TT:441). **Q-15 = B** (Accumu, 2026-10-29): measure the first-frame offset per clip; 1.043 s is a loud fallback (warning plus a flag in the output, never silent). Implementation is PR-40, not this PR. Extract text at TT:441 / TT:1100 still called this open; the owner decision is recorded here.
+`time_anchor.json` stamps `first_frame_offset_source: fixed | measured`. A fixed value must not silently replace a missing measurement (TT:441). **Q-15 = B** (Accumu, 2026-10-29): measure the first-frame offset per clip as `wall_span − video_span` (TT:439–440): `record_stop`−`record_start` wall minus pause spans, minus ffprobe duration. `start_time` below 0.1 s is unusable. 1.043 s is a loud fallback (warning on every clip plus `offset_source: fallback`, never silent). Implemented in PR-40. Extract text at TT:441 / TT:1100 still called this open; the owner decision is recorded here.
 
 ### 3.4 Per-section judgment (N5) and alignment method (M2)
 
@@ -217,7 +217,7 @@ Source: TT:450–456, 898(b), 902. Accumu decided 12.10.2026 (TT:450). Full rule
 
 Source text (TT:441): whether the first-frame offset is used as a **fixed** value (1.043 s) or **estimated per clip** (e.g. from `ffprobe` start time and `record_start`). Accumu decides before PR-40; PR-37 holds the decision. Repeated at TT:1100.
 
-**Owner fact (Accumu, 2026-10-29), recorded in PR-38:** variant **B** — per clip. The 1.043 s figure remains the expected value / loud fallback (TT:440, 465), never a silent substitute for a missing measurement (TT:441). `time_anchor.json` still stamps `first_frame_offset_source: fixed | measured`. Implementation belongs to PR-40; this PR does not change sidecar code.
+**Owner fact (Accumu, 2026-10-29), recorded in PR-38:** variant **B** — per clip as `wall_span − video_span` (TT:439–440). The 1.043 s figure remains the expected value / loud fallback (TT:440, 465), never a silent substitute for a missing measurement (TT:441). `time_anchor.json` stamps `first_frame_offset_source: fixed | measured` and, on fallback, `offset_source: fallback`. Implemented in PR-40.
 
 ---
 
@@ -285,15 +285,27 @@ Source: TT:901. `TVA_SIDECAR` is orthogonal (TT:891). Unset/empty is off; behavi
 | Events | `sidecar: ok\|missing\|invalid_json` plus watch-report counts | no `sidecar` field |
 | Dest | `TVA_ROOT/recordings/<stem>.jsonl` from `--root` / `TVA_ROOT` | n/a |
 
-**Not in this PR (PR-40):** `sidecar.py` facts, pause/file/first-frame checks, `time_anchor.json`, alignment method.
+**Not in PR-39 (now PR-40):** `sidecar.py` facts, pause/file/first-frame checks, `time_anchor.json`, alignment method.
 
 **D8:** remaining `T:\tradevid` examples in `tva-watch.xml`, `copy-after-obs.ps1`, README, and `04_ARCHITECTURE.md` §2.1 are `Z:\tradevid` or `TVA_ROOT`. No UNC sidecar dest in code.
 
-## 11. Out of scope for this PR
+## 11. PR-40 shipped (reader + time anchor)
 
-PR-39 implements the TT:901 copy. This file stays the Phase 2 plan.
+Source: TT:902, Q-15 = B (TT:441, 1100; owner 2026-10-29). `TVA_SIDECAR` remains orthogonal (TT:891). Unset/empty is off; then no `time_anchor.json` and alignment is unchanged (L0-identical).
 
-- No `sidecar.py` / `time_anchor.json` (PR-40).
+| Surface | Flag on | Flag off |
+|---|---|---|
+| `sidecar.py` | parse `<stem>.jsonl` including `file_changed`; pause rule R13; N5 per-section; file + duration ±0.1 s; first-frame band 0.8–1.3 s | not called |
+| Q-15 | measure `wall_span − video_span` per clip (TT:439–440): record_stop−record_start wall minus pause spans, minus ffprobe duration. `start_time` &lt; 0.1 s unused. Failed measure → **1.043 s** + warning on every clip + `first_frame_offset_source: fixed` + `offset_source: fallback` | n/a |
+| `time_anchor.json` | `schema_version "1"` under `sessions/<id>/`; M2 method `sidecar` / `null` | not written |
+| `TVA_PAUSE_GUARD` | verified/partial sidecar replaces the detector (`pause_checks.method = sidecar`) | detector unchanged |
+
+Owner [Rv] goldens (Test 1 / Test 2 / 17:11:06 / T-S2 / T-S3) are **not** committed. Tests use synthetic fixtures; [Rv] cases are skipped until the owner confirms values.
+
+## 12. Out of scope for this PR
+
+PR-40 implements the TT:902 reader. This file stays the Phase 2 plan.
+
 - No `TVA_NET_FEES` (PR-42).
 - No golden regeneration. Unclipped / no-media-error fixtures stay bit-identical.
 - No merge.

@@ -8,7 +8,7 @@ from datetime import datetime, tzinfo
 from pathlib import Path
 
 from tradevidanalyser import store
-from tradevidanalyser.flags import pause_guard_enabled
+from tradevidanalyser.flags import pause_guard_enabled, sidecar_enabled
 from tradevidanalyser.naming import VIENNA
 from tradevidanalyser.ocr import read_ocr_parquet
 from tradevidanalyser.schema import (
@@ -268,6 +268,10 @@ def align_session(
         raise ValueError(FORCE_FLAG_OFF_ERROR)
     if alignment_is_invalid(record.alignment) and not pause_guard_enabled():
         raise ValueError(ALIGN_INVALID_ERROR)
+    if sidecar_enabled():
+        from tradevidanalyser.sidecar import write_session_time_anchor
+
+        write_session_time_anchor(record, root=root)
     if pause_guard_enabled():
         check = run_pause_guard(record, root=root, apply_alignment=False)
         if check.pause_check == "suspected" and manual_offset is not None and not force:

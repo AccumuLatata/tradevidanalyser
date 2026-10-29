@@ -1,6 +1,6 @@
 """Copy OBS sidecar JSONL next to a recording. Destination is always under TVA_ROOT.
 
-PR-39 only: copy + classify. No facts, no time_anchor.json (PR-40).
+PR-39: copy + classify. Facts / time_anchor.json are PR-40 (`sidecar.py`).
 """
 
 from __future__ import annotations
