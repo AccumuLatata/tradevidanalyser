@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -21,7 +22,7 @@ from tradevidanalyser.sidecar_copy import (
     sidecar_dest_path,
     sidecar_source_path,
 )
-from tradevidanalyser.watch import dest_path, process_source, watch
+from tradevidanalyser.watch import dest_path, lock_path, process_source, watch
 
 SRC = Path("src/tradevidanalyser")
 
@@ -302,6 +303,27 @@ def test_watch_attaches_late_sidecar_when_already_ingested(
     assert sidecar.read_text(encoding="utf-8") == src.with_suffix(".jsonl").read_text(
         encoding="utf-8"
     )
+
+
+def test_held_lock_skips_late_sidecar_write(
+    tva_root: Path, tmp_path: Path, write_video, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ENV_SIDECAR, "1")
+    source = tmp_path / "obs"
+    source.mkdir()
+    src = write_video(_obs_name(source))
+    watch(source, root=tva_root, once=True, stable_s=0)
+    assert not sidecar_dest_path(tva_root, src).exists()
+    _write_jsonl(src.with_suffix(".jsonl"), [{"event": "late"}])
+    lock = lock_path(tva_root, src)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text(f"{os.getpid()}\n", encoding="utf-8")
+    report = watch(source, root=tva_root, once=True, stable_s=0)
+    dest_sidecar = sidecar_dest_path(tva_root, src)
+    assert report["events"][0]["reason"] == "ingested"
+    assert not dest_sidecar.exists()
+    assert not dest_sidecar.with_name(dest_sidecar.name + ".part").exists()
+    assert lock.is_file()
 
 
 def test_watch_does_not_overwrite_existing_sidecar(

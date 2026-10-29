@@ -280,7 +280,7 @@ Source: TT:901. `TVA_SIDECAR` is orthogonal (TT:891). Unset/empty is off; behavi
 
 | Surface | Flag on | Flag off |
 |---|---|---|
-| `watch` / `ingest` | copy exactly `<stem>.jsonl` next to the recording (`watch.py` `VIDEO_SUFFIXES`, `sidecar_copy.py`). Already-ingested watch attaches a missing/late sidecar the same way ingest does, only if the dest sidecar is absent | no `.jsonl` copy |
+| `watch` / `ingest` | copy exactly `<stem>.jsonl` next to the recording (`watch.py` `VIDEO_SUFFIXES`, `sidecar_copy.py`). Already-ingested watch attaches a missing/late sidecar the same way ingest does, only if the dest sidecar is absent, and only after the video lock (skip the write if the lock is held; classify-only stays unlocked when dest is present) | no `.jsonl` copy |
 | Pattern | `<stem>.jsonl` only; `.events.jsonl` is not copied | n/a |
 | Events | `sidecar: ok\|missing\|invalid_json` plus watch-report counts | no `sidecar` field |
 | Dest | `TVA_ROOT/recordings/<stem>.jsonl` from `--root` / `TVA_ROOT` | n/a |

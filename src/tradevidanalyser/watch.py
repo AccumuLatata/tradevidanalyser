@@ -15,7 +15,7 @@ from tradevidanalyser.flags import sidecar_enabled
 from tradevidanalyser.ingest import guard_session_id_collision, ingest
 from tradevidanalyser.naming import FilenameError, parse_obs_filename
 from tradevidanalyser.pipeline import extract_session, transcribe_session
-from tradevidanalyser.sidecar_copy import copy_sidecar, sidecar_counts
+from tradevidanalyser.sidecar_copy import classify_jsonl, copy_sidecar, sidecar_counts
 
 VIDEO_SUFFIXES = {".mp4", ".mkv"}
 DEFAULT_STABLE_S = 15.0
@@ -348,7 +348,7 @@ def process_source(
 
             if already_ingested(root, src, digest_fn=hasher):
                 event["reason"] = "ingested"
-                _maybe_copy_sidecar(event, src, dest_path(root, src))
+                lock, acquired = _attach_sidecar_ingested(event, src, root)
                 continue
             if not mtime_stable(src, stable_s=stable_s, now=now):
                 event["reason"] = "unstable"
@@ -411,6 +411,28 @@ def _maybe_copy_sidecar(event: dict[str, Any], src: Path, dest: Path) -> None:
     """Under TVA_SIDECAR, attach <stem>.jsonl if the dest sidecar is absent. Flag off: no keys."""
     if sidecar_enabled():
         event["sidecar"] = copy_sidecar(src, dest)
+
+
+def _attach_sidecar_ingested(
+    event: dict[str, Any], src: Path, root: Path
+) -> tuple[Path | None, bool]:
+    """Late attach for already-ingested. Write only under the video lock if dest is absent.
+
+    Classify-only when the dest sidecar is already present (no lock). Flag off: no keys,
+    no lock. If the lock is held, skip the write; the next poll retries.
+    """
+    if not sidecar_enabled():
+        return None, False
+    dest = dest_path(root, src)
+    dest_sidecar = dest.with_suffix(".jsonl")
+    if dest_sidecar.is_file():
+        event["sidecar"] = classify_jsonl(dest_sidecar)
+        return None, False
+    lock = lock_path(root, src)
+    if not try_acquire_lock(lock):
+        return None, False
+    event["sidecar"] = copy_sidecar(src, dest)
+    return lock, True
 
 
 def watch(
