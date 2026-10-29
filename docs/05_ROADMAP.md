@@ -134,13 +134,17 @@ is the default.
 records the sidecar contract, flag rows (`TVA_SIDECAR`, `TVA_NET_FEES`),
 coach contract v2 (R8), and locked statements N4 / N5 / Q-15. Series
 PR-37 (this plan) → PR-38 → PR-43 → PR-39 → PR-40 → PR-42 (after
-JX1/JX2/JX8). Deferred: PR-41, 44 (only if Deepgram), 45, 46. Open
-before later PRs: research-plan D7 (`tva-watch` on ALTrading, before
-PR-38), D8 (`T:\tradevid` SMB vs SFTP `/trading`, before PR-39),
-Q-15 (fixed 1.043 s vs measured per clip, before PR-40) — not
-roadmap D7/D8.
-PR-37 is docs-only, no named parity test. No Phase 2 code in this
-roadmap cut.
+JX1/JX2/JX8). Deferred: PR-41, 44 (only if Deepgram), 45, 46.
+Research-plan D7 / D8 / Q-15 are not roadmap D7/D8. Owner facts
+2026-10-29 (not extract [C]): D7 checked on the trading PC — no
+matching scheduled task / Startup / Run-key TVA entries, nothing to
+disable. D8: no T: drive; TVA is `Z:\tradevid` on SMB
+`\\AHORNBUSINESS\trading` (resolve before PR-39; not this PR).
+Q-15 = B: measure first-frame offset per clip; 1.043 s is a loud
+fallback (warning plus a flag; never silent). Implementation is
+PR-40.
+PR-37 is docs-only, no named parity test. PR-38 is the autostart
+guard plus read-only `tva doctor` (`tva-watch` via `schtasks /Query`).
 
 ---
 

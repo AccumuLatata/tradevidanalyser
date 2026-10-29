@@ -30,6 +30,13 @@ pip install -e ".[dev]"            # fake ASR (default)
 tva doctor
 ```
 
+`tva doctor` is read-only. On ALTrading run it only after trading (B.5).
+It reports autostart (`tva-watch` via `schtasks /Query`, list argv,
+Windows only; skipped elsewhere) and config state (ffmpeg, `TVA_ROOT`,
+GPU, keys, providers). This package never registers a scheduled task
+and never starts at boot or login. Accumu disables a registered task
+by hand (D7). The XML / plist templates are **nicht für ALTrading (B.5)**.
+
 WhisperX and Deepgram are **opt-in**. Leave `TVA_ASR_PROVIDER` unset (or
 `fake`) unless you have the extra / key. Optional knobs: `TVA_ASR_MODEL`
 (WhisperX `large-v3`, Deepgram `nova-3`), `TVA_ASR_BATCH_SIZE`,
@@ -82,10 +89,11 @@ tva serve --host 127.0.0.1 --port 8764
 OBS filenames must be `%CCYY-%MM-%DD %hh-%mm-%ss`. Record to the trading PC
 disk, then `tva watch --source <obs dir>` copies into `$TVA_ROOT/recordings/`
 (or pass the path to `tva ingest`). Watch never deletes the source and
-never records onto the NAS. OBS auto-split siblings (same filename prefix,
-next start within 5 s of the previous duration) stitch into one session.
-`--desktop-track` writes `audio/desktop.opus` and is never transcribed by
-default.
+never records onto the NAS. Watch is not an autostart: nothing in this
+package registers `tva-watch` or starts it at boot or login. OBS auto-split
+siblings (same filename prefix, next start within 5 s of the previous
+duration) stitch into one session. `--desktop-track` writes
+`audio/desktop.opus` and is never transcribed by default.
 
 `tva wer` prints JSON `{wer, jargon_recall, n_words}` against a
 hand-corrected reference (the golden excerpt on the NAS). It uses
