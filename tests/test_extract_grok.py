@@ -92,9 +92,10 @@ def _provider(handler, monkeypatch: pytest.MonkeyPatch, **kwargs) -> GrokExtract
     )
 
 
-def test_get_extract_provider_default_is_fake(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_extract_provider_unset_is_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("TVA_EXTRACT_PROVIDER", raising=False)
-    assert get_extract_provider().name == "fake"
+    with pytest.raises(ExtractError, match="TVA_EXTRACT_PROVIDER fehlt"):
+        get_extract_provider()
     assert get_extract_provider("grok").name == "grok"
     assert get_extract_provider("xai").name == "grok"
 
@@ -267,7 +268,7 @@ def test_extract_http_never_called_when_provider_is_fake(
     transcribe_session(record.id, root=tva_root, provider_name="fake")
     insights = extract_session(record.id, root=tva_root, provider_name="fake")
     assert insights.provider == "fake"
-    assert isinstance(get_extract_provider(), FakeExtractProvider)
+    assert isinstance(get_extract_provider("fake"), FakeExtractProvider)
 
 
 def test_grok_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -43,6 +43,7 @@ from tradevidanalyser.schema import (
 
 PUBLISH_NAME = "publish.json"
 DEBRIEF_MISSING_PREFIX = "Debrief fehlt für "
+FAKE_FACTS_PUBLISH_ERROR = "Tagespublikation verweigert provider: fake"
 
 
 def day_publish_path(root: Path, day: date) -> Path:
@@ -51,6 +52,21 @@ def day_publish_path(root: Path, day: date) -> Path:
 
 def debrief_missing_error(session_ids: list[str]) -> str:
     return f"{DEBRIEF_MISSING_PREFIX}{', '.join(session_ids)}; tva report ausführen"
+
+
+def refuse_fake_fact_providers(root: Path, clips: list[SessionRecord]) -> None:
+    """Day publish refuses ASR / extract / evidence facts stamped ``provider: fake``."""
+    for record in clips:
+        for path_fn in (store.transcript_path, store.insights_path, store.evidence_path):
+            path = path_fn(root, record.id)
+            if not path.is_file():
+                continue
+            try:
+                body = store.read_json(path)
+            except (OSError, ValueError):
+                continue
+            if isinstance(body, dict) and body.get("provider") == "fake":
+                raise PublishError(f"{FAKE_FACTS_PUBLISH_ERROR} ({path.name} {record.id})")
 
 
 def missing_debrief_ids(root: Path, clips: list[SessionRecord]) -> list[str]:
@@ -136,6 +152,7 @@ def publish_session_day_path(
     missing = missing_debrief_ids(root, clips)
     if missing:
         raise PublishError(debrief_missing_error(missing))
+    refuse_fake_fact_providers(root, clips)
     payload = payload_from_day(root, day, clips, record)
     publisher = get_publish_client(provider_name, root=root, client=client)
     existing_id = _saved_day_page_id(root, day, title=payload.title)

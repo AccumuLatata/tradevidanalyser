@@ -37,6 +37,14 @@ def _never_call_real_schtasks(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("tradevidanalyser.doctor.subprocess.run", guarded)
 
 
+@pytest.fixture(autouse=True)
+def _explicit_fake_providers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PR-43: tests opt into fake providers explicitly (TT:900)."""
+    monkeypatch.setenv("TVA_ASR_PROVIDER", "fake")
+    monkeypatch.setenv("TVA_OCR_PROVIDER", "fake")
+    monkeypatch.setenv("TVA_EXTRACT_PROVIDER", "fake")
+
+
 @pytest.fixture
 def tva_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "store"

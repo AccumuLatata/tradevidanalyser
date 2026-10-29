@@ -18,6 +18,7 @@ from tradevidanalyser.naming import VIENNA
 from tradevidanalyser.ocr import (
     FakeOcrProvider,
     MIN_PARSE_CONFIDENCE,
+    OcrError,
     OcrRow,
     _flatten_paddle,
     get_ocr_provider,
@@ -226,8 +227,11 @@ def test_flatten_paddle_tolerates_none_scores_and_result_objects() -> None:
     assert _flatten_paddle({"rec_texts": ["2"], "rec_scores": [None]}) == [("2", 0.0)]
 
 
-def test_fake_is_default_provider() -> None:
-    provider = get_ocr_provider()
+def test_unset_ocr_provider_is_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TVA_OCR_PROVIDER", raising=False)
+    with pytest.raises(OcrError, match="TVA_OCR_PROVIDER fehlt"):
+        get_ocr_provider()
+    provider = get_ocr_provider("fake")
     assert isinstance(provider, FakeOcrProvider)
     assert provider.name == "fake"
 

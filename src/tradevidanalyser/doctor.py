@@ -155,8 +155,10 @@ def run_doctor(root: Path) -> DoctorReport:
         )
     )
 
-    extract = (os.environ.get("TVA_EXTRACT_PROVIDER") or "fake").strip().lower() or "fake"
-    if extract in {"grok", "xai"}:
+    extract = (os.environ.get("TVA_EXTRACT_PROVIDER") or "").strip().lower()
+    if not extract:
+        ex_status, ex_detail = "fail", "TVA_EXTRACT_PROVIDER fehlt"
+    elif extract in {"grok", "xai"}:
         if xai:
             ex_status, ex_detail = "ok", f"TVA_EXTRACT_PROVIDER={extract}"
         else:
@@ -167,9 +169,11 @@ def run_doctor(root: Path) -> DoctorReport:
         ex_status, ex_detail = "warn", f"TVA_EXTRACT_PROVIDER={extract}"
     checks.append(DoctorCheck(id="extract_provider", status=ex_status, detail=ex_detail))
 
-    provider = (os.environ.get("TVA_ASR_PROVIDER") or "fake").strip().lower() or "fake"
+    provider = (os.environ.get("TVA_ASR_PROVIDER") or "").strip().lower()
     known = {"fake", "whisperx", "whisper", "deepgram", "hosted"}
-    if provider in {"scribe", "elevenlabs"}:
+    if not provider:
+        asr_status, asr_detail = "fail", "TVA_ASR_PROVIDER fehlt"
+    elif provider in {"scribe", "elevenlabs"}:
         asr_status, asr_detail = "warn", f"TVA_ASR_PROVIDER={provider}; PR-05 pick is deepgram"
     elif provider in known:
         asr_status, asr_detail = "ok", f"TVA_ASR_PROVIDER={provider}"
@@ -206,10 +210,20 @@ def run_doctor(root: Path) -> DoctorReport:
     elif provider in {"deepgram", "hosted"}:
         dg_status, dg_detail = "fail", f"TVA_ASR_PROVIDER={provider} but DEEPGRAM_API_KEY is unset"
     else:
-        dg_status, dg_detail = "warn", "DEEPGRAM_API_KEY unset (hosted ASR uses fake unless set)"
+        dg_status, dg_detail = "warn", "DEEPGRAM_API_KEY unset"
     checks.append(DoctorCheck(id="deepgram_key", status=dg_status, detail=dg_detail))
 
-    ocr_provider = (os.environ.get("TVA_OCR_PROVIDER") or "fake").strip().lower() or "fake"
+    ocr_provider = (os.environ.get("TVA_OCR_PROVIDER") or "").strip().lower()
+    if not ocr_provider:
+        ocr_prov_status, ocr_prov_detail = "fail", "TVA_OCR_PROVIDER fehlt"
+    elif ocr_provider in {"fake", "test"}:
+        ocr_prov_status, ocr_prov_detail = "ok", f"TVA_OCR_PROVIDER={ocr_provider}"
+    elif ocr_provider in {"paddleocr", "paddle", "ppocr"}:
+        ocr_prov_status, ocr_prov_detail = "ok", f"TVA_OCR_PROVIDER={ocr_provider}"
+    else:
+        ocr_prov_status, ocr_prov_detail = "warn", f"TVA_OCR_PROVIDER={ocr_provider}"
+    checks.append(DoctorCheck(id="ocr_provider", status=ocr_prov_status, detail=ocr_prov_detail))
+
     paddle_ok = paddleocr_importable()
     if paddle_ok:
         ocr_status, ocr_detail = "ok", "paddleocr importable"

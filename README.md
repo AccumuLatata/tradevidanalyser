@@ -16,8 +16,8 @@ Python 3.11+, `ffmpeg` / `ffprobe` on PATH.
 
 | Host | Install | `TVA_ASR_PROVIDER` | Notes |
 |---|---|---|---|
-| CI / first-run | `pip install -e ".[dev]"` | `fake` (default) | No GPU, no model download, no API key |
-| Trading PC OCR | `pip install -e ".[dev,ocr]"` | ASR unchanged; `TVA_OCR_PROVIDER=paddleocr` | Optional PaddleOCR extra. Fake OCR stays the default |
+| CI / first-run | `pip install -e ".[dev]"` | `fake` (must set) | Unset is an error (`TVA_ASR_PROVIDER fehlt`). No GPU, no model download, no API key |
+| Trading PC OCR | `pip install -e ".[dev,ocr]"` | ASR unchanged; `TVA_OCR_PROVIDER=paddleocr` | Optional PaddleOCR extra. Unset OCR is an error; `fake` only if set explicitly |
 | Trading PC (CUDA) | `pip install -e ".[dev,whisperx]"` | `whisperx` | `compute_type=float16`; install a CUDA torch wheel from pytorch.org if pip gave you CPU-only |
 | Mac (CPU) | `pip install -e ".[dev,whisperx]"` | `whisperx` | `compute_type=int8` + a warning; slow. Prefer the PC GPU or hosted ASR |
 | Mac hosted fallback | `pip install -e ".[dev]"` | `deepgram` | `DEEPGRAM_API_KEY`; uploads `audio/mic.opus` only. Scribe is reserved, not the PR-05 pick |
@@ -25,7 +25,7 @@ Python 3.11+, `ffmpeg` / `ffprobe` on PATH.
 ```bash
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -e ".[dev]"            # fake ASR (default)
+pip install -e ".[dev]"            # then set TVA_ASR_PROVIDER=fake for CI
 # pip install -e ".[dev,whisperx]" # local WhisperX (PC CUDA or Mac CPU)
 tva doctor
 ```
@@ -37,8 +37,9 @@ GPU, keys, providers). This package never registers a scheduled task
 and never starts at boot or login. Accumu disables a registered task
 by hand (D7). The XML / plist templates are **nicht für ALTrading (B.5)**.
 
-WhisperX and Deepgram are **opt-in**. Leave `TVA_ASR_PROVIDER` unset (or
-`fake`) unless you have the extra / key. Optional knobs: `TVA_ASR_MODEL`
+WhisperX and Deepgram are **opt-in**. Unset `TVA_ASR_PROVIDER` is an error
+(`TVA_ASR_PROVIDER fehlt`). Set `fake` explicitly for CI (a warning is
+emitted). Optional knobs: `TVA_ASR_MODEL`
 (WhisperX `large-v3`, Deepgram `nova-3`), `TVA_ASR_BATCH_SIZE`,
 `TVA_ASR_DEVICE`, `TVA_ASR_COMPUTE_TYPE`, `DEEPGRAM_API_KEY`.
 
@@ -215,9 +216,11 @@ experiment `{rule_change, start, stop_criterion}` is appended to
 `GET /coach/latest` is the bot read (404 until the CLI has run). Not a
 `POST /run` stage.
 
-ASR, extraction, and report default to **fake** providers
-(`TVA_ASR_PROVIDER=fake`, `TVA_EXTRACT_PROVIDER=fake`,
-`TVA_REPORT_PROVIDER=fake`) so CI and first-run never call a paid API.
+ASR, extract, and OCR have **no silent fake default** (PR-43). Unset
+`TVA_ASR_PROVIDER` / `TVA_EXTRACT_PROVIDER` / `TVA_OCR_PROVIDER` aborts with
+`TVA_*_PROVIDER fehlt`. Set `fake` explicitly for CI (warning on stderr).
+Report still defaults to **fake** (`TVA_REPORT_PROVIDER=fake`) so first-run
+never calls a paid prose API.
 WhisperX is the local adapter (`TVA_ASR_PROVIDER=whisperx`). Hosted fallback
 is Deepgram (`TVA_ASR_PROVIDER=deepgram`, audio only). Grok extract is opt-in
 (`TVA_EXTRACT_PROVIDER=grok`, `XAI_API_KEY`, optional `TVA_EXTRACT_MODEL`,

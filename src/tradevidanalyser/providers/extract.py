@@ -15,6 +15,7 @@ import httpx
 from pydantic import BaseModel, Field
 
 from tradevidanalyser.glossary import load_glossary
+from tradevidanalyser.provider_resolve import ENV_EXTRACT_PROVIDER, require_provider_name
 from tradevidanalyser.schema import (
     EVENT_KINDS,
     CitedSpan,
@@ -879,7 +880,12 @@ class GrokExtractProvider:
 
 
 def get_extract_provider(name: str | None = None) -> ExtractProvider:
-    chosen = (name or os.environ.get("TVA_EXTRACT_PROVIDER") or "fake").strip().lower()
+    chosen = require_provider_name(
+        name,
+        env=ENV_EXTRACT_PROVIDER,
+        error_cls=ExtractError,
+        extra_fake=frozenset({"keyword"}),
+    )
     if chosen in {"fake", "test", "keyword"}:
         return FakeExtractProvider()
     if chosen in {"grok", "xai"}:

@@ -117,7 +117,11 @@ def main(argv: list[str] | None = None) -> int:
 
     p_ocr = sub.add_parser("ocr", help="ROI OCR of chapter frames → ocr.parquet")
     p_ocr.add_argument("session")
-    p_ocr.add_argument("--provider", default=None, help="fake (default) or paddleocr")
+    p_ocr.add_argument(
+        "--provider",
+        default=None,
+        help="paddleocr, or fake only if TVA_OCR_PROVIDER=fake / --provider fake",
+    )
 
     p_cl = sub.add_parser("clips", help="chapter clips (mic only, stream copy)")
     p_cl.add_argument("session")
@@ -179,7 +183,11 @@ def main(argv: list[str] | None = None) -> int:
         help="per-trade windows + cited stated fields → evidence.json",
     )
     p_ev.add_argument("session")
-    p_ev.add_argument("--provider", default=None, help="fake (default) or grok")
+    p_ev.add_argument(
+        "--provider",
+        default=None,
+        help="grok, or fake only if TVA_EXTRACT_PROVIDER=fake / --provider fake",
+    )
 
     p_rules = sub.add_parser(
         "rules",

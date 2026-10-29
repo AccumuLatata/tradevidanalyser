@@ -74,6 +74,18 @@ class StatedFields(BaseModel):
 class EvidenceWindow(BaseModel):
     t0: float = Field(allow_inf_nan=False)
     t1: float = Field(allow_inf_nan=False)
+    window_clipped: bool | None = None
+    t0_raw: float | None = None
+    t1_raw: float | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_unclipped(self, handler):  # type: ignore[no-untyped-def]
+        payload = handler(self)
+        if not payload.get("window_clipped"):
+            payload.pop("window_clipped", None)
+            payload.pop("t0_raw", None)
+            payload.pop("t1_raw", None)
+        return payload
 
 
 class EvidenceOcrRef(BaseModel):

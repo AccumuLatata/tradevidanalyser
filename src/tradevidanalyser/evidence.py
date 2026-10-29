@@ -286,18 +286,22 @@ def _window_bounds(
     pre_s: float,
     post_s: float,
     duration_s: float,
-) -> tuple[float, float]:
+) -> tuple[float, float, bool, float, float]:
     if exit_t < entry_t:
         exit_t = entry_t
-    t0 = entry_t - pre_s
-    t1 = exit_t + post_s
-    t0 = max(0.0, t0)
+    raw_t0 = entry_t - pre_s
+    raw_t1 = exit_t + post_s
+    t0 = max(0.0, raw_t0)
+    t1 = raw_t1
     if duration_s > 0 and math.isfinite(duration_s):
         t0 = min(t0, duration_s)
         t1 = min(duration_s, t1)
     if t1 < t0:
         t1 = t0
-    return _r(t0, 3), _r(t1, 3)
+    t0_r, t1_r = _r(t0, 3), _r(t1, 3)
+    raw_t0_r, raw_t1_r = _r(raw_t0, 3), _r(raw_t1, 3)
+    clipped = (t0_r, t1_r) != (raw_t0_r, raw_t1_r)
+    return t0_r, t1_r, clipped, raw_t0_r, raw_t1_r
 
 
 def build_evidence(
@@ -343,11 +347,22 @@ def build_evidence(
             if exit_ts is not None
             else entry_t
         )
-        t0, t1 = _window_bounds(entry_t, exit_t, pre_s=pre, post_s=post, duration_s=duration)
+        t0, t1, clipped, raw_t0, raw_t1 = _window_bounds(
+            entry_t, exit_t, pre_s=pre, post_s=post, duration_s=duration
+        )
         if _exit_outside_clip(record, root, exit_ts):
             t1 = _r(duration, 3) if duration > 0 else t1
             if t1 < t0:
                 t1 = t0
+        window = EvidenceWindow(t0=t0, t1=t1)
+        if clipped:
+            window = EvidenceWindow(
+                t0=t0,
+                t1=t1,
+                window_clipped=True,
+                t0_raw=raw_t0,
+                t1_raw=raw_t1,
+            )
         window_segs = segments_in_window(segments, t0, t1)
         window_tx = Transcript(
             provider=transcript.provider if transcript else "none",
@@ -365,7 +380,7 @@ def build_evidence(
         trades.append(
             EvidenceTrade(
                 tva_trade_id=tva_id,
-                window=EvidenceWindow(t0=t0, t1=t1),
+                window=window,
                 commentary=[seg.id for seg in window_segs],
                 stated=stated_fields_of(stated_pass),
                 markers=_markers_in_window(record.recording.chapters, t0, t1),

@@ -390,10 +390,13 @@ def _compute_status_locked(
             previous = None
     if cost_usd is None and previous is not None:
         cost_usd = previous.cost_usd
+    audio_ok = audio_path(root, session_id).is_file()
     if previous is not None:
         for name, state in previous.stages.items():
             if state == "failed" and stages.get(name) != "ok":
                 if name in OPTIONAL_STAGES and name != (failed or ""):
+                    continue
+                if name == "audio" and audio_ok:
                     continue
                 stages[name] = "failed"
     if failed and stages.get(failed) != "ok":

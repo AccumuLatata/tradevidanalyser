@@ -43,7 +43,8 @@ def test_deepgram_mapping_from_committed_fixture() -> None:
 
 def test_get_asr_provider_hosted_names(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("TVA_ASR_PROVIDER", raising=False)
-    assert get_asr_provider().name == "fake"
+    with pytest.raises(AsrError, match="TVA_ASR_PROVIDER fehlt"):
+        get_asr_provider()
     assert get_asr_provider("deepgram").name == "deepgram"
     assert get_asr_provider("hosted").name == "deepgram"
     assert get_asr_provider("scribe").name == "scribe"
@@ -286,9 +287,10 @@ def test_doctor_deepgram_key_fail_when_selected(
 def test_doctor_reports_hosted_keys(tva_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
     monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
-    monkeypatch.delenv("TVA_ASR_PROVIDER", raising=False)
     report = run_doctor(tva_root)
     ids = {c.id: c for c in report.checks}
+    assert ids["asr_provider"].status == "ok"
+    assert ids["asr_provider"].detail == "TVA_ASR_PROVIDER=fake"
     assert ids["deepgram_key"].status == "warn"
     assert ids["elevenlabs_key"].status == "warn"
     assert report.ok

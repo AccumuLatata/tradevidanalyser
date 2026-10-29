@@ -185,7 +185,7 @@ insights:                        # model-derived, every field cited or null
 
 evidence:                        # PR-19; omit until `tva evidence`
   provider / model / prompt_version
-  trades: [{tva_trade_id, window{t0,t1}, commentary[],
+  trades: [{tva_trade_id, window{t0,t1, window_clipped+t0_raw+t1_raw only when clipped}, commentary[],
             stated{setup,bias,stop_raw,target_raw,playbook} each {value,seg}|null,
             markers[], frames[], ocr[], clip, alignment_confidence,
             alignment: low|null, gaps[]}]
@@ -241,8 +241,17 @@ never estimated.
 
 PR-08 extractor: `tva extract --provider grok` (`XAI_API_KEY`, optional
 `TVA_EXTRACT_MODEL`). System prompt is `prompts/insights_v1.de.md`;
-`prompt_version` is `{stem}+{sha256[:12]}`. Fake keyword scan stays the
-default so CI never calls xAI.
+`prompt_version` is `{stem}+{sha256[:12]}`. Fake keyword scan is explicit
+opt-in (`TVA_EXTRACT_PROVIDER=fake` or `--provider fake`); unset aborts
+(`TVA_EXTRACT_PROVIDER fehlt`, PR-43).
+
+PR-43: no silent provider fallbacks. Unset ASR / OCR / extract fails
+loudly (`TVA_*_PROVIDER fehlt`). `tva serve` `POST /sessions/{id}/run`
+returns 400 with that message, never placeholder transcript/insights.
+Media extract failure stamps session status `audio=failed` /
+`audio_failed: …` instead of swallowing `MediaError`. Evidence windows
+that were clipped to the clip set `window_clipped: true` plus the
+original bounds. Day publication refuses facts stamped `provider: fake`.
 
 PR-09: additive `session_events` / `summary_de` / `summary_en` on the same
 `schema_version: "1"`. Grok’s second pass uses `prompts/events_v1.de.md`

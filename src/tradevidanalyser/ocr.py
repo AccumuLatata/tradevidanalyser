@@ -1,10 +1,9 @@
-"""ROI OCR. Fake is the default; PaddleOCR is an extra. Crops stay under TVA_ROOT."""
+"""ROI OCR. Unset ``TVA_OCR_PROVIDER`` is an error; ``fake`` is explicit. Crops stay under TVA_ROOT."""
 
 from __future__ import annotations
 
 import json
 import math
-import os
 import re
 import subprocess
 import tempfile
@@ -17,13 +16,12 @@ from typing import Protocol
 from tradevidanalyser import media, store
 from tradevidanalyser.frames import Roi, get_layout
 from tradevidanalyser.media import MediaError
+from tradevidanalyser.provider_resolve import ENV_OCR_PROVIDER, require_provider_name
 from tradevidanalyser.schema import SessionRecord
 
 SCHEMA_VERSION = "1"
 OCR_ROIS = ("clock", "position", "pnl", "instrument")
 MIN_PARSE_CONFIDENCE = 0.50
-ENV_OCR_PROVIDER = "TVA_OCR_PROVIDER"
-DEFAULT_PROVIDER = "fake"
 
 # Dates must be stripped before time search: "11.09.2026 14:30:05" would otherwise
 # parse as 11:09:20. Prefer colon clocks (platform UI) over dotted/dashed times.
@@ -96,7 +94,7 @@ class FakeOcrProvider:
 
 
 class PaddleOcrProvider:
-    """Local PaddleOCR (``pip install 'tradevidanalyser[ocr]'``). Never the default."""
+    """Local PaddleOCR (``pip install 'tradevidanalyser[ocr]'``). Never a silent default."""
 
     name = "paddleocr"
     model = "ppocr"
@@ -130,8 +128,7 @@ def paddleocr_importable() -> bool:
 
 
 def get_ocr_provider(name: str | None = None) -> OcrProvider:
-    chosen = (name or os.environ.get(ENV_OCR_PROVIDER) or DEFAULT_PROVIDER).strip().lower()
-    chosen = chosen or DEFAULT_PROVIDER
+    chosen = require_provider_name(name, env=ENV_OCR_PROVIDER, error_cls=OcrError)
     if chosen in {"fake", "test"}:
         return FakeOcrProvider()
     if chosen in {"paddleocr", "paddle", "ppocr"}:
