@@ -22,10 +22,12 @@ from tradevidanalyser.flags import (
     ENV_DAY_RULES,
     ENV_EXCLUSIVE_FILLS,
     ENV_PAUSE_GUARD,
+    ENV_SIDECAR,
     ENV_TRADING_HOURS,
     INVALID_FLAG_SET_ERROR,
     pause_guard_enabled,
     require_allowed_flag_set,
+    sidecar_enabled,
 )
 from tradevidanalyser.ingest import ingest
 from tradevidanalyser.ledger import ledger_db_path
@@ -273,6 +275,52 @@ def test_flag_combo_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
         require_allowed_flag_set()
     monkeypatch.delenv(ENV_EXCLUSIVE_FILLS)
     require_allowed_flag_set()
+
+
+def test_sidecar_flag_default_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(ENV_SIDECAR, raising=False)
+    assert sidecar_enabled() is False
+    for raw in ("", "0", "false", "off", "no"):
+        monkeypatch.setenv(ENV_SIDECAR, raw)
+        assert sidecar_enabled() is False
+    for raw in ("1", "true", "YES", "On"):
+        monkeypatch.setenv(ENV_SIDECAR, raw)
+        assert sidecar_enabled() is True
+
+
+def test_sidecar_flag_orthogonal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """TVA_SIDECAR combines with every existing allowed row (TT:891, 894)."""
+    for name in (
+        ENV_PAUSE_GUARD,
+        ENV_DAY_MANIFEST,
+        ENV_EXCLUSIVE_FILLS,
+        ENV_DAY_RULES,
+        ENV_DAY_PUBLISH,
+        ENV_TRADING_HOURS,
+        ENV_ALLOW_SESSION_ID_OVERWRITE,
+        ENV_SIDECAR,
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(ENV_SIDECAR, "1")
+    require_allowed_flag_set()
+    monkeypatch.setenv(ENV_PAUSE_GUARD, "1")
+    require_allowed_flag_set()
+    monkeypatch.setenv(ENV_DAY_MANIFEST, "1")
+    require_allowed_flag_set()
+    monkeypatch.delenv(ENV_PAUSE_GUARD)
+    require_allowed_flag_set()
+    monkeypatch.setenv(ENV_PAUSE_GUARD, "1")
+    for name in (ENV_EXCLUSIVE_FILLS, ENV_DAY_RULES, ENV_DAY_PUBLISH, ENV_TRADING_HOURS):
+        monkeypatch.setenv(name, "1")
+    require_allowed_flag_set()
+    monkeypatch.setenv(ENV_ALLOW_SESSION_ID_OVERWRITE, "1")
+    require_allowed_flag_set()
+    monkeypatch.delenv(ENV_DAY_RULES)
+    with pytest.raises(ValueError, match=INVALID_FLAG_SET_ERROR):
+        require_allowed_flag_set()
+    monkeypatch.delenv(ENV_SIDECAR)
+    with pytest.raises(ValueError, match=INVALID_FLAG_SET_ERROR):
+        require_allowed_flag_set()
 
 
 def test_clock_text_resolution() -> None:

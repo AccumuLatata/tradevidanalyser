@@ -548,6 +548,8 @@ Ungesetzt oder leer ist aus. Wahr ist `1`, `true`, `yes` oder `on`, wie `serve_m
 
 `TVA_ALLOW_SESSION_ID_OVERWRITE` ist orthogonal. Es darf zu jeder Zeile unten dazukommen. Es ist keine eigene erlaubte Menge, die andere Flags ausschließt.
 
+Phase 2 `TVA_SIDECAR` (PR-39) ist ebenfalls orthogonal zu jeder **bestehenden** erlaubten Zeile (`phase-2-sidecar-facts.md` §4). Es lizenziert nicht `TVA_NET_FEES`.
+
 Erlaubte Kombinationen. Alles andere bricht beim Start des Befehls laut ab.
 
 | Set | Rollback |

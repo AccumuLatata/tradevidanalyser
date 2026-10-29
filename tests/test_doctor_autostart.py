@@ -41,6 +41,16 @@ def test_templates_have_altrading_header() -> None:
     assert plist.splitlines()[1].startswith("<!-- nicht für ALTrading (B.5)")
 
 
+def test_windows_templates_drop_t_drive() -> None:
+    """D8: no T: drive. Templates use TVA_ROOT / Z: example, never T:\\tradevid."""
+    xml = WATCH_XML.read_text(encoding="utf-8")
+    ps1 = (REPO / "scripts" / "windows" / "copy-after-obs.ps1").read_text(encoding="utf-8")
+    assert "T:\\tradevid" not in xml
+    assert "T:\\tradevid" not in ps1
+    assert "\\\\AHORNBUSINESS" not in xml
+    assert "\\\\AHORNBUSINESS" not in ps1
+
+
 def test_doctor_source_never_mutates_tasks() -> None:
     forbidden = ("/Create", "/Change", "/Delete", "/End", "/Run", "shell=True")
     for token in forbidden:

@@ -11,9 +11,11 @@ from pathlib import Path
 from typing import Any
 
 from tradevidanalyser import config, media, store
+from tradevidanalyser.flags import sidecar_enabled
 from tradevidanalyser.ingest import guard_session_id_collision, ingest
 from tradevidanalyser.naming import FilenameError, parse_obs_filename
 from tradevidanalyser.pipeline import extract_session, transcribe_session
+from tradevidanalyser.sidecar_copy import copy_sidecar, sidecar_counts
 
 VIDEO_SUFFIXES = {".mp4", ".mkv"}
 DEFAULT_STABLE_S = 15.0
@@ -375,10 +377,14 @@ def process_source(
                     warn=False,
                 )
             if dest.is_file() and (same_copy(src, dest) or hasher(dest) == hasher(src)):
+                if sidecar_enabled():
+                    event["sidecar"] = copy_sidecar(src, dest)
                 record = ingest(dest, root=root)
                 event["reason"] = "dest-exists"
             else:
                 dest = _copy_via_part(src, root=root, copy_fn=copier)
+                if sidecar_enabled():
+                    event["sidecar"] = copy_sidecar(src, dest)
                 record = ingest(dest, root=root)
                 event["action"] = "copied"
                 event["dest"] = dest.name
@@ -441,7 +447,7 @@ def watch(
             break
         sleep_fn(poll)
 
-    return {
+    report: dict[str, Any] = {
         "source": str(source),
         "root": str(root),
         "once": once,
@@ -449,3 +455,6 @@ def watch(
         "stable_s": stable,
         "events": all_events,
     }
+    if sidecar_enabled():
+        report["sidecar"] = sidecar_counts(all_events)
+    return report

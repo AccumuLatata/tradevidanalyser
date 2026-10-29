@@ -11,6 +11,7 @@ ENV_DAY_RULES = "TVA_DAY_RULES"
 ENV_DAY_PUBLISH = "TVA_DAY_PUBLISH"
 ENV_TRADING_HOURS = "TVA_TRADING_HOURS"
 ENV_ALLOW_SESSION_ID_OVERWRITE = "TVA_ALLOW_SESSION_ID_OVERWRITE"
+ENV_SIDECAR = "TVA_SIDECAR"
 
 TRUTHY = frozenset({"1", "true", "yes", "on"})
 INVALID_FLAG_SET_ERROR = "ungültige Flag-Kombination"
@@ -56,6 +57,10 @@ def allow_session_id_overwrite() -> bool:
     return env_flag(ENV_ALLOW_SESSION_ID_OVERWRITE)
 
 
+def sidecar_enabled() -> bool:
+    return env_flag(ENV_SIDECAR)
+
+
 def active_flag_names() -> list[str]:
     names = [
         ENV_PAUSE_GUARD,
@@ -69,7 +74,10 @@ def active_flag_names() -> list[str]:
 
 
 def require_allowed_flag_set() -> None:
-    """Abort on a combination that §3.6 does not list. Orthogonal overwrite is ignored."""
+    """Abort on a combination that §3.6 does not list.
+
+    Orthogonal flags (``TVA_ALLOW_SESSION_ID_OVERWRITE``, ``TVA_SIDECAR``) are ignored.
+    """
     pause = env_flag(ENV_PAUSE_GUARD)
     manifest = env_flag(ENV_DAY_MANIFEST)
     four = [env_flag(name) for name in _DAY_PATH_FOUR]

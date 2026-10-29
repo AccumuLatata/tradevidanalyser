@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- nicht für ALTrading (B.5). Do not register this task. Accumu disables by hand (D7). -->
+<!-- D8: no T: drive. --root is TVA_ROOT (operator-set; desk example Z:\tradevid). Never a UNC NAS path. -->
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
     <Description>TVA copy-after-record: poll the local OBS folder, copy finished tapes to TVA_ROOT. Do not point OBS at the NAS.</Description>
@@ -35,7 +36,7 @@
   <Actions Context="Author">
     <Exec>
       <Command>tva</Command>
-      <Arguments>--root T:\tradevid watch --source D:\OBS</Arguments>
+      <Arguments>--root Z:\tradevid watch --source D:\OBS</Arguments>
     </Exec>
   </Actions>
 </Task>

@@ -9,9 +9,10 @@ from datetime import datetime
 from pathlib import Path
 
 from tradevidanalyser import __version__, config, media, store
-from tradevidanalyser.flags import allow_session_id_overwrite
+from tradevidanalyser.flags import allow_session_id_overwrite, sidecar_enabled
 from tradevidanalyser.naming import FilenameError, obs_name_prefix, parse_obs_filename
 from tradevidanalyser.schema import Chapter, RecordingInfo, RecordingPart, SessionRecord
+from tradevidanalyser.sidecar_copy import copy_sidecar
 
 SPLIT_GAP_S = 5.0
 SESSION_ID_COLLISION_ERROR = "Session-Id-Kollision"
@@ -223,6 +224,8 @@ def _copy_parts(chain: list[_Part], *, root: Path) -> list[tuple[Path, str]]:
         if dest.resolve() != item.path:
             if not dest.is_file() or media.sha256_file(dest) != item.digest:
                 shutil.copy2(item.path, dest)
+        if sidecar_enabled():
+            copy_sidecar(item.path, dest)
         dests.append((dest, media.sha256_file(dest)))
     return dests
 

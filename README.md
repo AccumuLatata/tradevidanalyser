@@ -47,7 +47,7 @@ Set `TVA_ROOT` to the shared store (Synology mount, or a local folder):
 
 ```bash
 export TVA_ROOT=/Volumes/tradevid   # Mac
-# setx TVA_ROOT T:\tradevid         # Windows, then new terminal
+# setx TVA_ROOT Z:\tradevid         # Windows, then new terminal (D8: no T:)
 ```
 
 If unset, the CLI uses `./.tva_store` under the current directory.
@@ -90,7 +90,10 @@ tva serve --host 127.0.0.1 --port 8764
 OBS filenames must be `%CCYY-%MM-%DD %hh-%mm-%ss`. Record to the trading PC
 disk, then `tva watch --source <obs dir>` copies into `$TVA_ROOT/recordings/`
 (or pass the path to `tva ingest`). Watch never deletes the source and
-never records onto the NAS. Watch is not an autostart: nothing in this
+never records onto the NAS. With `TVA_SIDECAR=1` (default off), watch and
+ingest also copy `<stem>.jsonl` next to the recording (not `.events.jsonl`)
+into `$TVA_ROOT/recordings/`. The dest is `--root` / `TVA_ROOT`, never a
+hardcoded NAS path. Watch is not an autostart: nothing in this
 package registers `tva-watch` or starts it at boot or login. OBS auto-split
 siblings (same filename prefix, next start within 5 s of the previous
 duration) stitch into one session. `--desktop-track` writes
