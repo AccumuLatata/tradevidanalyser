@@ -101,12 +101,14 @@ def _install_stub(monkeypatch: pytest.MonkeyPatch) -> _WhisperXStub:
     return stub
 
 
-def test_default_asr_provider_is_fake(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_asr_provider_is_unset_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("TVA_ASR_PROVIDER", raising=False)
-    assert get_asr_provider().name == "fake"
+    with pytest.raises(AsrError, match="TVA_ASR_PROVIDER fehlt"):
+        get_asr_provider()
     assert get_asr_provider("whisperx").name == "whisperx"
     monkeypatch.setenv("TVA_ASR_PROVIDER", "  ")
-    assert get_asr_provider().name == "fake"
+    with pytest.raises(AsrError, match="TVA_ASR_PROVIDER fehlt"):
+        get_asr_provider()
 
 
 def test_whisperx_maps_aligned_result() -> None:

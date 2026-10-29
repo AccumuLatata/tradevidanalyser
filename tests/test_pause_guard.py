@@ -150,6 +150,28 @@ def _json_files_equal(left: Path, right: Path) -> None:
         raise AssertionError(f"json differs: {left} vs {right}")
 
 
+def _evidence_files_equal_allowing_clip_stamp(left: Path, right: Path) -> None:
+    """PR-43: L0 windows were silently clipped. Snapshot files stay frozen.
+
+    Regenerated evidence keeps the same t0/t1 and adds window_clipped + raw
+    bounds. Do not rewrite the committed L0 goldens.
+    """
+    got = _posix_store_paths(json.loads(left.read_text(encoding="utf-8")))
+    want = _posix_store_paths(json.loads(right.read_text(encoding="utf-8")))
+    for gtrade, wtrade in zip(got["trades"], want["trades"], strict=True):
+        gwin = gtrade["window"]
+        wwin = wtrade["window"]
+        assert gwin["t0"] == wwin["t0"]
+        assert gwin["t1"] == wwin["t1"]
+        if "window_clipped" not in wwin:
+            assert gwin.get("window_clipped") is True
+            assert gwin.get("t0_raw") is not None
+            assert gwin.get("t1_raw") is not None
+            gtrade["window"] = {"t0": gwin["t0"], "t1": gwin["t1"]}
+    if _canonical(got) != _canonical(want):
+        raise AssertionError(f"json differs: {left} vs {right}")
+
+
 def _parquet_equal(left: Path, right: Path) -> None:
     a = pq.read_table(left)
     b = pq.read_table(right)
@@ -758,7 +780,10 @@ def test_l0_with_guard_on_matches_snapshot(
             "debrief.md",
             "debrief.json",
         ):
-            _json_or_parquet(dest / filename, src / filename)
+            if filename == "evidence.json":
+                _evidence_files_equal_allowing_clip_stamp(dest / filename, src / filename)
+            else:
+                _json_or_parquet(dest / filename, src / filename)
         got_ledger = _dump_ledger(root, session_id)
         want_ledger = json.loads((src / "ledger.json").read_text(encoding="utf-8"))
         if _canonical(got_ledger) != _canonical(want_ledger):

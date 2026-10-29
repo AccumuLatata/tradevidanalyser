@@ -346,6 +346,11 @@ def test_window_clamps_past_duration(tva_root: Path) -> None:
     trade = evidence.trades[0]
     assert trade.window.t0 == pytest.approx(3600.0)
     assert trade.window.t1 == pytest.approx(3600.0)
+    assert trade.window.window_clipped is True
+    dumped = trade.window.model_dump(mode="json")
+    assert dumped["window_clipped"] is True
+    assert dumped["t0_raw"] == pytest.approx(4000.0 - DEFAULT_PRE_S)
+    assert dumped["t1_raw"] == pytest.approx(4060.0 + DEFAULT_POST_S)
 
 
 def test_exit_before_entry_does_not_invert_window(tva_root: Path) -> None:

@@ -1,4 +1,4 @@
-"""ASR adapters. Default is fake so CI and first-run never call a paid API."""
+"""ASR adapters. Unset ``TVA_ASR_PROVIDER`` is an error; ``fake`` is explicit."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from tradevidanalyser.glossary import load_glossary
+from tradevidanalyser.provider_resolve import ENV_ASR_PROVIDER, require_provider_name
 from tradevidanalyser.schema import Transcript, TranscriptSegment, TranscriptWord
 
 DEFAULT_WHISPERX_MODEL = "large-v3"
@@ -34,7 +35,7 @@ class AsrProvider(Protocol):
 
 
 class FakeAsrProvider:
-    """Deterministic German placeholder. Used in tests and when no GPU/key."""
+    """Deterministic German placeholder. Tests and explicit ``fake`` / ``test`` only."""
 
     name = "fake"
     model = "fake-v1"
@@ -365,7 +366,7 @@ class WhisperXAsrProvider:
 
 
 def get_asr_provider(name: str | None = None) -> AsrProvider:
-    chosen = (name or os.environ.get("TVA_ASR_PROVIDER") or "fake").strip().lower() or "fake"
+    chosen = require_provider_name(name, env=ENV_ASR_PROVIDER, error_cls=AsrError)
     if chosen in {"fake", "test"}:
         return FakeAsrProvider()
     if chosen in {"whisperx", "whisper"}:

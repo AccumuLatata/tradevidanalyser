@@ -22,6 +22,8 @@ from tradevidanalyser.coach import load_latest
 from tradevidanalyser.day_manifest import DayStale, incomplete_days, legacy_unbuilt_days, require_fresh_store
 from tradevidanalyser.ledger import ledger_summary
 from tradevidanalyser.pipeline import extract_session, transcribe_session
+from tradevidanalyser.providers.asr import AsrError, get_asr_provider
+from tradevidanalyser.providers.extract import ExtractError, get_extract_provider
 from tradevidanalyser.schema import (
     CoachReport,
     Insights,
@@ -210,6 +212,10 @@ def create_app(
     ) -> dict:
         _require_session(app.state.root, session_id)
         requested = _parse_run_stages(stages)
+        try:
+            _require_run_providers(requested)
+        except (AsrError, ExtractError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         with app.state.jobs_lock:
             current = app.state.jobs.get(session_id) or set()
             if current:
@@ -255,6 +261,13 @@ def create_app(
         ).model_dump(mode="json")
 
     return app
+
+
+def _require_run_providers(stages: list[str]) -> None:
+    if "transcribe" in stages:
+        get_asr_provider()
+    if "extract" in stages:
+        get_extract_provider()
 
 
 def _parse_run_stages(raw: str) -> list[str]:

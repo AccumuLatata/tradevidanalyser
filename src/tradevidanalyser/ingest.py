@@ -15,6 +15,8 @@ from tradevidanalyser.schema import Chapter, RecordingInfo, RecordingPart, Sessi
 
 SPLIT_GAP_S = 5.0
 SESSION_ID_COLLISION_ERROR = "Session-Id-Kollision"
+AUDIO_FAILED_PREFIX = "audio_failed"
+AUDIO_STAGE = "audio"
 
 
 class IngestError(ValueError):
@@ -67,12 +69,13 @@ def ingest(video: Path, *, root: Path, desktop_track: bool = False) -> SessionRe
             )
         store.invalidate_downstream(root, session_id)
 
+    audio_error: str | None = None
     try:
         _write_session_audio(
             dest_files, root=root, session_id=session_id, desktop_track=desktop_track
         )
-    except media.MediaError:
-        pass
+    except media.MediaError as exc:
+        audio_error = f"{AUDIO_FAILED_PREFIX}: {exc}"
 
     chapters = _shifted_chapters(chain, [part.duration_s for part in parts] if parts else None)
     tracks = media.audio_track_labels(first.probe)
@@ -102,6 +105,9 @@ def ingest(video: Path, *, root: Path, desktop_track: bool = False) -> SessionRe
     )
     store.save_session(root, record)
     _drop_orphan_part_sessions(root, chain, keep_id=session_id)
+    if audio_error is not None:
+        store.compute_status(root, session_id, error=audio_error, failed=AUDIO_STAGE)
+        raise IngestError(audio_error)
     store.compute_status(root, session_id)
     return record
 
@@ -270,8 +276,10 @@ def _refresh_existing_audio(
                 session_id=session_id,
                 desktop_track=desktop_track or need_desk,
             )
-        except media.MediaError:
-            pass
+        except media.MediaError as exc:
+            audio_error = f"{AUDIO_FAILED_PREFIX}: {exc}"
+            store.compute_status(root, session_id, error=audio_error, failed=AUDIO_STAGE)
+            raise IngestError(audio_error) from exc
     if desktop_track and store.desktop_audio_path(root, session_id).is_file():
         if "desktop" not in existing.recording.tracks:
             existing = existing.model_copy(
