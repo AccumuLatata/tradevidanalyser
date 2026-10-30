@@ -51,6 +51,12 @@ from tradevidanalyser.schema import (
     SessionRecord,
 )
 from tradevidanalyser.watch import release_lock, try_acquire_lock
+from tradevidanalyser.week_manifest import (
+    WEEK_MANIFEST_NOT_LOCKED,
+    WeekManifestError,
+    iso_week_id,
+    write_week_manifest,
+)
 
 L0_DIR = Path(__file__).parent / "fixtures" / "l0_main_f44d864"
 L0_SESSION = "2026-05-14_160300"
@@ -396,9 +402,11 @@ def test_flag_off_second_clip_still_overwrites_title(
 def test_net_fees_publish_requires_built_locked_day(
     tva_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """TVA_NET_FEES publish needs a built day lock; legacy clip publish is closed (TT:892)."""
+    """TVA_NET_FEES publish needs a locked week and a built day (TT:903)."""
     _four_on(monkeypatch)
     monkeypatch.setenv(ENV_NET_FEES, "1")
+    lone_day = date(2026, 9, 16)
+    write_week_manifest(tva_root, lone_day, status="locked")
     lone = _session(
         tva_root,
         "2026-09-16_093000",
@@ -407,12 +415,14 @@ def test_net_fees_publish_requires_built_locked_day(
         sha256="c" * 64,
     )
     _write_debrief(tva_root, lone.id)
-    with pytest.raises(DayStale, match=DAY_STALE_ERROR):
+    with pytest.raises(DayStale, match=DAY_STALE_ERROR) as stale:
         pipeline_publish(lone.id, root=tva_root, notion=True)
-    assert not day_publish_path(tva_root, date(2026, 9, 16)).is_file()
+    assert stale.value.dates == [lone_day]
+    assert not day_publish_path(tva_root, lone_day).is_file()
     assert not store.publish_path(tva_root, lone.id).is_file()
 
     a, b = _build_two(tva_root, tmp_path, monkeypatch)
+    write_week_manifest(tva_root, DAY, status="locked")
     _write_debrief(tva_root, a.id, learnings="Alpha one.")
     _write_debrief(tva_root, b.id, learnings="Bravo one.")
     lock = day_lock_path(tva_root, DAY)
@@ -429,6 +439,22 @@ def test_net_fees_publish_requires_built_locked_day(
     assert day_publish_path(tva_root, DAY).is_file()
 
 
+def test_net_fees_open_week_manifest_blocks_publish(
+    tva_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Open weekly manifest is not enough; per-day lock does not publish (TT:903)."""
+    _four_on(monkeypatch)
+    monkeypatch.setenv(ENV_NET_FEES, "1")
+    a, b = _build_two(tva_root, tmp_path, monkeypatch)
+    write_week_manifest(tva_root, DAY, status="open")
+    _write_debrief(tva_root, a.id, learnings="Alpha one.")
+    _write_debrief(tva_root, b.id, learnings="Bravo one.")
+    with pytest.raises(WeekManifestError, match=WEEK_MANIFEST_NOT_LOCKED):
+        pipeline_publish(a.id, root=tva_root, notion=True)
+    assert not day_publish_path(tva_root, DAY).is_file()
+    assert iso_week_id(DAY) == "2026-W38"
+
+
 def test_net_fees_direct_publish_no_legacy_fallback(
     tva_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -443,8 +469,10 @@ def test_net_fees_direct_publish_no_legacy_fallback(
         sha256="c" * 64,
     )
     _write_debrief(tva_root, lone.id)
-    with pytest.raises(DayStale, match=DAY_STALE_ERROR):
+    write_week_manifest(tva_root, date(2026, 9, 16), status="locked")
+    with pytest.raises(DayStale, match=DAY_STALE_ERROR) as stale:
         publish_session(lone.id, root=tva_root, notion=True)
+    assert stale.value.dates == [date(2026, 9, 16)]
     assert not store.publish_path(tva_root, lone.id).is_file()
 
 

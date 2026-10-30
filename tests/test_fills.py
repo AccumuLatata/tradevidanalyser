@@ -27,6 +27,7 @@ from tradevidanalyser.fills import (
     venue_from_hint,
 )
 from tradevidanalyser.fills_mirror import (
+    NO_COST_SOURCE_ERROR,
     FillRecord,
     JournalIngestError,
     load_tradesviz_executions,
@@ -80,6 +81,19 @@ def test_mirror_matches_committed_expected() -> None:
 
 
 @pytest.mark.skipif(not thesistester_available(), reason="thesistester extra not installed")
+def test_import_and_mirror_net_fees_parity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(ENV_NET_FEES, "1")
+    m_loader, m_fills, m_trades = load_and_pair(SYNTHETIC, prefer_import=False)
+    i_loader, i_fills, i_trades = load_and_pair(SYNTHETIC, prefer_import=True)
+    assert m_loader == "mirror"
+    assert i_loader == "import"
+    assert contract_fills_table(m_fills).equals(contract_fills_table(i_fills))
+    assert contract_trades_table(m_trades).equals(contract_trades_table(i_trades))
+
+
+@pytest.mark.skipif(not thesistester_available(), reason="thesistester extra not installed")
 def test_import_and_mirror_produce_identical_frames() -> None:
     m_loader, m_fills, m_trades = load_and_pair(SYNTHETIC, prefer_import=False)
     i_loader, i_fills, i_trades = load_and_pair(SYNTHETIC, prefer_import=True)
@@ -89,19 +103,82 @@ def test_import_and_mirror_produce_identical_frames() -> None:
     assert contract_trades_table(m_trades).equals(contract_trades_table(i_trades))
 
 
-def test_mirror_pairing_unchanged_when_net_fees_on(
+def test_mirror_flag_off_stays_expected_trades() -> None:
+    fills = load_tradesviz_executions(SYNTHETIC, profile="tradesviz_executions")
+    got = contract_trades_table(pair_journal_trades(fills, include_manual=False))
+    exp_trades = pq.read_table(EXPECTED_TRADES)
+    assert got.equals(exp_trades)
+
+
+def test_net_fees_writes_costs_and_net(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """TVA_NET_FEES does not invent a JX fee formula (TT:903); pairing stays TJ1."""
     fills = load_tradesviz_executions(SYNTHETIC, profile="tradesviz_executions")
-    off = contract_trades_table(pair_journal_trades(fills, include_manual=False))
+    off = pair_journal_trades(fills, include_manual=False)
     monkeypatch.setenv(ENV_NET_FEES, "1")
-    on = contract_trades_table(pair_journal_trades(fills, include_manual=False))
-    assert on.equals(off)
-    exp_trades = pq.read_table(EXPECTED_TRADES)
-    assert on.equals(exp_trades)
+    on = pair_journal_trades(fills, include_manual=False)
+    assert [trade.trade_id for trade in on] == [trade.trade_id for trade in off]
+    assert any(trade.commission_cost not in (None, 0.0) for trade in on if trade.status == "closed")
+    for trade in on:
+        if trade.status != "closed":
+            continue
+        assert trade.commission_cost is not None
+        assert trade.day_fee_allocation is not None
+        assert trade.net_pnl_currency == pytest.approx(
+            trade.gross_pnl_currency - trade.commission_cost - trade.day_fee_allocation
+        )
+        assert trade.net_pnl_currency != trade.gross_pnl_currency or (
+            trade.commission_cost == 0.0 and trade.day_fee_allocation == 0.0
+        )
     for name in FORBIDDEN_COST_COLUMNS:
-        assert name not in on.column_names
+        assert name not in contract_trades_table(on).column_names
+
+
+def test_net_fees_without_cost_source_is_loud(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ENV_NET_FEES, "1")
+    lines = SYNTHETIC.read_text(encoding="utf-8").splitlines()
+    header = lines[0]
+    blank_cost = []
+    for line in lines[1:]:
+        cells = line.split(",")
+        cells[8] = "N/A"
+        cells[9] = "N/A"
+        blank_cost.append(",".join(cells))
+    csv = tmp_path / "no_cost.csv"
+    csv.write_text(header + "\n" + "\n".join(blank_cost) + "\n", encoding="utf-8")
+    fills = load_tradesviz_executions(csv, profile="tradesviz_executions")
+    with pytest.raises(JournalIngestError, match=NO_COST_SOURCE_ERROR):
+        pair_journal_trades(fills, include_manual=False)
+
+
+def test_net_fees_mirrors_account_and_position(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ENV_NET_FEES, "1")
+    header = (
+        "date,symbol,side,currency,underlying,asset_type,price,quantity,"
+        "commission,fees,stop_loss,profit_target,tags,notes,spread_id,account,position_id"
+    )
+    rows = [
+        "2026-05-14T14:03:25+0000,MNQM26,buy,USD,MNQ,future,29584.0,1.0,1.0,0.5,N/A,N/A,,,p1,synth-amp,pos-a",
+        "2026-05-14T14:04:10+0000,MNQM26,sell,USD,MNQ,future,29585.0,1.0,1.0,0.5,N/A,N/A,,,p1,synth-amp,pos-a",
+    ]
+    csv = tmp_path / "with_account.csv"
+    csv.write_text(header + "\n" + "\n".join(rows) + "\n", encoding="utf-8")
+    fills = load_tradesviz_executions(csv, profile="tradesviz_executions")
+    assert fills[0].account == "synth-amp"
+    assert fills[0].position_id == "pos-a"
+    trades = pair_journal_trades(fills, include_manual=False)
+    assert len(trades) == 1
+    assert trades[0].account == "synth-amp"
+    assert trades[0].position_id == "pos-a"
+    table = contract_trades_table(trades)
+    assert "account" in table.column_names
+    assert "position_id" in table.column_names
+    assert table.column("account").to_pylist() == ["synth-amp"]
+    assert table.column("position_id").to_pylist() == ["pos-a"]
 
 
 def test_commission_fees_discarded() -> None:

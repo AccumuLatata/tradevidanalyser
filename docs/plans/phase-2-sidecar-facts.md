@@ -1,6 +1,6 @@
 # Phase 2 — Sidecar facts (PR-37)
 
-**Status:** Plan (PR-37, docs-only) plus owner facts recorded in PR-38 (D7 / D8 / Q-15 = B). PR-39 ships the opt-in `<stem>.jsonl` copy. **PR-40** ships `sidecar.py` facts and `time_anchor.json` (Q-15 = B, measured per clip; 1.043 s loud fallback). **PR-42** ships `TVA_NET_FEES` (Vierer-Set only, TT:892) and publish-only-with-a-locked-manifest.
+**Status:** Plan (PR-37, docs-only) plus owner facts recorded in PR-38 (D7 / D8 / Q-15 = B). PR-39 ships the opt-in `<stem>.jsonl` copy. **PR-40** ships `sidecar.py` facts and `time_anchor.json` (Q-15 = B, measured per clip; 1.043 s loud fallback). **PR-42** ships `TVA_NET_FEES` (Vierer-Set only, TT:892 / 903): facts mirror (lots, positions, costs, `account`), net only under the flag, publish only with a `locked` weekly manifest, desk rules from `accounts.yaml`, R-MAX10 positions-or-lots.
 **Stand geprüft:** TVA `main` @ `674a9bf` (PR-37 landed; PR-36 @ `c6029b8`). ThesisTester source: extract of `docs/research/TVA_TT_Research_Plan.md` with original line numbers (Revision 4, stand 12.10.2026; TT lesestand `251b5099`, TVA `c6029b8`) (TT:6).
 **Danach:** Review. Sidecar implementation remains the later series below. PR-38 does not start that code.
 **Authoritative source:** AccumuLatata/ThesisTester `docs/research/TVA_TT_Research_Plan.md` (German), via the attached line-numbered extract. `docs/JOURNAL_EXTENSION_PLAN.md` is **not** in that extract and stays [NV].
@@ -313,7 +313,7 @@ PR-40 implements the TT:902 reader. This file stays the Phase 2 plan.
 - Report / Notion / coach / VLM factories keep their existing defaults (not on the N4 list).
 - Doctor is not an N4 run entry point (TT:900); unset ASR / OCR / extract is warn (`TVA_*_PROVIDER fehlt`), not fail.
 
-## 13. PR-42 shipped (`TVA_NET_FEES` + locked publish)
+## 13. PR-42 shipped (`TVA_NET_FEES` + facts mirror)
 
 Source: TT §10.3 (TT:883–907). Flag row TT:892 / 894. Series order after JX1, JX2, JX8 (TT:885, 903). Unset/empty is off; then pairing, L0, and unlocked clip publish stay as on main.
 
@@ -321,7 +321,9 @@ Source: TT §10.3 (TT:883–907). Flag row TT:892 / 894. Series order after JX1,
 |---|---|---|
 | `TVA_NET_FEES` | Only with the Vierer-Set `TVA_EXCLUSIVE_FILLS` + `TVA_DAY_RULES` + `TVA_DAY_PUBLISH` + `TVA_TRADING_HOURS` (those four already require pause + manifest). `TVA_SIDECAR` does not license it (TT:892, 894) | ignored; combo check skipped |
 | Other sets | `ungültige Flag-Kombination` (TT:894) | n/a |
-| `fills_mirror.py` | still the TJ1/TJ3 facts mirror; `commission` / `fees` stay discarded (TJ1). No JX fee formula is applied | same pairing as main |
-| `tva publish` | only on a built day-path day after `acquire_day_publish_lock`; missing/legacy day → `Tag veraltet, tva day build ausführen`; held lock → `Tag ist gesperrt` | clip publish / existing lock rules unchanged |
+| `fills_mirror.py` | mirrors lots, positions, costs and `account` (TT:903). Closed lots get qty-allocated `commission_cost` / `day_fee_allocation` and net = gross − those. No cost source → `Netto ohne Kostenquelle`. With `[journal]`, the import path is the direct TT call; missing imported costs raise the same error | TJ1: costs discarded, net equals gross, extras off the contract columns |
+| `tva publish` | weekly `weeks/<YYYY-Www>/manifest.json` must be `status: locked` (open/missing → `Wochenmanifest nicht locked` / `fehlt`); plus a built day-path day lock. `DayStale` always carries the date. Held day lock → `Tag ist gesperrt` | clip publish / existing lock rules unchanged |
+| Desk rules | `accounts.yaml` per account (synthetic `synth-amp` / `synth-topstepx`). Topstep desk is never applied to other accounts | `rules.yaml` as on main |
+| R-MAX10 | counts unique `position_id`s; if none, counts lots and stamps `count_basis: lots` | existing evidence (`count` / `max` / `trade_ids` only) |
 
-`docs/JOURNAL_EXTENSION_PLAN.md` is still not in the extract [NV]. The JX1/JX2/JX8 fee arithmetic is therefore not implemented here.
+Independent recomputation stays with the coach (R8 / PR-46). `docs/JOURNAL_EXTENSION_PLAN.md` is still not in the extract [NV].
