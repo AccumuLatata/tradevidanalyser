@@ -112,13 +112,13 @@ exact:
   OR_Low:
     token: OR_Low
     class: level
-  pRTH_Low:
+  pdLow_RTH:
     token: pRTH_Low
     class: level
-  RTH_Open:
+  dOpen_RTH:
     token: RTH_Open
     class: level
-  pRTH_Open:
+  pdOpen_RTH:
     token: pRTH_Open
     class: level
   pdOpen:
@@ -325,11 +325,14 @@ context:
   - 3c
   - touch
   - DeltaNode
+  - 5mDeltaNode
+  - 30mDeltaNode
+  - AVWAP
   - GEX2
   - 5mCOT
   - 5mSFP
 
 qualifiers:
   - _retest
-  - _SFP
-  - _RTH
+  - _naked
+  - _break

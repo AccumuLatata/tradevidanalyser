@@ -15,6 +15,7 @@ from tradevidanalyser import store
 from tradevidanalyser.cli import main
 from tradevidanalyser.doctor import run_doctor
 from tradevidanalyser.ingest import ingest
+from tradevidanalyser.fills import thesistester_available
 from tradevidanalyser.pipeline import (
     confirm_proposal,
     extract_session,
@@ -153,6 +154,20 @@ def test_repo_and_package_tag_map_match() -> None:
     assert package.read_text(encoding="utf-8") == repo.read_text(encoding="utf-8")
 
 
+@pytest.mark.skipif(not thesistester_available(), reason="thesistester extra not installed")
+def test_shipped_tag_map_matches_thesistester() -> None:
+    """Journal job: TVA's shipped tag_map.yaml must equal TT's JX0b map."""
+    import thesistester.journal.tags as tt_tags
+
+    tt_path = Path(tt_tags._MAP_PATH)
+    package = Path(__file__).resolve().parents[1] / "src" / "tradevidanalyser" / "tag_map.yaml"
+    tt = yaml.safe_load(tt_path.read_text(encoding="utf-8"))
+    tva = yaml.safe_load(package.read_text(encoding="utf-8"))
+    assert tva["exact"] == tt["exact"]
+    assert set(tva.get("context") or []) == set(tt.get("context") or [])
+    assert list(tva.get("qualifiers") or []) == list(tt.get("qualifiers") or [])
+
+
 def test_vocabulary_mapping_keeps_desk_keys() -> None:
     tag_map = load_tag_map()
     assert "ONH" in tag_map.vocabulary
@@ -170,6 +185,12 @@ def test_vocabulary_mapping_keeps_desk_keys() -> None:
     assert map_stated_text("MFR", tag_map) == []
     assert map_stated_text("ONH_retest", tag_map) == ["ONH"]
     assert map_stated_text("pdH_RTH", tag_map) == ["pdH_RTH"]
+    assert map_stated_text("pRTH_Low", tag_map) == ["pdLow_RTH"]
+    assert map_stated_text("RTH_Open", tag_map) == ["dOpen_RTH"]
+    assert map_stated_text("pRTH_Open", tag_map) == ["pdOpen_RTH"]
+    assert "pRTH_Low" not in tag_map.vocabulary
+    assert "RTH_Open" not in tag_map.vocabulary
+    assert "pRTH_Open" not in tag_map.vocabulary
     assert map_stated_text("p30POC", tag_map) == ["p30POC"]
     invented = map_stated_text("ONH Touch Scalp invented_tag", tag_map)
     assert "ONH" in invented and "touch" in invented
@@ -183,12 +204,8 @@ def test_vocabulary_mapping_keeps_desk_keys() -> None:
 
 
 def test_engine_tokens_map_to_desk_keys_never_emitted() -> None:
-    # Pin to TVA's shipped map. ``load_tag_map()`` prefers ThesisTester's
-    # ``tag_map.yaml`` when TT is installed, and TT desk keys can differ
-    # (e.g. pdLow_RTH vs pRTH_Low). This test locks TVA's token→desk-key
-    # contract; it must not depend on which extra is installed.
+    tag_map = load_tag_map()
     package = Path(__file__).resolve().parents[1] / "src" / "tradevidanalyser" / "tag_map.yaml"
-    tag_map = load_tag_map(package)
     payload = yaml.safe_load(package.read_text(encoding="utf-8"))
     exact = payload["exact"]
     assert map_stated_text("pdHigh", tag_map) == ["pdH"]
