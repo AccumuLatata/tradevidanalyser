@@ -3,9 +3,14 @@
 Used when the ``tradevidanalyser[journal]`` extra is not installed. Must
 produce the same ``FILL_RECORD_COLUMNS`` / ``JOURNAL_TRADE_COLUMNS`` frames
 as ``thesistester.journal.tradesviz.load_tradesviz_executions`` and
-``thesistester.journal.pair.pair_journal_trades``. ``commission`` / ``fees``
-are read then discarded (TJ1). ``TVA_NET_FEES`` (TT:892) does not change
-this discard: the JX fee formula is not in the §10.3 extract (TT:903).
+``thesistester.journal.pair.pair_journal_trades``. Lots, positions, costs
+and ``account`` are mirrored from that journal output (TT:903). Extra
+fields stay off the contract columns so flag-off parquet stays TJ1.
+
+``commission`` / ``fees`` are read onto the fill extras. Flag off (TJ1)
+discards them and sets ``net_pnl_currency`` equal to gross. Flag on
+(``TVA_NET_FEES``) allocates those costs onto closed lots and writes net;
+missing costs raise ``NO_COST_SOURCE_ERROR`` — never invent a net figure.
 """
 
 from __future__ import annotations
@@ -20,6 +25,8 @@ from html import unescape
 from pathlib import Path
 from typing import Any, Iterable, Literal, Mapping, Sequence
 from zoneinfo import ZoneInfo
+
+from tradevidanalyser.flags import net_fees_enabled
 
 TRADESVIZ_EXECUTIONS_PROFILE = "tradesviz_executions"
 JOURNAL_ETH_START = time(18, 0)
@@ -79,6 +86,9 @@ _ISO_TS_RE = re.compile(
     r"(?P<off>Z|[+-]\d{2}:?\d{2})$"
 )
 _NAIVE_ISO_TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?$")
+NO_COST_SOURCE_ERROR = "Netto ohne Kostenquelle"
+FILL_RECORD_EXTRAS = ("csv_calendar_date", "commission", "fees", "account", "position_id")
+JOURNAL_TRADE_EXTRAS = ("account", "position_id")
 
 
 class JournalIngestError(ValueError):
@@ -106,10 +116,15 @@ class FillRecord:
     flags: tuple[str, ...]
     # Written CSV calendar day (before UTC convert). Not an identity/parquet field.
     csv_calendar_date: date | None = None
+    # Cost / desk extras (TT:903). Excluded from FILL_RECORD_COLUMNS (TJ1).
+    commission: float | None = None
+    fees: float | None = None
+    account: str | None = None
+    position_id: str | None = None
 
 
 FILL_RECORD_COLUMNS: tuple[str, ...] = tuple(
-    f.name for f in fields(FillRecord) if f.name != "csv_calendar_date"
+    f.name for f in fields(FillRecord) if f.name not in FILL_RECORD_EXTRAS
 )
 
 
@@ -153,9 +168,13 @@ class JournalTrade:
     status: Literal["closed", "open"]
     signal_id: str | None
     trigger: str | None
+    account: str | None = None
+    position_id: str | None = None
 
 
-JOURNAL_TRADE_COLUMNS: tuple[str, ...] = tuple(f.name for f in fields(JournalTrade))
+JOURNAL_TRADE_COLUMNS: tuple[str, ...] = tuple(
+    f.name for f in fields(JournalTrade) if f.name not in JOURNAL_TRADE_EXTRAS
+)
 
 
 def trading_session_date(ts_utc: datetime) -> date:
@@ -178,31 +197,10 @@ def load_tradesviz_executions(path: str | Path, *, profile: str) -> list[FillRec
         raise JournalIngestError(f"TradesViz executions file not found: {csv_path}")
     raw_rows = _read_csv_rows(csv_path)
     records = [_row_to_record(index, row) for index, row in enumerate(raw_rows)]
-    filled: list[FillRecord] = []
-    for record in records:
-        filled.append(
-            FillRecord(
-                fill_id=record.fill_id,
-                source=record.source,
-                source_group_id=record.source_group_id,
-                instrument=record.instrument,
-                contract_month=record.contract_month,
-                contract_year=record.contract_year,
-                side=record.side,
-                qty=record.qty,
-                price=record.price,
-                timestamp=record.timestamp,
-                session_date=trading_session_date(record.timestamp),
-                entry_kind=record.entry_kind,
-                tags=record.tags,
-                notes_text=record.notes_text,
-                declared_stop=record.declared_stop,
-                declared_target=record.declared_target,
-                flags=record.flags,
-                csv_calendar_date=record.csv_calendar_date,
-            )
-        )
-    return filled
+    return [
+        replace(record, session_date=trading_session_date(record.timestamp))
+        for record in records
+    ]
 
 
 def _read_csv_rows(csv_path: Path) -> list[dict[str, str]]:
@@ -277,8 +275,8 @@ def _row_to_record(index: int, row: Mapping[str, str | None]) -> FillRecord:
         )
     qty, flags = _parse_qty(_cell(row, "quantity"), entry_kind=entry_kind, index=index)
     price = _parse_price(_cell(row, "price"), index=index)
-    _cell(row, "commission")
-    _cell(row, "fees")
+    commission = _parse_optional_float(_cell(row, "commission"), index=index)
+    fees = _parse_optional_float(_cell(row, "fees"), index=index)
     _cell(row, "currency")
     _cell(row, "underlying")
     declared_stop = _parse_optional_float(_cell(row, "stop_loss"), index=index)
@@ -286,6 +284,8 @@ def _row_to_record(index: int, row: Mapping[str, str | None]) -> FillRecord:
     tags = _parse_tags(_cell(row, "tags"))
     notes_text = strip_notes_html(_cell(row, "notes"))
     source_group_id = _optional_text(_cell(row, "spread_id"))
+    account = _optional_extra_text(row, "account")
+    position_id = _optional_extra_text(row, "position_id")
     fill_id = _fill_id(
         index,
         source_group_id=source_group_id,
@@ -313,6 +313,10 @@ def _row_to_record(index: int, row: Mapping[str, str | None]) -> FillRecord:
         declared_target=declared_target,
         flags=flags,
         csv_calendar_date=csv_calendar_date,
+        commission=commission,
+        fees=fees,
+        account=account,
+        position_id=position_id,
     )
 
 
@@ -483,6 +487,12 @@ def _optional_text(raw: str) -> str | None:
     return text if text else None
 
 
+def _optional_extra_text(row: Mapping[str, str | None], name: str) -> str | None:
+    if name not in row:
+        return None
+    return _optional_text(_cell(row, name))
+
+
 def strip_notes_html(raw: str) -> str:
     if not raw:
         return ""
@@ -508,6 +518,10 @@ class _Fill:
     notes_text: str
     declared_stop: float | None
     declared_target: float | None
+    commission: float | None = None
+    fees: float | None = None
+    account: str | None = None
+    position_id: str | None = None
 
 
 @dataclass
@@ -607,7 +621,11 @@ def pair_journal_trades(
 def _as_record(item: FillRecord | Mapping[str, Any]) -> FillRecord:
     if isinstance(item, FillRecord):
         return item
-    return FillRecord(**{name: item[name] for name in FILL_RECORD_COLUMNS})
+    kwargs = {name: item[name] for name in FILL_RECORD_COLUMNS}
+    for extra in FILL_RECORD_EXTRAS:
+        if extra in item:
+            kwargs[extra] = item[extra]
+    return FillRecord(**kwargs)
 
 
 def _fills_from_records(
@@ -640,6 +658,10 @@ def _fills_from_records(
                 notes_text=record.notes_text,
                 declared_stop=record.declared_stop,
                 declared_target=record.declared_target,
+                commission=record.commission,
+                fees=record.fees,
+                account=record.account,
+                position_id=record.position_id,
             )
         )
     return out
@@ -707,6 +729,30 @@ def _assert_homogeneous_group(fills: Sequence[_Fill], spread_id: str) -> None:
         )
 
 
+def _scale_cost(cost: float | None, take: int, total: int) -> float | None:
+    if cost is None:
+        return None
+    if total <= 0:
+        raise JournalIngestError(f"cannot allocate cost across qty {total}")
+    return cost * (take / total)
+
+
+def _require_cost(cost: float | None, fill_id: str) -> float:
+    if cost is None or not math.isfinite(cost):
+        raise JournalIngestError(f"{NO_COST_SOURCE_ERROR}: fill {fill_id!r}")
+    return float(cost)
+
+
+def _same_extra(left: str | None, right: str | None, *, name: str, fill_id: str) -> str | None:
+    if left is None:
+        return right
+    if right is None or left == right:
+        return left
+    raise JournalIngestError(
+        f"fill {fill_id!r} {name} mismatch ({left!r} vs {right!r})"
+    )
+
+
 def _fill_from_lot(lot: _OpenLot, *, intent: _Intent) -> _Fill:
     fill = lot.fill
     return _Fill(
@@ -724,6 +770,10 @@ def _fill_from_lot(lot: _OpenLot, *, intent: _Intent) -> _Fill:
         notes_text=intent.notes_text,
         declared_stop=intent.declared_stop,
         declared_target=intent.declared_target,
+        commission=_scale_cost(fill.commission, lot.remaining, fill.qty),
+        fees=_scale_cost(fill.fees, lot.remaining, fill.qty),
+        account=fill.account,
+        position_id=fill.position_id,
     )
 
 
@@ -827,7 +877,24 @@ def _closed_trade(
     point_value = JOURNAL_POINT_VALUE[entry.instrument]
     tick_value = JOURNAL_TICK_SIZE * point_value
     gross_currency = points * point_value * qty
-    net_currency = gross_currency
+    commission_cost = None
+    day_fee_allocation = None
+    fee_ticks = None
+    if net_fees_enabled():
+        entry_commission = _require_cost(entry.commission, entry.fill_id)
+        entry_fees = _require_cost(entry.fees, entry.fill_id)
+        exit_commission = _require_cost(exit_fill.commission, exit_fill.fill_id)
+        exit_fees = _require_cost(exit_fill.fees, exit_fill.fill_id)
+        commission_cost = _scale_cost(entry_commission, qty, entry.qty) + _scale_cost(
+            exit_commission, qty, exit_fill.qty
+        )
+        day_fee_allocation = _scale_cost(entry_fees, qty, entry.qty) + _scale_cost(
+            exit_fees, qty, exit_fill.qty
+        )
+        net_currency = gross_currency - commission_cost - day_fee_allocation
+        fee_ticks = (commission_cost + day_fee_allocation) / tick_value
+    else:
+        net_currency = gross_currency
     risk = journal_risk_ticks * tick_value * qty
     r_declared = None
     if intent.declared_stop is not None:
@@ -854,14 +921,14 @@ def _closed_trade(
         exit_fill_id=exit_fill.fill_id,
         gross_pnl_points=points,
         gross_pnl_currency=gross_currency,
-        commission_cost=None,
+        commission_cost=commission_cost,
         slippage_cost=None,
-        day_fee_allocation=None,
+        day_fee_allocation=day_fee_allocation,
         net_pnl_currency=net_currency,
         r_multiple=net_currency / risk,
         r_multiple_declared=r_declared,
         journal_risk_ticks=journal_risk_ticks,
-        fee_ticks=None,
+        fee_ticks=fee_ticks,
         net_ticks=net_currency / tick_value,
         hold_seconds=hold,
         bars_held=None,
@@ -874,6 +941,10 @@ def _closed_trade(
         status=STATUS_CLOSED,
         signal_id=None,
         trigger=None,
+        account=_same_extra(entry.account, exit_fill.account, name="account", fill_id=entry.fill_id),
+        position_id=_same_extra(
+            entry.position_id, exit_fill.position_id, name="position_id", fill_id=entry.fill_id
+        ),
     )
 
 
@@ -927,6 +998,8 @@ def _open_trade(
         status=STATUS_OPEN,
         signal_id=None,
         trigger=None,
+        account=entry.account,
+        position_id=entry.position_id,
     )
 
 

@@ -7,7 +7,7 @@ use ``fills_mirror``. Window, ``venue``, and ``tva_trade_id`` are TVA-owned.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -18,12 +18,14 @@ import pyarrow.parquet as pq
 from tradevidanalyser import store
 from tradevidanalyser.fills_mirror import (
     FILL_RECORD_COLUMNS,
-    attach_csv_calendar_dates,
     JOURNAL_TRADE_COLUMNS,
+    NO_COST_SOURCE_ERROR,
+    STATUS_CLOSED,
     TRADESVIZ_EXECUTIONS_PROFILE,
     FillRecord,
     JournalIngestError,
     JournalTrade,
+    attach_csv_calendar_dates,
     fill_to_dict,
     load_tradesviz_executions as mirror_load,
     pair_journal_trades as mirror_pair,
@@ -205,6 +207,10 @@ def _fill_from_pandas_row(row: dict[str, Any]) -> FillRecord:
         declared_stop=_opt_float(row.get("declared_stop")),
         declared_target=_opt_float(row.get("declared_target")),
         flags=tuple(flags),
+        commission=_opt_float(row.get("commission")),
+        fees=_opt_float(row.get("fees")),
+        account=_none_if_nan(row.get("account")),
+        position_id=_none_if_nan(row.get("position_id")),
     )
 
 
@@ -260,6 +266,8 @@ def _trade_from_pandas_row(row: dict[str, Any]) -> JournalTrade:
         status=str(row["status"]),  # type: ignore[arg-type]
         signal_id=_none_if_nan(row.get("signal_id")),
         trigger=_none_if_nan(row.get("trigger")),
+        account=_none_if_nan(row.get("account")),
+        position_id=_none_if_nan(row.get("position_id")),
     )
 
 
@@ -310,6 +318,40 @@ def load_fills(
     return "mirror", mirror_load(executions, profile=TRADESVIZ_EXECUTIONS_PROFILE)
 
 
+def _strip_to_tj1(trade: JournalTrade) -> JournalTrade:
+    """Flag-off contract: costs discarded, net equals gross (TJ1)."""
+    if trade.status != STATUS_CLOSED or trade.gross_pnl_currency is None:
+        return replace(
+            trade,
+            commission_cost=None,
+            slippage_cost=None,
+            day_fee_allocation=None,
+            fee_ticks=None,
+        )
+    return replace(
+        trade,
+        commission_cost=None,
+        slippage_cost=None,
+        day_fee_allocation=None,
+        net_pnl_currency=trade.gross_pnl_currency,
+        fee_ticks=None,
+    )
+
+
+def _apply_imported_net_policy(trades: list[JournalTrade]) -> list[JournalTrade]:
+    from tradevidanalyser.flags import net_fees_enabled
+
+    if not net_fees_enabled():
+        return [_strip_to_tj1(trade) for trade in trades]
+    for trade in trades:
+        if trade.status != STATUS_CLOSED:
+            continue
+        has_cost = trade.commission_cost is not None or trade.day_fee_allocation is not None
+        if not has_cost:
+            raise JournalIngestError(NO_COST_SOURCE_ERROR)
+    return trades
+
+
 def pair_fills(
     fills: list[FillRecord],
     *,
@@ -317,7 +359,7 @@ def pair_fills(
     loader: str = "mirror",
 ) -> list[JournalTrade]:
     if loader == "import":
-        return _import_pair(fills, include_manual=include_manual)
+        return _apply_imported_net_policy(_import_pair(fills, include_manual=include_manual))
     return mirror_pair(fills, include_manual=include_manual)
 
 
@@ -431,7 +473,18 @@ def trades_table(
         ("tva_trade_id", pa.string()),
     ):
         arrays[name] = pa.array([row[name] for row in rows], type=typ)
-    return pa.table(arrays).select(list(TVA_TRADE_COLUMNS))
+    table = pa.table(arrays).select(list(TVA_TRADE_COLUMNS))
+    from tradevidanalyser.flags import net_fees_enabled
+
+    if net_fees_enabled():
+        table = table.append_column(
+            "account", pa.array([trade.account for trade in trades], type=pa.string())
+        )
+        table = table.append_column(
+            "position_id",
+            pa.array([trade.position_id for trade in trades], type=pa.string()),
+        )
+    return table
 
 
 def _empty_fills_table() -> pa.Table:
@@ -502,7 +555,13 @@ def _empty_trades_table() -> pa.Table:
         "venue": pa.array([], type=pa.string()),
         "tva_trade_id": pa.array([], type=pa.string()),
     }
-    return pa.table(empty).select(list(TVA_TRADE_COLUMNS))
+    table = pa.table(empty).select(list(TVA_TRADE_COLUMNS))
+    from tradevidanalyser.flags import net_fees_enabled
+
+    if net_fees_enabled():
+        table = table.append_column("account", pa.array([], type=pa.string()))
+        table = table.append_column("position_id", pa.array([], type=pa.string()))
+    return table
 
 
 def write_table(path: Path, table: pa.Table) -> Path:
