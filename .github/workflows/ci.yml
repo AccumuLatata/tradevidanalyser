@@ -55,7 +55,11 @@ jobs:
           set -euo pipefail
           pytest -q -rs tests/test_tt_journal.py tests/test_week_manifest.py tests/test_fills.py \
             | tee "${RUNNER_TEMP}/journal-pytest.txt"
-          if grep -E '[[:space:]][0-9]+ skipped' "${RUNNER_TEMP}/journal-pytest.txt"; then
+          if grep -qE '\b[0-9]+ skipped' "${RUNNER_TEMP}/journal-pytest.txt"; then
             echo "journal job forbids skipped tests" >&2
+            exit 1
+          fi
+          if ! grep -qE '[0-9]+ passed' "${RUNNER_TEMP}/journal-pytest.txt"; then
+            echo "journal job requires passing tests" >&2
             exit 1
           fi
