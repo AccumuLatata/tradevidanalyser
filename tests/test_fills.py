@@ -81,20 +81,33 @@ def test_mirror_matches_committed_expected() -> None:
 
 
 @pytest.mark.skipif(not thesistester_available(), reason="thesistester extra not installed")
-def test_import_and_mirror_net_fees_parity(
+def test_import_and_mirror_net_fees_tv_csv_has_no_cost_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """[journal] parity vs TT d32f6d3, flag on, TradesViz CSV only.
+
+    Asserts ``load_and_pair(..., prefer_import=False)`` and
+    ``prefer_import=True`` both raise ``JournalIngestError`` matching
+    ``Netto ohne Kostenquelle``. TV ``commission`` / ``fees`` are not a
+    cost source (TT schema.py:304, :412). Passes on d32f6d3 unless a
+    TopstepX lots file (JX1) or AMP day-fee attach (TJ4) is also supplied.
+    """
     monkeypatch.setenv(ENV_NET_FEES, "1")
-    m_loader, m_fills, m_trades = load_and_pair(SYNTHETIC, prefer_import=False)
-    i_loader, i_fills, i_trades = load_and_pair(SYNTHETIC, prefer_import=True)
-    assert m_loader == "mirror"
-    assert i_loader == "import"
-    assert contract_fills_table(m_fills).equals(contract_fills_table(i_fills))
-    assert contract_trades_table(m_trades).equals(contract_trades_table(i_trades))
+    with pytest.raises(JournalIngestError, match=NO_COST_SOURCE_ERROR):
+        load_and_pair(SYNTHETIC, prefer_import=False)
+    with pytest.raises(JournalIngestError, match=NO_COST_SOURCE_ERROR):
+        load_and_pair(SYNTHETIC, prefer_import=True)
 
 
 @pytest.mark.skipif(not thesistester_available(), reason="thesistester extra not installed")
 def test_import_and_mirror_produce_identical_frames() -> None:
+    """[journal] parity vs TT d32f6d3, flag off.
+
+    Asserts mirror and ``thesistester.journal`` load+pair produce equal
+    ``FILL_RECORD_COLUMNS`` / ``JOURNAL_TRADE_COLUMNS`` tables on
+    ``tradesviz_synthetic.csv``. Costs stay discarded; net equals gross (TJ1).
+    Does not compare ``venue`` / ``tva_trade_id``.
+    """
     m_loader, m_fills, m_trades = load_and_pair(SYNTHETIC, prefer_import=False)
     i_loader, i_fills, i_trades = load_and_pair(SYNTHETIC, prefer_import=True)
     assert m_loader == "mirror"
@@ -110,75 +123,33 @@ def test_mirror_flag_off_stays_expected_trades() -> None:
     assert got.equals(exp_trades)
 
 
-def test_net_fees_writes_costs_and_net(
+def test_mirror_pairing_unchanged_when_net_fees_on(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """fills_mirror stays TJ1 even when the flag is on (TV costs discarded)."""
     fills = load_tradesviz_executions(SYNTHETIC, profile="tradesviz_executions")
     off = pair_journal_trades(fills, include_manual=False)
     monkeypatch.setenv(ENV_NET_FEES, "1")
     on = pair_journal_trades(fills, include_manual=False)
-    assert [trade.trade_id for trade in on] == [trade.trade_id for trade in off]
-    assert any(trade.commission_cost not in (None, 0.0) for trade in on if trade.status == "closed")
-    for trade in on:
-        if trade.status != "closed":
-            continue
-        assert trade.commission_cost is not None
-        assert trade.day_fee_allocation is not None
-        assert trade.net_pnl_currency == pytest.approx(
-            trade.gross_pnl_currency - trade.commission_cost - trade.day_fee_allocation
-        )
-        assert trade.net_pnl_currency != trade.gross_pnl_currency or (
-            trade.commission_cost == 0.0 and trade.day_fee_allocation == 0.0
-        )
-    for name in FORBIDDEN_COST_COLUMNS:
-        assert name not in contract_trades_table(on).column_names
+    from tradevidanalyser.fills_mirror import trade_to_dict
+
+    assert [trade_to_dict(trade) for trade in on] == [trade_to_dict(trade) for trade in off]
+    assert contract_trades_table(off).equals(pq.read_table(EXPECTED_TRADES))
 
 
-def test_net_fees_without_cost_source_is_loud(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_net_fees_without_tt_cost_source_is_loud(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv(ENV_NET_FEES, "1")
-    lines = SYNTHETIC.read_text(encoding="utf-8").splitlines()
-    header = lines[0]
-    blank_cost = []
-    for line in lines[1:]:
-        cells = line.split(",")
-        cells[8] = "N/A"
-        cells[9] = "N/A"
-        blank_cost.append(",".join(cells))
-    csv = tmp_path / "no_cost.csv"
-    csv.write_text(header + "\n" + "\n".join(blank_cost) + "\n", encoding="utf-8")
-    fills = load_tradesviz_executions(csv, profile="tradesviz_executions")
+    fills = load_tradesviz_executions(SYNTHETIC, profile="tradesviz_executions")
     with pytest.raises(JournalIngestError, match=NO_COST_SOURCE_ERROR):
-        pair_journal_trades(fills, include_manual=False)
-
-
-def test_net_fees_mirrors_account_and_position(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv(ENV_NET_FEES, "1")
-    header = (
-        "date,symbol,side,currency,underlying,asset_type,price,quantity,"
-        "commission,fees,stop_loss,profit_target,tags,notes,spread_id,account,position_id"
-    )
-    rows = [
-        "2026-05-14T14:03:25+0000,MNQM26,buy,USD,MNQ,future,29584.0,1.0,1.0,0.5,N/A,N/A,,,p1,synth-amp,pos-a",
-        "2026-05-14T14:04:10+0000,MNQM26,sell,USD,MNQ,future,29585.0,1.0,1.0,0.5,N/A,N/A,,,p1,synth-amp,pos-a",
-    ]
-    csv = tmp_path / "with_account.csv"
-    csv.write_text(header + "\n" + "\n".join(rows) + "\n", encoding="utf-8")
-    fills = load_tradesviz_executions(csv, profile="tradesviz_executions")
-    assert fills[0].account == "synth-amp"
-    assert fills[0].position_id == "pos-a"
+        load_and_pair(SYNTHETIC, prefer_import=False)
+    # Direct mirror pairer still discards TV commission/fees (does not invent net).
     trades = pair_journal_trades(fills, include_manual=False)
-    assert len(trades) == 1
-    assert trades[0].account == "synth-amp"
-    assert trades[0].position_id == "pos-a"
-    table = contract_trades_table(trades)
-    assert "account" in table.column_names
-    assert "position_id" in table.column_names
-    assert table.column("account").to_pylist() == ["synth-amp"]
-    assert table.column("position_id").to_pylist() == ["pos-a"]
+    for trade in trades:
+        if trade.status == "closed":
+            assert trade.commission_cost is None
+            assert trade.net_pnl_currency == trade.gross_pnl_currency
 
 
 def test_commission_fees_discarded() -> None:
@@ -196,6 +167,31 @@ def test_commission_fees_discarded() -> None:
         assert name not in contract_trades_table(trades).column_names
 
 
+@pytest.mark.skipif(not thesistester_available(), reason="thesistester extra not installed")
+def test_tt_jx1_tj4_jx2_jx8_resolve_against_installed_tt() -> None:
+    """[journal] parity vs TT d32f6d3: the cited JX1/TJ4/JX2/JX8 APIs import.
+
+    Asserts, without pinning a dependency:
+    - JX1 function covering ``topstepx_reconcile.py:1152-1184`` is callable
+    - TJ4 function covering ``reconcile.py:422-480`` is callable
+    - JX2 builder in ``positions.py`` that stamps
+      ``pos:{account}:{contract}:{open_ts:%Y%m%dT%H%M%SZ}`` is callable
+    - JX8 verify covering ``lock.py:2195-2219`` is callable
+    Does not call them with invented arguments or broker files.
+    """
+    from tradevidanalyser.tt_journal import (
+        load_tt_cost_functions,
+        load_tt_position_builder,
+        load_tt_week_verify,
+    )
+
+    costs = load_tt_cost_functions()
+    assert costs, "JX1/TJ4 functions at the cited line ranges must import"
+    assert all(callable(fn) for _name, fn in costs)
+    assert callable(load_tt_position_builder())
+    assert callable(load_tt_week_verify())
+
+
 def test_venue_column_and_tva_trade_id(tva_root: Path) -> None:
     record = _session(tva_root)
     result = fills_session(
@@ -208,7 +204,10 @@ def test_venue_column_and_tva_trade_id(tva_root: Path) -> None:
     assert result.fills == 4
     assert result.trades == 2
     assert result.venue == "topstepx"
-    assert result.loader == "mirror"
+    if thesistester_available():
+        assert result.loader == "import"
+    else:
+        assert result.loader == "mirror"
     fills = pq.read_table(store.fills_path(tva_root, record.id))
     trades = pq.read_table(store.trades_path(tva_root, record.id))
     assert "venue" in fills.column_names

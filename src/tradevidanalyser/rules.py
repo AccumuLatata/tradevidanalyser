@@ -1354,13 +1354,9 @@ def build_rules_report(
     if config is not None:
         cfg = config
     elif net_fees_enabled():
-        from tradevidanalyser.accounts import accounts_from_trades, desk_rules_for_trades
+        from tradevidanalyser.accounts import desk_rules_for_trades
 
-        cfg = (
-            desk_rules_for_trades(trades)
-            if accounts_from_trades(trades)
-            else load_rules_config(config_path)
-        )
+        cfg = desk_rules_for_trades(trades)
     else:
         cfg = load_rules_config(config_path)
     evidence = _load_evidence(root, session_id)

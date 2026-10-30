@@ -732,13 +732,24 @@ def csv_window_fill_identities(fills: list[FillRecord], day: date) -> list[FillI
     return identities
 
 
+def _session_account(root: Path, session_id: str) -> str | None:
+    from tradevidanalyser.accounts import accounts_from_trades
+    from tradevidanalyser.rules import read_rule_trades
+
+    path = store.trades_path(root, session_id)
+    if not path.is_file():
+        return None
+    accounts = accounts_from_trades(read_rule_trades(path))
+    return accounts[0] if len(accounts) == 1 else None
+
+
 def acquire_day_publish_lock(root: Path, session_id: str) -> Path | None:
     """Lock a built day-path day for ``tva publish``. Does not create ``days/<date>/``.
 
     ``TVA_NET_FEES`` (TT:903) may only publish under a held day lock **and** a
-    weekly manifest with ``status: locked``. A missing built day is
-    ``DayStale`` (always dated). An open or missing week is
-    ``WeekManifestError``.
+    TT ``week_manifest.json`` whose ``lock_status`` TT re-derives as
+    ``locked``. A missing built day is ``DayStale`` (always dated). An
+    open, missing, or unverified week is ``WeekManifestError``.
     """
     require_lock = net_fees_enabled()
     if not store.is_safe_path_name(session_id):
@@ -752,7 +763,7 @@ def acquire_day_publish_lock(root: Path, session_id: str) -> Path | None:
     if require_lock:
         from tradevidanalyser.week_manifest import require_locked_week_manifest
 
-        require_locked_week_manifest(root, day)
+        require_locked_week_manifest(root, day, account=_session_account(root, session_id))
     if not day_manifest_enabled():
         if require_lock:
             raise DayStale([day])

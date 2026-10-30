@@ -321,9 +321,9 @@ Source: TT §10.3 (TT:883–907). Flag row TT:892 / 894. Series order after JX1,
 |---|---|---|
 | `TVA_NET_FEES` | Only with the Vierer-Set `TVA_EXCLUSIVE_FILLS` + `TVA_DAY_RULES` + `TVA_DAY_PUBLISH` + `TVA_TRADING_HOURS` (those four already require pause + manifest). `TVA_SIDECAR` does not license it (TT:892, 894) | ignored; combo check skipped |
 | Other sets | `ungültige Flag-Kombination` (TT:894) | n/a |
-| `fills_mirror.py` | mirrors lots, positions, costs and `account` (TT:903). Closed lots get qty-allocated `commission_cost` / `day_fee_allocation` and net = gross − those. No cost source → `Netto ohne Kostenquelle`. With `[journal]`, the import path is the direct TT call; missing imported costs raise the same error | TJ1: costs discarded, net equals gross, extras off the contract columns |
-| `tva publish` | weekly `weeks/<YYYY-Www>/manifest.json` must be `status: locked` (open/missing → `Wochenmanifest nicht locked` / `fehlt`); plus a built day-path day lock. `DayStale` always carries the date. Held day lock → `Tag ist gesperrt` | clip publish / existing lock rules unchanged |
-| Desk rules | `accounts.yaml` per account (synthetic `synth-amp` / `synth-topstepx`). Topstep desk is never applied to other accounts | `rules.yaml` as on main |
-| R-MAX10 | counts unique `position_id`s; if none, counts lots and stamps `count_basis: lots` | existing evidence (`count` / `max` / `trade_ids` only) |
+| `fills_mirror.py` | TJ1 only (TV `commission`/`fees` discarded). Flag on without a TT JX1/TJ4 cost source → `Netto ohne Kostenquelle`. With `[journal]`, costs/net/positions/`account` come from TT JX1/TJ4/JX2 | TJ1: costs discarded, net equals gross |
+| `tva publish` | TT `week_manifest.json` (`lock_status`, `week`, `account`, `schema_version: journal/v1`) must verify as locked via `thesistester.journal.lock` (JX8). Hand-written file cannot unlock. `DayStale` carries the date | clip publish / existing lock rules unchanged |
+| Desk rules | TT-shaped synthetic `accounts.yaml` (`account`, `fee_schedule`, `trading_days`) plus TVA `desk_rules.yaml`. Missing account → `Konto fehlt`. Topstep desk never applied to other accounts | `rules.yaml` as on main |
+| R-MAX10 | counts JX2 `position_id`s; if none, counts lots and stamps `count_basis: lots` | existing evidence (`count` / `max` / `trade_ids` only) |
 
 Independent recomputation stays with the coach (R8 / PR-46). `docs/JOURNAL_EXTENSION_PLAN.md` is still not in the extract [NV].

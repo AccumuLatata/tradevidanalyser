@@ -45,13 +45,9 @@ def apply_day_rules(
         from tradevidanalyser.flags import net_fees_enabled
 
         if net_fees_enabled():
-            from tradevidanalyser.accounts import accounts_from_trades, desk_rules_for_trades
+            from tradevidanalyser.accounts import desk_rules_for_trades
 
-            cfg = (
-                desk_rules_for_trades(day_trades)
-                if accounts_from_trades(day_trades)
-                else load_rules_config(config_path)
-            )
+            cfg = desk_rules_for_trades(day_trades)
         else:
             cfg = load_rules_config(config_path)
     day_checks = evaluate_day_rules(day_trades, cfg)
@@ -130,14 +126,9 @@ def rules_session_day_path(
         from tradevidanalyser.flags import net_fees_enabled
 
         if net_fees_enabled() and trades_file.is_file():
-            from tradevidanalyser.accounts import accounts_from_trades, desk_rules_for_trades
+            from tradevidanalyser.accounts import desk_rules_for_trades
 
-            loaded = read_rule_trades(trades_file)
-            cfg = (
-                desk_rules_for_trades(loaded)
-                if accounts_from_trades(loaded)
-                else load_rules_config(config_path)
-            )
+            cfg = desk_rules_for_trades(read_rule_trades(trades_file))
         else:
             cfg = load_rules_config(config_path)
     day = nominal_vienna_date(record)

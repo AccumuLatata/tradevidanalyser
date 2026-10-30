@@ -207,10 +207,6 @@ def _fill_from_pandas_row(row: dict[str, Any]) -> FillRecord:
         declared_stop=_opt_float(row.get("declared_stop")),
         declared_target=_opt_float(row.get("declared_target")),
         flags=tuple(flags),
-        commission=_opt_float(row.get("commission")),
-        fees=_opt_float(row.get("fees")),
-        account=_none_if_nan(row.get("account")),
-        position_id=_none_if_nan(row.get("position_id")),
     )
 
 
@@ -358,9 +354,15 @@ def pair_fills(
     include_manual: bool = False,
     loader: str = "mirror",
 ) -> list[JournalTrade]:
+    from tradevidanalyser.flags import net_fees_enabled
+
     if loader == "import":
         return _apply_imported_net_policy(_import_pair(fills, include_manual=include_manual))
-    return mirror_pair(fills, include_manual=include_manual)
+    trades = mirror_pair(fills, include_manual=include_manual)
+    if net_fees_enabled():
+        # Mirror never has a TT JX1/TJ4 cost source (TV commission/fees are discarded).
+        raise JournalIngestError(NO_COST_SOURCE_ERROR)
+    return trades
 
 
 def load_and_pair(
@@ -578,8 +580,10 @@ def contract_fills_table(fills: list[FillRecord]) -> pa.Table:
 
 
 def contract_trades_table(trades: list[JournalTrade]) -> pa.Table:
-    """ThesisTester JOURNAL_TRADE_COLUMNS only (no venue / tva_trade_id)."""
-    return trades_table(trades, venue="_").drop(["venue", "tva_trade_id"])
+    """ThesisTester JOURNAL_TRADE_COLUMNS only (no venue / tva_trade_id / extras)."""
+    table = trades_table(trades, venue="_").drop(["venue", "tva_trade_id"])
+    extras = [name for name in ("account", "position_id") if name in table.column_names]
+    return table.drop(extras) if extras else table
 
 
 def reconcile_json_path(reconcile_dir: Path) -> Path:

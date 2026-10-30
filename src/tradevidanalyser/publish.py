@@ -787,7 +787,13 @@ def publish_session(
         from tradevidanalyser.day_manifest import nominal_vienna_date
         from tradevidanalyser.week_manifest import require_locked_week_manifest
 
-        require_locked_week_manifest(root, nominal_vienna_date(record))
+        from tradevidanalyser.day_manifest import _session_account
+
+        require_locked_week_manifest(
+            root,
+            nominal_vienna_date(record),
+            account=_session_account(root, session_id),
+        )
     if day_publish_enabled():
         from tradevidanalyser.day_manifest import DayStale, day_state, nominal_vienna_date
         from tradevidanalyser.day_publish import publish_session_day_path

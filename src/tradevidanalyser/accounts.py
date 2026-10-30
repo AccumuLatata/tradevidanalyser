@@ -1,4 +1,4 @@
-"""Per-account desk rules from ``accounts.yaml`` (TT:903). Synthetic example only."""
+"""TT ``accounts.yaml`` plus TVA desk-rule map (TT:903). Synthetic example only."""
 
 from __future__ import annotations
 
@@ -10,7 +10,8 @@ import yaml
 
 from tradevidanalyser.rules import RulesConfig, _config_from_mapping
 
-TOPSTEP_DESK = "topstep"
+TOPSTEP_DESK = "topstepx"
+TOPSTEP_SCHEDULES = frozenset({"topstepx", "topstep"})
 ACCOUNT_MISSING = "Konto fehlt"
 ACCOUNT_UNKNOWN = "Konto nicht in accounts.yaml"
 MULTI_ACCOUNT_ERROR = "mehrere Konten"
@@ -24,8 +25,9 @@ class AccountsError(ValueError):
 @dataclass(frozen=True)
 class AccountEntry:
     account: str
+    fee_schedule: str
+    trading_days: tuple[str, ...]
     desk: str
-    venue: str | None = None
 
 
 @dataclass(frozen=True)
@@ -42,36 +44,65 @@ def default_accounts_path() -> Path:
     return path
 
 
-def load_accounts_config(path: Path | None = None) -> AccountsConfig:
+def default_desk_rules_path() -> Path:
+    here = Path(__file__).resolve().parent
+    path = here / "desk_rules.yaml"
+    if not path.is_file():
+        raise FileNotFoundError("desk_rules.yaml not found (keep the shipped TVA desk map)")
+    return path
+
+
+def _desk_name_for_schedule(fee_schedule: str) -> str:
+    if fee_schedule in TOPSTEP_SCHEDULES:
+        return TOPSTEP_DESK
+    return fee_schedule
+
+
+def _is_topstep_account(entry: AccountEntry) -> bool:
+    return entry.fee_schedule in TOPSTEP_SCHEDULES or entry.desk == TOPSTEP_DESK
+
+
+def load_accounts_config(
+    path: Path | None = None,
+    *,
+    desk_path: Path | None = None,
+) -> AccountsConfig:
     target = path or default_accounts_path()
     raw = yaml.safe_load(target.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise AccountsError("accounts.yaml must be a mapping")
     accounts_raw = raw.get("accounts")
-    desks_raw = raw.get("desks")
-    if not isinstance(accounts_raw, dict) or not accounts_raw:
-        raise AccountsError("accounts.yaml missing accounts")
-    if not isinstance(desks_raw, dict) or not desks_raw:
-        raise AccountsError("accounts.yaml missing desks")
+    if not isinstance(accounts_raw, list) or not accounts_raw:
+        raise AccountsError("accounts.yaml missing accounts list")
+    desks_raw = yaml.safe_load((desk_path or default_desk_rules_path()).read_text(encoding="utf-8"))
+    if not isinstance(desks_raw, dict) or not isinstance(desks_raw.get("desks"), dict):
+        raise AccountsError("desk_rules.yaml missing desks")
     desks: dict[str, RulesConfig] = {}
-    for name, payload in desks_raw.items():
+    for name, payload in desks_raw["desks"].items():
         if not isinstance(payload, dict):
             raise AccountsError(f"desk {name!r} must be a mapping")
         desks[str(name)] = _config_from_mapping(payload)
     accounts: dict[str, AccountEntry] = {}
-    for account_id, payload in accounts_raw.items():
+    for index, payload in enumerate(accounts_raw):
         if not isinstance(payload, dict):
-            raise AccountsError(f"account {account_id!r} must be a mapping")
-        desk = str(payload.get("desk") or "").strip()
-        if not desk:
-            raise AccountsError(f"account {account_id!r} missing desk")
+            raise AccountsError(f"accounts[{index}] must be a mapping")
+        account_id = str(payload.get("account") or "").strip()
+        if not account_id:
+            raise AccountsError(f"accounts[{index}] missing account")
+        fee_schedule = str(payload.get("fee_schedule") or "").strip()
+        if not fee_schedule:
+            raise AccountsError(f"account {account_id!r} missing fee_schedule")
+        days_raw = payload.get("trading_days")
+        if not isinstance(days_raw, list) or not days_raw:
+            raise AccountsError(f"account {account_id!r} missing trading_days")
+        desk = _desk_name_for_schedule(fee_schedule)
         if desk not in desks:
-            raise AccountsError(f"account {account_id!r} desk {desk!r} is not in desks")
-        venue = payload.get("venue")
-        accounts[str(account_id)] = AccountEntry(
-            account=str(account_id),
+            raise AccountsError(f"account {account_id!r} fee_schedule {fee_schedule!r} has no desk")
+        accounts[account_id] = AccountEntry(
+            account=account_id,
+            fee_schedule=fee_schedule,
+            trading_days=tuple(str(day) for day in days_raw),
             desk=desk,
-            venue=None if venue is None else str(venue),
         )
     return AccountsConfig(accounts=accounts, desks=desks)
 
@@ -94,14 +125,16 @@ def desk_rules_for_account(
 ) -> RulesConfig:
     cfg = config or load_accounts_config()
     entry = account_entry(account, config=cfg)
+    assert_desk_allowed(account, entry.desk, config=cfg)
     return cfg.desks[entry.desk]
 
 
 def assert_desk_allowed(account: str | None, desk: str, *, config: AccountsConfig | None = None) -> None:
-    if desk != TOPSTEP_DESK:
+    """Topstep desk/rules must not be applied to a non-Topstep account."""
+    if desk not in TOPSTEP_SCHEDULES and desk != TOPSTEP_DESK:
         return
     entry = account_entry(account, config=config)
-    if entry.desk != TOPSTEP_DESK:
+    if not _is_topstep_account(entry):
         raise AccountsError(TOPSTEP_ON_OTHER_ERROR)
 
 
@@ -123,6 +156,7 @@ def desk_rules_for_trades(
     trades: list[Any],
     *,
     config: AccountsConfig | None = None,
+    desk: str | None = None,
 ) -> RulesConfig:
     cfg = config or load_accounts_config()
     accounts = accounts_from_trades(trades)
@@ -135,5 +169,10 @@ def desk_rules_for_trades(
         raw = getattr(trade, "account", None)
         if raw is None or not str(raw).strip():
             raise AccountsError(ACCOUNT_MISSING)
-        assert_desk_allowed(str(raw).strip(), cfg.accounts[account].desk, config=cfg)
-    return desk_rules_for_account(account, config=cfg)
+        if str(raw).strip() != account:
+            raise AccountsError(MULTI_ACCOUNT_ERROR)
+    chosen = desk if desk is not None else account_entry(account, config=cfg).desk
+    assert_desk_allowed(account, chosen, config=cfg)
+    if chosen not in cfg.desks:
+        raise AccountsError(f"desk {chosen!r} is not in desk_rules.yaml")
+    return cfg.desks[chosen]
