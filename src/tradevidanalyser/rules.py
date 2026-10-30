@@ -15,7 +15,7 @@ import pyarrow.parquet as pq
 
 from tradevidanalyser import store
 from tradevidanalyser.fills_mirror import JOURNAL_EXCHANGE_TZ, JOURNAL_TICK_SIZE
-from tradevidanalyser.flags import pause_guard_enabled
+from tradevidanalyser.flags import net_fees_enabled, pause_guard_enabled
 from tradevidanalyser.schema import (
     ALIGNMENT_INVALID_REASON,
     Alignment,
@@ -115,6 +115,8 @@ class RuleTrade:
     net_pnl_currency: float | None
     gross_pnl_currency: float | None
     status: str
+    account: str | None = None
+    position_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -444,8 +446,23 @@ def _eval_dll(trades: list[RuleTrade], config: RulesConfig) -> RuleCheck:
 
 
 def _eval_max10(trades: list[RuleTrade], config: RulesConfig) -> RuleCheck:
-    ids = [trade.tva_trade_id for trade in trades]
-    evidence = {"count": len(ids), "max": config.max_trades_per_day, "trade_ids": ids}
+    if net_fees_enabled():
+        position_ids = [trade.position_id for trade in trades if trade.position_id]
+        if position_ids:
+            ids = list(dict.fromkeys(position_ids))
+            count_basis = "positions"
+        else:
+            ids = [trade.tva_trade_id for trade in trades]
+            count_basis = "lots"
+        evidence = {
+            "count": len(ids),
+            "max": config.max_trades_per_day,
+            "trade_ids": ids,
+            "count_basis": count_basis,
+        }
+    else:
+        ids = [trade.tva_trade_id for trade in trades]
+        evidence = {"count": len(ids), "max": config.max_trades_per_day, "trade_ids": ids}
     if len(ids) > config.max_trades_per_day:
         return _check("R-MAX10", "violated", evidence, f"{len(ids)} trades exceeds {config.max_trades_per_day}")
     return _check("R-MAX10", "pass", evidence)
@@ -1099,6 +1116,8 @@ def rule_trades_from_journal(trades: Sequence[Any], tva_ids: Sequence[str]) -> l
                 gross_pnl_currency=_finite(trade.gross_pnl_currency),
                 status=str(trade.status or "")
                 or ("closed" if trade.exit_timestamp is not None else "open"),
+                account=_as_str(getattr(trade, "account", None)) or None,
+                position_id=_as_str(getattr(trade, "position_id", None)) or None,
             )
         )
     rows.sort(key=lambda item: (item.entry_timestamp, item.tva_trade_id))
@@ -1289,6 +1308,8 @@ def read_rule_trades(path: Path) -> list[RuleTrade]:
     nets = col("net_pnl_currency")
     grosses = col("gross_pnl_currency")
     statuses = col("status")
+    accounts = col("account")
+    position_ids = col("position_id")
     rows: list[RuleTrade] = []
     for index in range(n):
         entry = _as_dt(entries[index])
@@ -1310,6 +1331,8 @@ def read_rule_trades(path: Path) -> list[RuleTrade]:
                 net_pnl_currency=_finite(nets[index]),
                 gross_pnl_currency=_finite(grosses[index]),
                 status=_as_str(statuses[index]) or ("closed" if exit_ts is not None else "open"),
+                account=_as_str(accounts[index]) or None,
+                position_id=_as_str(position_ids[index]) or None,
             )
         )
     rows.sort(key=lambda trade: (trade.entry_timestamp, trade.tva_trade_id))
@@ -1328,7 +1351,18 @@ def build_rules_report(
     if not trades_file.is_file():
         return None
     trades = read_rule_trades(trades_file)
-    cfg = config or load_rules_config(config_path)
+    if config is not None:
+        cfg = config
+    elif net_fees_enabled():
+        from tradevidanalyser.accounts import accounts_from_trades, desk_rules_for_trades
+
+        cfg = (
+            desk_rules_for_trades(trades)
+            if accounts_from_trades(trades)
+            else load_rules_config(config_path)
+        )
+    else:
+        cfg = load_rules_config(config_path)
     evidence = _load_evidence(root, session_id)
     events = _load_session_events(root, session_id)
     return RulesReport(

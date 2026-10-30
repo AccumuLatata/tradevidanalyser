@@ -1,0 +1,36 @@
+# Synthetic desk map only (TT:903). No live account IDs.
+# Topstep desk rules apply only to the synthetic topstepx account.
+
+accounts:
+  synth-topstepx:
+    desk: topstep
+    venue: topstepx
+  synth-amp:
+    desk: amp
+    venue: amp
+
+desks:
+  topstep:
+    daily_loss_limit_usd: null
+    max_trades_per_day: 10
+    consecutive_loss_timeout:
+      n: 3
+      minutes: 30
+    post_loss_block_minutes: 5
+    reentry:
+      window_s: 120
+      max: 1
+      block_minutes: 5
+    flat_by: null
+  amp:
+    daily_loss_limit_usd: null
+    max_trades_per_day: 20
+    consecutive_loss_timeout:
+      n: 3
+      minutes: 30
+    post_loss_block_minutes: 5
+    reentry:
+      window_s: 120
+      max: 1
+      block_minutes: 5
+    flat_by: null
