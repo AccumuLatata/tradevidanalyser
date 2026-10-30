@@ -87,10 +87,14 @@ def _role_sources(tmp_path: Path) -> dict[str, Path]:
     journal.mkdir()
     positions.mkdir()
     prepare_dir.mkdir()
+    (journal / "reconcile.json").write_bytes(b"r")
     (journal / "journal_trades.parquet").write_bytes(b"j")
+    (journal / "journal_lot_sources.parquet").write_bytes(b"l")
     (positions / "journal_positions.parquet").write_bytes(b"p")
+    (positions / "positions.json").write_text("[]", encoding="utf-8")
     prepare = prepare_dir / "prepare_manifest.json"
     prepare.write_text("{}", encoding="utf-8")
+    (prepare_dir / "ticks.parquet").write_bytes(b"t")
     accounts = tmp_path / "accounts.yaml"
     accounts.write_text("accounts: []\n", encoding="utf-8")
     return {
@@ -105,28 +109,45 @@ def test_hashed_input_files_maps_roles(tmp_path: Path) -> None:
     sources = _role_sources(tmp_path)
     manifest = {
         "inputs": [
-            {"role": "journal", "path": "journal_trades.parquet", "sha256": "aa"},
-            {"role": "positions", "path": "journal_positions.parquet", "sha256": "bb"},
-            {"role": "prepare", "path": "prepare_manifest.json", "sha256": "cc"},
-            {"role": "accounts", "path": "accounts.yaml", "sha256": "dd"},
+            {"role": "reconcile", "path": "reconcile.json", "sha256": "aa"},
+            {"role": "journal_trades", "path": "journal_trades.parquet", "sha256": "bb"},
+            {"role": "journal_lot_sources", "path": "journal_lot_sources.parquet", "sha256": "cc"},
+            {"role": "journal_positions", "path": "journal_positions.parquet", "sha256": "dd"},
+            {"role": "positions_json", "path": "positions.json", "sha256": "ee"},
+            {"role": "prepare_manifest", "path": "prepare_manifest.json", "sha256": "ff"},
+            {"role": "prepare_manifest:MNQU6", "path": "prepare_manifest.json", "sha256": "ff"},
+            {"role": "ticks", "path": "ticks.parquet", "sha256": "00"},
+            {"role": "ticks:MNQU6", "path": "ticks.parquet", "sha256": "00"},
+            {"role": "accounts", "path": "accounts.yaml", "sha256": "11"},
         ]
     }
     files = hashed_input_files(manifest, **sources)
-    assert files["journal"] == sources["journal_dir"]
-    assert files["positions"] == sources["positions_dir"]
-    assert files["prepare"] == sources["prepare_manifest"]
+    journal = sources["journal_dir"]
+    positions = sources["positions_dir"]
+    prepare = sources["prepare_manifest"]
+    assert files["reconcile"] == journal / "reconcile.json"
+    assert files["journal_trades"] == journal / "journal_trades.parquet"
+    assert files["journal_lot_sources"] == journal / "journal_lot_sources.parquet"
+    assert files["journal_positions"] == positions / "journal_positions.parquet"
+    assert files["positions_json"] == positions / "positions.json"
+    assert files["prepare_manifest"] == prepare
+    assert files["prepare_manifest:MNQU6"] == prepare
+    assert files["ticks"] == prepare.parent / "ticks.parquet"
+    assert files["ticks:MNQU6"] == prepare.parent / "ticks.parquet"
     assert files["accounts"] == sources["accounts"]
 
 
 def test_hashed_input_files_unknown_role_is_loud(tmp_path: Path) -> None:
     sources = _role_sources(tmp_path)
-    manifest = {"inputs": [{"role": "ticks", "path": "ticks.parquet", "sha256": "00"}]}
+    manifest = {"inputs": [{"role": "nope", "path": "nope.parquet", "sha256": "00"}]}
     with pytest.raises(ValueError, match=WEEK_MANIFEST_ROLE_UNKNOWN):
         hashed_input_files(manifest, **sources)
 
 
 def test_hashed_input_files_missing_path_is_loud(tmp_path: Path) -> None:
     sources = _role_sources(tmp_path)
-    manifest = {"inputs": [{"role": "journal", "path": "missing.parquet", "sha256": "00"}]}
+    manifest = {
+        "inputs": [{"role": "journal_joined", "path": "journal_joined.parquet", "sha256": "00"}]
+    }
     with pytest.raises(ValueError, match=WEEK_MANIFEST_INPUT_MISSING):
         hashed_input_files(manifest, **sources)

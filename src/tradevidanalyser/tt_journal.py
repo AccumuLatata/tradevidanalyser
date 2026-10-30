@@ -17,6 +17,8 @@ JOURNAL_TRADES_NAME = "journal_trades.parquet"
 JOURNAL_LOT_SOURCES_NAME = "journal_lot_sources.parquet"
 JOURNAL_POSITIONS_PARQUET = "journal_positions.parquet"
 JOURNAL_POSITIONS_JSON = "positions.json"
+RECONCILE_NAME = "reconcile.json"
+TICKS_NAME = "ticks.parquet"
 WEEK_MANIFEST_NAME = "week_manifest.json"
 
 
@@ -184,15 +186,17 @@ WEEK_MANIFEST_INPUTS = "Wochenmanifest hashed inputs fehlen"
 WEEK_MANIFEST_ROLE_UNKNOWN = "Wochenmanifest role unbekannt"
 WEEK_MANIFEST_INPUT_MISSING = "Wochenmanifest input fehlt"
 
-# TT week_manifest.json inputs[].role → lock_files source the caller supplied.
-_INPUT_ROLE_SOURCES = {
-    "journal": "journal_dir",
-    "journal_dir": "journal_dir",
-    "positions": "positions_dir",
-    "positions_dir": "positions_dir",
-    "prepare": "prepare_manifest",
-    "prepare_manifest": "prepare_manifest",
-    "accounts": "accounts",
+# TT week_manifest.json inputs[].role → resolved file (test_jx8_lock.py:364-370).
+_JOURNAL_ROLE_FILES = {
+    "reconcile": RECONCILE_NAME,
+    "journal_trades": JOURNAL_TRADES_NAME,
+    "journal_lot_sources": JOURNAL_LOT_SOURCES_NAME,
+    "journal_joined": "journal_joined.parquet",
+    "join": "join.parquet",
+}
+_POSITIONS_ROLE_FILES = {
+    "journal_positions": JOURNAL_POSITIONS_PARQUET,
+    "positions_json": JOURNAL_POSITIONS_JSON,
 }
 
 
@@ -203,9 +207,11 @@ def lock_source_paths(
     positions_dir: Path | None = None,
     prepare_manifest: Path | None = None,
     accounts: Path | None = None,
+    tva_inventory: Path | None = None,
+    exceptions: Path | None = None,
 ) -> dict[str, Path]:
     """Conventional lock sources under ``root``, with explicit overrides."""
-    return {
+    sources: dict[str, Path] = {
         "journal_dir": Path(journal_dir) if journal_dir is not None else Path(root) / "journal",
         "positions_dir": Path(positions_dir)
         if positions_dir is not None
@@ -217,17 +223,66 @@ def lock_source_paths(
         ),
         "accounts": Path(accounts) if accounts is not None else Path(root) / "accounts.yaml",
     }
+    if tva_inventory is not None:
+        sources["tva_inventory"] = Path(tva_inventory)
+    if exceptions is not None:
+        sources["exceptions"] = Path(exceptions)
+    return sources
 
 
-def _resolve_role_path(source: Path, basename: str) -> Path:
-    name = Path(basename)
-    if name.is_absolute():
-        return name
-    if source.is_file():
-        if source.name == name.name:
-            return source
-        return source.parent / name.name
-    return source / name.name
+def _canonical_role(role: str) -> str:
+    """``prepare_manifest:TOKEN`` / ``ticks:TOKEN`` collapse to the base role."""
+    if role.startswith("prepare_manifest:"):
+        return "prepare_manifest"
+    if role.startswith("ticks:"):
+        return "ticks"
+    return role
+
+
+def _basename(raw: Any, default: str) -> str:
+    if raw is None or str(raw).strip() == "":
+        return default
+    path = Path(str(raw))
+    return path.name if not path.is_absolute() else str(path)
+
+
+def _resolve_input_file(
+    role: str,
+    path_value: Any,
+    *,
+    journal_dir: Path,
+    positions_dir: Path,
+    prepare_manifest: Path,
+    accounts: Path,
+    tva_inventory: Path | None,
+    exceptions: Path | None,
+) -> Path:
+    base = _canonical_role(role)
+    if base in _JOURNAL_ROLE_FILES:
+        name = _basename(path_value, _JOURNAL_ROLE_FILES[base])
+        return Path(name) if Path(name).is_absolute() else journal_dir / name
+    if base in _POSITIONS_ROLE_FILES:
+        name = _basename(path_value, _POSITIONS_ROLE_FILES[base])
+        return Path(name) if Path(name).is_absolute() else positions_dir / name
+    if base == "prepare_manifest":
+        return Path(prepare_manifest)
+    if base == "ticks":
+        name = _basename(path_value, TICKS_NAME)
+        parent = Path(prepare_manifest).parent
+        return Path(name) if Path(name).is_absolute() else parent / name
+    if base == "accounts":
+        return Path(accounts)
+    if base == "tva_inventory":
+        if tva_inventory is not None:
+            return Path(tva_inventory)
+        name = _basename(path_value, "tva_inventory.json")
+        return Path(name) if Path(name).is_absolute() else journal_dir / name
+    if base == "exceptions":
+        if exceptions is not None:
+            return Path(exceptions)
+        name = _basename(path_value, "exceptions.json")
+        return Path(name) if Path(name).is_absolute() else journal_dir / name
+    raise ValueError(f"{WEEK_MANIFEST_ROLE_UNKNOWN}: {role!r}")
 
 
 def hashed_input_files(
@@ -237,37 +292,39 @@ def hashed_input_files(
     positions_dir: Path,
     prepare_manifest: Path,
     accounts: Path,
+    tva_inventory: Path | None = None,
+    exceptions: Path | None = None,
 ) -> dict[str, Path]:
-    """Map TT ``inputs: [{role, path, sha256}]`` to the caller-supplied sources.
+    """Map TT ``inputs: [{role, path, sha256}]`` to resolved files.
 
-    Roles are ``journal`` / ``positions`` / ``prepare`` / ``accounts`` (and the
-    lock_files kwarg aliases). Unknown role or a missing path is loud.
+    Roles match ``test_jx8_lock.py:364-370``. The returned map stores the
+    resolved file path, not the source directory. Unknown role or a listed
+    role whose file is missing is loud.
     """
     raw = manifest.get("inputs")
     if not isinstance(raw, list) or not raw:
         raise ValueError(WEEK_MANIFEST_INPUTS)
-    supplied = {
-        "journal_dir": Path(journal_dir),
-        "positions_dir": Path(positions_dir),
-        "prepare_manifest": Path(prepare_manifest),
-        "accounts": Path(accounts),
-    }
     files: dict[str, Path] = {}
     for spec in raw:
         if not isinstance(spec, dict):
             raise ValueError(WEEK_MANIFEST_INPUTS)
         role = spec.get("role")
-        source_key = _INPUT_ROLE_SOURCES.get(str(role) if role is not None else "")
-        if source_key is None:
-            raise ValueError(f"{WEEK_MANIFEST_ROLE_UNKNOWN}: {role!r}")
-        source = supplied[source_key]
-        basename = spec.get("path")
-        if basename is None or str(basename).strip() == "":
+        if role is None or str(role).strip() == "":
             raise ValueError(WEEK_MANIFEST_INPUTS)
-        resolved = _resolve_role_path(source, str(basename))
-        if not resolved.exists():
-            raise ValueError(f"{WEEK_MANIFEST_INPUT_MISSING}: {role} {basename}")
-        files[str(role)] = source
+        key = str(role)
+        resolved = _resolve_input_file(
+            key,
+            spec.get("path"),
+            journal_dir=Path(journal_dir),
+            positions_dir=Path(positions_dir),
+            prepare_manifest=Path(prepare_manifest),
+            accounts=Path(accounts),
+            tva_inventory=None if tva_inventory is None else Path(tva_inventory),
+            exceptions=None if exceptions is None else Path(exceptions),
+        )
+        if not resolved.is_file():
+            raise ValueError(f"{WEEK_MANIFEST_INPUT_MISSING}: {key} {resolved}")
+        files[key] = resolved
     return files
 
 

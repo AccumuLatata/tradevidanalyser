@@ -30,6 +30,7 @@ from tradevidanalyser.publish import publish_session
 from tradevidanalyser.rules import RuleTrade, RulesConfig, evaluate_rules
 from tradevidanalyser.tt_journal import (
     JOURNAL_LOT_SOURCES_NAME,
+    JOURNAL_POSITIONS_JSON,
     JOURNAL_POSITIONS_PARQUET,
     JOURNAL_TRADES_NAME,
     LOCK_MODULE,
@@ -190,6 +191,7 @@ def _ingest_and_positions(root: Path, tmp_path: Path) -> dict[str, Path]:
         output_dir=positions,
     )
     assert (positions / JOURNAL_POSITIONS_PARQUET).is_file()
+    assert (positions / JOURNAL_POSITIONS_JSON).is_file()
     assert pos_written is None or isinstance(pos_written, dict)
     return {
         "journal": journal,
@@ -298,21 +300,27 @@ def test_ingest_positions_lock_then_publish(
     trades_pq.write_bytes(original + b"\x00tampered")
     files = hashed_input_files(manifest, **sources)
     with pytest.raises(Exception, match="input hash mismatch"):
-        validate_week_manifest(manifest)
         assert_manifest_inputs_match(manifest, files)
+    with pytest.raises(Exception, match="input hash mismatch"):
         assert_claimed_lock_supported(manifest, files=files)
     trades_pq.write_bytes(original)
 
-    hand = {
-        "schema_version": manifest.get("schema_version"),
-        "week": manifest.get("week"),
-        "account": manifest.get("account"),
-        "lock_status": "locked",
-        "inputs": manifest.get("inputs"),
-    }
-    (tva_root / WEEK_MANIFEST_NAME).write_text(json.dumps(hand), encoding="utf-8")
+    hand = json.loads(json.dumps(manifest))
+    if isinstance(hand.get("days"), list):
+        hand["days"] = []
+    elif isinstance(hand.get("days"), dict):
+        hand["days"] = {}
+    elif isinstance(hand.get("positions"), list):
+        hand["positions"] = []
+    elif isinstance(hand.get("positions"), dict):
+        hand["positions"] = {}
+    else:
+        hand["days"] = []
+    (tva_root / WEEK_MANIFEST_NAME).write_text(
+        json.dumps(hand, indent=2) + "\n", encoding="utf-8"
+    )
     hand_files = hashed_input_files(hand, **sources)
+    validate_week_manifest(hand)
+    assert_manifest_inputs_match(hand, hand_files)
     with pytest.raises(Exception, match="lock_status_inconsistent"):
-        validate_week_manifest(hand)
-        assert_manifest_inputs_match(hand, hand_files)
         assert_claimed_lock_supported(hand, files=hand_files)

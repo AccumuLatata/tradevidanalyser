@@ -327,9 +327,11 @@ PR-16 consumes ThesisTester; it does not fork it.
   then `lock_status == locked` with matching week and account.
   The week file is written by `lock_files` (a tick `prepare_manifest`
   is required). Hashed inputs are TT `inputs: [{role, path, sha256}]`
-  mapped to the caller-supplied journal/positions/prepare/accounts
-  paths. A hand-edited `locked` (`lock_status_inconsistent`) or a
-  tampered hash (`input hash mismatch`) cannot unlock.
+  mapped to resolved files (`reconcile`, `journal_trades`,
+  `journal_lot_sources`, `journal_positions`, `positions_json`,
+  `prepare_manifest`, `ticks`, `accounts`). A hand-edited `locked`
+  (`lock_status_inconsistent`) or a tampered hash (`input hash
+  mismatch`) cannot unlock.
   Desk rules: TT-shaped synthetic `accounts.yaml` (per-instrument
   `fee_schedule`, explicit `trading_days` dates) plus TVA
   `desk_rules.yaml` (account → desk). Topstep rules never apply to
