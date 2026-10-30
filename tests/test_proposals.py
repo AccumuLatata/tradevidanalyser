@@ -183,8 +183,12 @@ def test_vocabulary_mapping_keeps_desk_keys() -> None:
 
 
 def test_engine_tokens_map_to_desk_keys_never_emitted() -> None:
-    tag_map = load_tag_map()
+    # Pin to TVA's shipped map. ``load_tag_map()`` prefers ThesisTester's
+    # ``tag_map.yaml`` when TT is installed, and TT desk keys can differ
+    # (e.g. pdLow_RTH vs pRTH_Low). This test locks TVA's token→desk-key
+    # contract; it must not depend on which extra is installed.
     package = Path(__file__).resolve().parents[1] / "src" / "tradevidanalyser" / "tag_map.yaml"
+    tag_map = load_tag_map(package)
     payload = yaml.safe_load(package.read_text(encoding="utf-8"))
     exact = payload["exact"]
     assert map_stated_text("pdHigh", tag_map) == ["pdH"]

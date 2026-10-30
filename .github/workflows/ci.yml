@@ -45,7 +45,7 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.TT_DEPLOY_KEY }}
       - name: Install ThesisTester
-        run: pip install "thesistester @ git+ssh://git@github.com/AccumuLatata/ThesisTester.git@d32f6d3"
+        run: pip install "thesistester @ git+ssh://git@github.com/AccumuLatata/ThesisTester.git@4fc4af05dbe7a1cc78e129660216bdf1bba69f3d"
       - name: Install package
         run: pip install -e ".[dev]"
       - name: Import ThesisTester journal modules
@@ -53,7 +53,7 @@ jobs:
       - name: Journal tests (fail if any skip)
         run: |
           set -euo pipefail
-          pytest -q -rs tests/test_tt_journal.py tests/test_week_manifest.py tests/test_fills.py \
+          pytest -q -rs -m "not golden" \
             | tee "${RUNNER_TEMP}/journal-pytest.txt"
           if grep -qE '\b[0-9]+ skipped' "${RUNNER_TEMP}/journal-pytest.txt"; then
             echo "journal job forbids skipped tests" >&2
