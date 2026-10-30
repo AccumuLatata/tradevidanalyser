@@ -46,6 +46,7 @@ from tradevidanalyser.sidecar import (
     SidecarFill,
     build_time_anchor,
     load_time_anchor,
+    measure_first_frame_offset,
     parse_sidecar_jsonl,
     sidecar_replaces_detector,
     time_anchor_path,
@@ -481,41 +482,76 @@ def test_schema_version_is_1() -> None:
     assert anchor.as_dict()["schema_version"] == "1"
 
 
-@pytest.mark.skip(
-    reason="[Rv] owner goldens not confirmed (Test 1 / Test 2 / 17:11:06 / T-S2 / T-S3)"
-)
+SIDECARS = Path(__file__).resolve().parent / "fixtures" / "sidecars"
+RV_OFFSET_TOL_S = 0.005
+# Owner-confirmed ffprobe durations (no videos in repo).
+RV_FFPROBE_DURATION_S = {
+    "2026-10-12 15-24-11.jsonl": 7.416667,
+    "2026-10-12 15-40-45.jsonl": 1301.016667,
+    "2026-10-12 17-11-06.jsonl": 593.633,
+}
+RV_EXPECTED_OFFSET_S = {
+    "2026-10-12 15-24-11.jsonl": 1.067,
+    "2026-10-12 15-40-45.jsonl": 1.116,
+    "2026-10-12 17-11-06.jsonl": 1.052,
+}
+
+
+def _assert_rv_first_frame(stem: str) -> None:
+    """Measure first-frame offset from a committed sidecar + stored ffprobe duration."""
+    name = f"{stem}.jsonl"
+    path = SIDECARS / name
+    duration = RV_FFPROBE_DURATION_S[name]
+    events = parse_sidecar_jsonl(path)
+    offset, source, offset_source = measure_first_frame_offset(events, duration)
+    assert source == SOURCE_MEASURED
+    assert offset_source is None
+    assert offset == pytest.approx(RV_EXPECTED_OFFSET_S[name], abs=RV_OFFSET_TOL_S)
+
+    video = f"{stem}.mp4"
+    date_part, time_part = stem.split(" ", 1)
+    session_id = f"{date_part}_{time_part.replace('-', '')}"
+    anchor = build_time_anchor(
+        session_id=session_id,
+        video_name=video,
+        sidecar_path=path,
+        duration_s=duration,
+    )
+    assert anchor.status == STATUS_VERIFIED
+    assert anchor.first_frame_offset_source == SOURCE_MEASURED
+    assert anchor.first_frame_offset_s == pytest.approx(
+        RV_EXPECTED_OFFSET_S[name], abs=RV_OFFSET_TOL_S
+    )
+
+
 def test_rv_golden_test1_first_frame_offset() -> None:
-    """Test 1 (2026-10-12): first-frame ≈ 1.043 s after record_start (TT:440, 902)."""
-    raise AssertionError("pending owner confirmation")
+    """Test 1 (2026-10-12 15-24-11): first-frame ≈ 1.067 s (TT:440, 902)."""
+    _assert_rv_first_frame("2026-10-12 15-24-11")
 
 
-@pytest.mark.skip(
-    reason="[Rv] owner goldens not confirmed (Test 1 / Test 2 / 17:11:06 / T-S2 / T-S3)"
-)
 def test_rv_golden_test2_section_residual() -> None:
-    """Test 2 (2026-10-12): each section ≤ 0.026 s; wall 594.685 vs video 593.667 (TT:439)."""
-    raise AssertionError("pending owner confirmation")
+    """Test 2 (2026-10-12 15-40-45): first-frame ≈ 1.116 s; sections verified."""
+    _assert_rv_first_frame("2026-10-12 15-40-45")
 
 
-@pytest.mark.skip(
-    reason="[Rv] owner goldens not confirmed (Test 1 / Test 2 / 17:11:06 / T-S2 / T-S3)"
-)
+def test_rv_golden_session_171106_first_frame_offset() -> None:
+    """Session 17:11:06: first-frame ≈ 1.052 s (first-frame offset only)."""
+    _assert_rv_first_frame("2026-10-12 17-11-06")
+
+
+@pytest.mark.skip(reason="needs fills")
 def test_rv_golden_session_171106_exit_t13() -> None:
     """Session 17:11:06: Exit T13 at video second ≈ 407–409 (TT:902)."""
-    raise AssertionError("pending owner confirmation")
+    raise AssertionError("needs fills")
 
 
-@pytest.mark.skip(
-    reason="[Rv] owner goldens not confirmed (Test 1 / Test 2 / 17:11:06 / T-S2 / T-S3)"
-)
+@pytest.mark.skip(reason="pending owner clip mapping")
 def test_rv_golden_t_s2() -> None:
     """T-S2 sidecar golden — values not in the extract [NV]."""
-    raise AssertionError("pending owner confirmation")
+    raise AssertionError("pending owner clip mapping")
 
 
-@pytest.mark.skip(
-    reason="[Rv] owner goldens not confirmed (Test 1 / Test 2 / 17:11:06 / T-S2 / T-S3)"
-)
+@pytest.mark.skip(reason="pending owner clip mapping")
 def test_rv_golden_t_s3() -> None:
     """T-S3 sidecar golden — values not in the extract [NV]."""
-    raise AssertionError("pending owner confirmation")
+    raise AssertionError("pending owner clip mapping")
