@@ -4,11 +4,9 @@ Used when the ``tradevidanalyser[journal]`` extra is not installed. Must
 produce the same ``FILL_RECORD_COLUMNS`` / ``JOURNAL_TRADE_COLUMNS`` frames
 as ``thesistester.journal.tradesviz.load_tradesviz_executions`` and
 ``thesistester.journal.pair.pair_journal_trades``. ``commission`` / ``fees``
-are read then discarded (TJ1 / TT schema.py). Costs and net come only from
-TT JX1/TJ4 via ``tradevidanalyser[journal]``; this mirror never computes
-them. Positions come only from TT JX2. ``account`` / ``position_id`` on
-``JournalTrade`` are extras for the import path and stay off the contract
-columns so flag-off parquet stays TJ1.
+are read then discarded (TJ1 / TT schema.py). This mirror is the flag-off
+TradesViz path only. Under ``TVA_NET_FEES`` the fills path reads a TT
+journal directory; a TradesViz CSV is ``Netto ohne Kostenquelle``.
 """
 
 from __future__ import annotations

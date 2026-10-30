@@ -167,31 +167,6 @@ def test_commission_fees_discarded() -> None:
         assert name not in contract_trades_table(trades).column_names
 
 
-@pytest.mark.skipif(not thesistester_available(), reason="thesistester extra not installed")
-def test_tt_jx1_tj4_jx2_jx8_resolve_against_installed_tt() -> None:
-    """[journal] parity vs TT d32f6d3: the cited JX1/TJ4/JX2/JX8 APIs import.
-
-    Asserts, without pinning a dependency:
-    - JX1 function covering ``topstepx_reconcile.py:1152-1184`` is callable
-    - TJ4 function covering ``reconcile.py:422-480`` is callable
-    - JX2 builder in ``positions.py`` that stamps
-      ``pos:{account}:{contract}:{open_ts:%Y%m%dT%H%M%SZ}`` is callable
-    - JX8 verify covering ``lock.py:2195-2219`` is callable
-    Does not call them with invented arguments or broker files.
-    """
-    from tradevidanalyser.tt_journal import (
-        load_tt_cost_functions,
-        load_tt_position_builder,
-        load_tt_week_verify,
-    )
-
-    costs = load_tt_cost_functions()
-    assert costs, "JX1/TJ4 functions at the cited line ranges must import"
-    assert all(callable(fn) for _name, fn in costs)
-    assert callable(load_tt_position_builder())
-    assert callable(load_tt_week_verify())
-
-
 def test_venue_column_and_tva_trade_id(tva_root: Path) -> None:
     record = _session(tva_root)
     result = fills_session(

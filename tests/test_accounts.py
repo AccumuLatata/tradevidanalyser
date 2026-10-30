@@ -41,6 +41,17 @@ def _trade(*, account: str | None, n: int = 1) -> RuleTrade:
     )
 
 
+def test_fee_schedule_must_be_per_instrument_mapping(tmp_path) -> None:
+    import yaml
+
+    raw = yaml.safe_load(default_accounts_path().read_text(encoding="utf-8"))
+    raw["accounts"][0]["fee_schedule"] = "topstepx"
+    bad = tmp_path / "accounts.yaml"
+    bad.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    with pytest.raises(AccountsError, match="per-instrument"):
+        load_accounts_config(bad)
+
+
 def test_shipped_accounts_yaml_is_tt_list() -> None:
     text = default_accounts_path().read_text(encoding="utf-8")
     assert "synth-amp" in text
@@ -49,7 +60,9 @@ def test_shipped_accounts_yaml_is_tt_list() -> None:
     assert "trading_days" in text
     cfg = load_accounts_config()
     assert isinstance(cfg.accounts["synth-topstepx"].trading_days, tuple)
-    assert cfg.accounts["synth-topstepx"].fee_schedule == "topstepx"
+    assert isinstance(cfg.accounts["synth-topstepx"].fee_schedule, dict)
+    assert "MNQ" in cfg.accounts["synth-topstepx"].fee_schedule
+    assert cfg.accounts["synth-topstepx"].desk == "topstepx"
     assert cfg.accounts["synth-amp"].desk == "amp"
 
 

@@ -410,7 +410,14 @@ def build_day(
     if not day_manifest_enabled():
         raise DayManifestError(MANIFEST_OFF_ERROR)
     csv_path = Path(executions)
-    if not csv_path.is_file():
+    from tradevidanalyser.fills_mirror import NO_COST_SOURCE_ERROR
+
+    if net_fees_enabled():
+        if csv_path.is_file():
+            raise DayManifestError(NO_COST_SOURCE_ERROR)
+        if not csv_path.is_dir():
+            raise DayManifestError(f"executions file not found: {csv_path}")
+    elif not csv_path.is_file():
         raise DayManifestError(f"executions file not found: {csv_path}")
     if read_enabled_from(root) is None:
         write_enabled_from_if_absent(root, day)
@@ -433,8 +440,15 @@ def build_day(
                 if check is None or not key_matches(check, record):
                     raise DayManifestError(f"{PAUSE_KEY_ERROR}: {record.id}")
         chosen_venue = venue_from_hint(csv_path, venue)
+        journal_trades = None
         try:
-            loader, fills = load_fills(csv_path)
+            if net_fees_enabled():
+                from tradevidanalyser.fills import load_tt_journal_dir
+
+                fills, journal_trades = load_tt_journal_dir(csv_path)
+                loader = "journal"
+            else:
+                loader, fills = load_fills(csv_path)
         except Exception as exc:
             if type(exc).__name__ == "JournalIngestError":
                 raise DayManifestError(str(exc)) from exc
@@ -476,6 +490,7 @@ def build_day(
                 fills,
                 include_manual=include_manual,
                 loader=loader,
+                trades=journal_trades,
             )
             build_id = new_ulid()
             dest = day_dir(root, day) / "builds" / build_id / "day.json"
@@ -517,7 +532,9 @@ def build_day(
             "schema_version": SCHEMA_VERSION,
             "date": day.isoformat(),
             "tz_assumption": tz_assumption,
-            "executions_sha256": media.sha256_file(csv_path),
+            "executions_sha256": media.sha256_file(
+                csv_path / "journal_trades.parquet" if csv_path.is_dir() else csv_path
+            ),
             "input_fingerprint": fingerprint,
             "fingerprint_inputs": fp_inputs,
             "clips": clip_rows,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -11,11 +12,12 @@ import yaml
 from tradevidanalyser.rules import RulesConfig, _config_from_mapping
 
 TOPSTEP_DESK = "topstepx"
-TOPSTEP_SCHEDULES = frozenset({"topstepx", "topstep"})
 ACCOUNT_MISSING = "Konto fehlt"
 ACCOUNT_UNKNOWN = "Konto nicht in accounts.yaml"
 MULTI_ACCOUNT_ERROR = "mehrere Konten"
 TOPSTEP_ON_OTHER_ERROR = "Topstep-Regeln gelten nicht für andere Konten"
+FEE_SCHEDULE_ERROR = "fee_schedule must be a per-instrument mapping"
+TRADING_DAYS_ERROR = "trading_days must be an explicit list of dates"
 
 
 class AccountsError(ValueError):
@@ -25,8 +27,8 @@ class AccountsError(ValueError):
 @dataclass(frozen=True)
 class AccountEntry:
     account: str
-    fee_schedule: str
-    trading_days: tuple[str, ...]
+    fee_schedule: dict[str, float | dict[str, float]]
+    trading_days: tuple[date, ...]
     desk: str
 
 
@@ -34,6 +36,7 @@ class AccountEntry:
 class AccountsConfig:
     accounts: dict[str, AccountEntry]
     desks: dict[str, RulesConfig]
+    account_desks: dict[str, str]
 
 
 def default_accounts_path() -> Path:
@@ -52,14 +55,55 @@ def default_desk_rules_path() -> Path:
     return path
 
 
-def _desk_name_for_schedule(fee_schedule: str) -> str:
-    if fee_schedule in TOPSTEP_SCHEDULES:
-        return TOPSTEP_DESK
-    return fee_schedule
+def _parse_fee_schedule(raw: Any, account_id: str) -> dict[str, float | dict[str, float]]:
+    if not isinstance(raw, dict) or not raw:
+        raise AccountsError(f"account {account_id!r}: {FEE_SCHEDULE_ERROR}")
+    out: dict[str, float | dict[str, float]] = {}
+    for instrument, spec in raw.items():
+        key = str(instrument).strip()
+        if not key:
+            raise AccountsError(f"account {account_id!r}: {FEE_SCHEDULE_ERROR}")
+        if isinstance(spec, bool) or not isinstance(spec, (int, float, dict)):
+            raise AccountsError(f"account {account_id!r}: {FEE_SCHEDULE_ERROR}")
+        if isinstance(spec, (int, float)):
+            out[key] = float(spec)
+            continue
+        if "rt_usd" not in spec:
+            raise AccountsError(f"account {account_id!r}: {FEE_SCHEDULE_ERROR}")
+        out[key] = {"rt_usd": float(spec["rt_usd"])}
+    return out
 
 
-def _is_topstep_account(entry: AccountEntry) -> bool:
-    return entry.fee_schedule in TOPSTEP_SCHEDULES or entry.desk == TOPSTEP_DESK
+def _parse_trading_days(raw: Any, account_id: str) -> tuple[date, ...]:
+    if not isinstance(raw, list) or not raw:
+        raise AccountsError(f"account {account_id!r}: {TRADING_DAYS_ERROR}")
+    days: list[date] = []
+    for item in raw:
+        if isinstance(item, datetime):
+            days.append(item.date())
+            continue
+        if isinstance(item, date):
+            days.append(item)
+            continue
+        try:
+            days.append(date.fromisoformat(str(item)))
+        except ValueError as exc:
+            raise AccountsError(f"account {account_id!r}: {TRADING_DAYS_ERROR}") from exc
+    return tuple(days)
+
+
+def _desk_map(desks_raw: dict[str, Any]) -> dict[str, str]:
+    mapping = desks_raw.get("accounts")
+    if not isinstance(mapping, dict) or not mapping:
+        raise AccountsError("desk_rules.yaml missing account → desk map")
+    out: dict[str, str] = {}
+    for account_id, desk in mapping.items():
+        key = str(account_id).strip()
+        name = str(desk).strip()
+        if not key or not name:
+            raise AccountsError("desk_rules.yaml missing account → desk map")
+        out[key] = name
+    return out
 
 
 def load_accounts_config(
@@ -77,6 +121,7 @@ def load_accounts_config(
     desks_raw = yaml.safe_load((desk_path or default_desk_rules_path()).read_text(encoding="utf-8"))
     if not isinstance(desks_raw, dict) or not isinstance(desks_raw.get("desks"), dict):
         raise AccountsError("desk_rules.yaml missing desks")
+    account_desks = _desk_map(desks_raw)
     desks: dict[str, RulesConfig] = {}
     for name, payload in desks_raw["desks"].items():
         if not isinstance(payload, dict):
@@ -89,22 +134,20 @@ def load_accounts_config(
         account_id = str(payload.get("account") or "").strip()
         if not account_id:
             raise AccountsError(f"accounts[{index}] missing account")
-        fee_schedule = str(payload.get("fee_schedule") or "").strip()
-        if not fee_schedule:
-            raise AccountsError(f"account {account_id!r} missing fee_schedule")
-        days_raw = payload.get("trading_days")
-        if not isinstance(days_raw, list) or not days_raw:
-            raise AccountsError(f"account {account_id!r} missing trading_days")
-        desk = _desk_name_for_schedule(fee_schedule)
+        fee_schedule = _parse_fee_schedule(payload.get("fee_schedule"), account_id)
+        trading_days = _parse_trading_days(payload.get("trading_days"), account_id)
+        desk = account_desks.get(account_id)
+        if desk is None:
+            raise AccountsError(f"account {account_id!r} has no desk in desk_rules.yaml")
         if desk not in desks:
-            raise AccountsError(f"account {account_id!r} fee_schedule {fee_schedule!r} has no desk")
+            raise AccountsError(f"account {account_id!r} desk {desk!r} is not in desk_rules.yaml")
         accounts[account_id] = AccountEntry(
             account=account_id,
             fee_schedule=fee_schedule,
-            trading_days=tuple(str(day) for day in days_raw),
+            trading_days=trading_days,
             desk=desk,
         )
-    return AccountsConfig(accounts=accounts, desks=desks)
+    return AccountsConfig(accounts=accounts, desks=desks, account_desks=account_desks)
 
 
 def account_entry(account: str | None, *, config: AccountsConfig | None = None) -> AccountEntry:
@@ -131,10 +174,10 @@ def desk_rules_for_account(
 
 def assert_desk_allowed(account: str | None, desk: str, *, config: AccountsConfig | None = None) -> None:
     """Topstep desk/rules must not be applied to a non-Topstep account."""
-    if desk not in TOPSTEP_SCHEDULES and desk != TOPSTEP_DESK:
+    if desk != TOPSTEP_DESK:
         return
     entry = account_entry(account, config=config)
-    if not _is_topstep_account(entry):
+    if entry.desk != TOPSTEP_DESK:
         raise AccountsError(TOPSTEP_ON_OTHER_ERROR)
 
 

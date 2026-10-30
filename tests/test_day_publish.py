@@ -54,9 +54,10 @@ from tradevidanalyser.schema import (
     SessionRecord,
 )
 from tradevidanalyser.watch import release_lock, try_acquire_lock
-from tradevidanalyser.tt_journal import TT_LOCK_API_MISSING
+from tradevidanalyser.tt_journal import TT_LOCK_VALIDATE_MISSING
 from tradevidanalyser.fills import write_table
 from tradevidanalyser.week_manifest import (
+    WEEK_MANIFEST_INPUTS,
     WEEK_MANIFEST_MISSING,
     WEEK_MANIFEST_NOT_LOCKED,
     WeekManifestError,
@@ -429,7 +430,11 @@ def test_net_fees_handwritten_week_manifest_cannot_unlock(
     _write_debrief(tva_root, b.id, learnings="Bravo one.")
     with pytest.raises(
         WeekManifestError,
-        match=f"{re.escape(TT_LOCK_API_MISSING)}|{re.escape(WEEK_MANIFEST_NOT_LOCKED)}",
+        match=(
+            f"{re.escape(TT_LOCK_VALIDATE_MISSING)}|"
+            f"{re.escape(WEEK_MANIFEST_NOT_LOCKED)}|"
+            f"{re.escape(WEEK_MANIFEST_INPUTS)}"
+        ),
     ):
         publish_session(a.id, root=tva_root, notion=True)
     assert not day_publish_path(tva_root, DAY).is_file()

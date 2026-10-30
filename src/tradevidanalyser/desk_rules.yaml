@@ -1,5 +1,8 @@
 # TVA desk-rule map (TT:903). Separate from ThesisTester accounts.yaml.
-# topstepx rules apply only to fee_schedule: topstepx.
+# account → desk; Topstep rules apply only to desk topstepx.
+accounts:
+  synth-topstepx: topstepx
+  synth-amp: amp
 desks:
   topstepx:
     daily_loss_limit_usd: null

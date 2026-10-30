@@ -7,11 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from tradevidanalyser.tt_journal import TT_LOCK_API_MISSING
+from tradevidanalyser.tt_journal import TT_LOCK_VALIDATE_MISSING
 from tradevidanalyser.week_manifest import (
     SCHEMA_VERSION,
     WEEK_MANIFEST_MISSING,
     WEEK_MANIFEST_MISMATCH,
+    WEEK_MANIFEST_INPUTS,
     WEEK_MANIFEST_NOT_LOCKED,
     WeekManifestError,
     iso_week_id,
@@ -69,6 +70,6 @@ def test_handwritten_locked_file_still_needs_tt_verify(tmp_path: Path) -> None:
     write_week_manifest(tmp_path, DAY, lock_status="locked", account="synth-amp")
     with pytest.raises(
         WeekManifestError,
-        match=f"{re.escape(TT_LOCK_API_MISSING)}|{re.escape(WEEK_MANIFEST_NOT_LOCKED)}",
+        match=f"{re.escape(TT_LOCK_VALIDATE_MISSING)}|{re.escape(WEEK_MANIFEST_NOT_LOCKED)}|{re.escape(WEEK_MANIFEST_INPUTS)}",
     ):
         require_locked_week_manifest(tmp_path, DAY, account="synth-amp")

@@ -1,199 +1,135 @@
-"""Resolve ThesisTester JX1 / TJ4 / JX2 / JX8 by the cited source, not by guessed names.
-
-Does not reimplement cost math or the position builder. When the private
-package is absent, callers get the loud ``TT_*_API_MISSING`` errors.
-"""
+"""Direct imports of ThesisTester public journal symbols. No name guessing."""
 
 from __future__ import annotations
 
 import importlib
-import inspect
-from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
-TT_TOPSTEPX_MODULE = "thesistester.journal.topstepx_reconcile"
-TT_AMP_MODULE = "thesistester.journal.reconcile"
-TT_POSITION_MODULE = "thesistester.journal.positions"
-TT_LOCK_MODULE = "thesistester.journal.lock"
+LOCK_MODULE = "thesistester.journal.lock"
+POSITIONS_MODULE = "thesistester.journal.positions"
+TT_LOCK_VALIDATE_MISSING = f"{LOCK_MODULE}.validate_week_manifest fehlt"
+TOPSTEPX_MODULE = "thesistester.journal.topstepx_reconcile"
+RECONCILE_MODULE = "thesistester.journal.reconcile"
 
-# User-cited spans on ThesisTester d32f6d3.
-JX1_LINES = (1152, 1184)
-TJ4_LINES = (422, 480)
-JX8_LINES = (2195, 2219)
-JX2_POS_ID_MARKERS = ("pos:", "%Y%m%dT%H%M%SZ")
-
-TT_COST_API_MISSING = (
-    "ThesisTester JX1/TJ4 cost function fehlt "
-    "(topstepx_reconcile.py:1152-1184 or reconcile.py:422-480)"
-)
-TT_POSITION_API_MISSING = (
-    "ThesisTester JX2 position builder fehlt (positions.py; "
-    "id pos:{account}:{contract}:{open_ts:%Y%m%dT%H%M%SZ})"
-)
-TT_LOCK_API_MISSING = (
-    "ThesisTester JX8 week-lock verify fehlt (lock.py:2195-2219)"
-)
+JOURNAL_TRADES_NAME = "journal_trades.parquet"
+JOURNAL_LOT_SOURCES_NAME = "journal_lot_sources.parquet"
+JOURNAL_POSITIONS_PARQUET = "journal_positions.parquet"
+JOURNAL_POSITIONS_JSON = "positions.json"
+WEEK_MANIFEST_NAME = "week_manifest.json"
 
 
-def _public(mod: Any) -> list[str]:
-    return sorted(name for name in dir(mod) if not name.startswith("_"))
-
-
-def _import_module(name: str) -> Any | None:
+def require_tt_symbol(module: str, name: str) -> Any:
+    """Import ``module.name`` or raise naming the missing symbol."""
     try:
-        return importlib.import_module(name)
-    except ImportError:
-        return None
+        mod = importlib.import_module(module)
+    except ImportError as exc:
+        raise ImportError(f"{module}.{name} fehlt") from exc
+    obj = getattr(mod, name, None)
+    if obj is None:
+        raise ImportError(f"{module}.{name} fehlt")
+    return obj
 
 
-def _callables(mod: Any) -> list[tuple[str, Callable[..., Any]]]:
-    found: list[tuple[str, Callable[..., Any]]] = []
-    for name, obj in inspect.getmembers(mod):
-        if inspect.isfunction(obj):
-            found.append((name, obj))
-        elif inspect.isclass(obj) and getattr(obj, "__module__", "") == getattr(
-            mod, "__name__", ""
-        ):
-            for meth_name, meth in inspect.getmembers(obj, predicate=inspect.isfunction):
-                found.append((f"{name}.{meth_name}", meth))
-    return found
+def validate_week_manifest(manifest: Any) -> Any:
+    fn = require_tt_symbol(LOCK_MODULE, "validate_week_manifest")
+    return fn(manifest)
 
 
-def _covers_lines(fn: Callable[..., Any], start: int, end: int) -> bool:
-    try:
-        lines, lineno = inspect.getsourcelines(fn)
-    except (OSError, TypeError):
-        return False
-    last = lineno + len(lines) - 1
-    return lineno <= end and last >= start
+def assert_manifest_inputs_match(manifest: Any, files: Any) -> Any:
+    fn = require_tt_symbol(LOCK_MODULE, "assert_manifest_inputs_match")
+    return fn(manifest, files)
 
 
-def _function_covering_lines(
-    mod: Any, start: int, end: int
-) -> tuple[str, Callable[..., Any]] | None:
-    matches: list[tuple[int, str, Callable[..., Any]]] = []
-    for name, fn in _callables(mod):
-        if not _covers_lines(fn, start, end):
-            continue
-        try:
-            _src, lineno = inspect.getsourcelines(fn)
-        except (OSError, TypeError):
-            continue
-        span = len(_src)
-        matches.append((span, name, fn))
-    if not matches:
-        return None
-    matches.sort(key=lambda item: item[0])
-    _span, name, fn = matches[0]
-    return name, fn
+def assert_claimed_lock_supported(manifest: Any, files: Any) -> Any:
+    fn = require_tt_symbol(LOCK_MODULE, "assert_claimed_lock_supported")
+    return fn(manifest, files=files)
 
 
-def _source(obj: Any) -> str:
-    try:
-        return inspect.getsource(obj)
-    except (OSError, TypeError):
-        return ""
+def build_journal_positions(trades: Any, lot_sources: Any) -> Any:
+    fn = require_tt_symbol(POSITIONS_MODULE, "build_journal_positions")
+    return fn(trades, lot_sources)
 
 
-def load_tt_cost_functions() -> list[tuple[str, Callable[..., Any]]]:
-    """Return the JX1 and TJ4 functions at the cited line ranges, if importable."""
-    found: list[tuple[str, Callable[..., Any]]] = []
-    for module_name, span in (
-        (TT_TOPSTEPX_MODULE, JX1_LINES),
-        (TT_AMP_MODULE, TJ4_LINES),
-    ):
-        mod = _import_module(module_name)
-        if mod is None:
-            continue
-        match = _function_covering_lines(mod, *span)
-        if match is not None:
-            name, fn = match
-            found.append((f"{module_name}.{name}", fn))
-    return found
+def write_journal_positions(*args: Any, **kwargs: Any) -> Any:
+    fn = require_tt_symbol(POSITIONS_MODULE, "write_journal_positions")
+    return fn(*args, **kwargs)
 
 
-def load_tt_position_builder() -> Callable[..., Any]:
-    """Return the JX2 builder that stamps ``pos:{account}:{contract}:{open_ts}``."""
-    mod = _import_module(TT_POSITION_MODULE)
-    if mod is None:
-        raise ImportError(TT_POSITION_API_MISSING)
-    matches: list[tuple[str, Callable[..., Any]]] = []
-    for name, fn in _callables(mod):
-        src = _source(fn)
-        if src and all(marker in src for marker in JX2_POS_ID_MARKERS):
-            matches.append((name, fn))
-    if len(matches) == 1:
-        return matches[0][1]
-    if len(matches) > 1:
-        matches.sort(key=lambda item: len(_source(item[1])))
-        return matches[0][1]
-    raise ImportError(f"{TT_POSITION_API_MISSING}; public={_public(mod)}")
+def ingest_topstepx(*args: Any, **kwargs: Any) -> Any:
+    fn = require_tt_symbol(TOPSTEPX_MODULE, "ingest_topstepx")
+    return fn(*args, **kwargs)
 
 
-def load_tt_week_verify() -> Callable[..., Any]:
-    """Return the JX8 report/verify function at lock.py:2195-2219."""
-    mod = _import_module(TT_LOCK_MODULE)
-    if mod is None:
-        raise ImportError(TT_LOCK_API_MISSING)
-    match = _function_covering_lines(mod, *JX8_LINES)
-    if match is None:
-        raise ImportError(f"{TT_LOCK_API_MISSING}; public={_public(mod)}")
-    return match[1]
+def write_topstepx_artifacts(*args: Any, **kwargs: Any) -> Any:
+    fn = require_tt_symbol(TOPSTEPX_MODULE, "write_topstepx_artifacts")
+    return fn(*args, **kwargs)
 
 
-def call_tt_week_verify(
-    fn: Callable[..., Any],
-    path: Any,
-    *,
-    week: str,
-    account: str,
-) -> Any:
-    """Call JX8 with only parameters the function actually declares."""
-    try:
-        sig = inspect.signature(fn)
-    except (TypeError, ValueError) as exc:
-        raise TypeError(f"{TT_LOCK_API_MISSING}: signature {fn!r}") from exc
-    kwargs: dict[str, Any] = {}
-    positional: list[Any] = []
-    for name, param in sig.parameters.items():
-        if name in {"self", "cls"}:
-            continue
-        if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
-            continue
-        if name in {"path", "manifest_path", "week_manifest", "manifest"}:
-            value: Any = path
-        elif name == "week":
-            value = week
-        elif name == "account":
-            value = account
-        elif name in {"root", "journal_root"}:
-            value = path.parent
-        elif param.default is inspect.Parameter.empty:
-            raise TypeError(f"{TT_LOCK_API_MISSING}: required param {name!r} on {fn!r}")
-        else:
-            continue
-        if param.kind == inspect.Parameter.KEYWORD_ONLY:
-            kwargs[name] = value
-        else:
-            positional.append(value)
-    return fn(*positional, **kwargs)
-
-
-def tt_cost_apis_available() -> bool:
-    return bool(load_tt_cost_functions())
-
-
-def tt_position_api_available() -> bool:
-    try:
-        load_tt_position_builder()
-    except ImportError:
-        return False
-    return True
+def reconcile_files(*args: Any, **kwargs: Any) -> Any:
+    fn = require_tt_symbol(RECONCILE_MODULE, "reconcile_files")
+    return fn(*args, **kwargs)
 
 
 def tt_lock_api_available() -> bool:
     try:
-        load_tt_week_verify()
+        require_tt_symbol(LOCK_MODULE, "validate_week_manifest")
+        require_tt_symbol(LOCK_MODULE, "assert_manifest_inputs_match")
+        require_tt_symbol(LOCK_MODULE, "assert_claimed_lock_supported")
     except ImportError:
         return False
     return True
+
+
+def tt_position_api_available() -> bool:
+    try:
+        require_tt_symbol(POSITIONS_MODULE, "build_journal_positions")
+    except ImportError:
+        return False
+    return True
+
+
+def hashed_input_files(manifest: dict[str, Any], journal_dir: Path) -> dict[str, Path]:
+    """Resolve the manifest's hashed input files against ``journal_dir``."""
+    raw = manifest.get("files")
+    if raw is None:
+        raise ValueError("Wochenmanifest hashed inputs fehlen")
+    files: dict[str, Path] = {}
+    if isinstance(raw, dict):
+        for name, spec in raw.items():
+            key = str(name)
+            if isinstance(spec, dict) and spec.get("path"):
+                path = Path(str(spec["path"]))
+                files[key] = path if path.is_absolute() else journal_dir / path
+            else:
+                files[key] = journal_dir / key
+        return files
+    if isinstance(raw, list):
+        for spec in raw:
+            if isinstance(spec, str):
+                files[spec] = journal_dir / spec
+            elif isinstance(spec, dict):
+                name = spec.get("name") or spec.get("path")
+                if not name:
+                    raise ValueError("Wochenmanifest hashed inputs fehlen")
+                path = Path(str(spec.get("path") or name))
+                files[str(name)] = path if path.is_absolute() else journal_dir / path
+            else:
+                raise ValueError("Wochenmanifest hashed inputs fehlen")
+        return files
+    raise ValueError("Wochenmanifest hashed inputs fehlen")
+
+
+def is_tt_journal_dir(path: Path) -> bool:
+    root = Path(path)
+    return root.is_dir() and (root / JOURNAL_TRADES_NAME).is_file()
+
+
+def journal_positions_path(journal_dir: Path) -> Path | None:
+    parquet = Path(journal_dir) / JOURNAL_POSITIONS_PARQUET
+    if parquet.is_file():
+        return parquet
+    json_path = Path(journal_dir) / JOURNAL_POSITIONS_JSON
+    if json_path.is_file():
+        return json_path
+    return None

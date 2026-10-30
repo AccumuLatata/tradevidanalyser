@@ -141,7 +141,12 @@ def main(argv: list[str] | None = None) -> int:
 
     p_fills = sub.add_parser("fills", help="TradesViz executions → fills.parquet / trades.parquet")
     p_fills.add_argument("session")
-    p_fills.add_argument("--executions", type=Path, required=True, help="TradesViz executions CSV")
+    p_fills.add_argument(
+        "--executions",
+        type=Path,
+        required=True,
+        help="TradesViz executions CSV; TT journal directory when TVA_NET_FEES is on",
+    )
     p_fills.add_argument(
         "--venue",
         choices=("topstepx", "amp", "unknown"),
@@ -258,7 +263,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_build = day_sub.add_parser("build", help="write days/<date>/ manifest (TVA_DAY_MANIFEST)")
     p_build.add_argument("date", metavar="YYYY-MM-DD")
-    p_build.add_argument("--executions", type=Path, required=True, help="TradesViz executions CSV")
+    p_build.add_argument(
+        "--executions",
+        type=Path,
+        required=True,
+        help="TradesViz executions CSV; TT journal directory when TVA_NET_FEES is on",
+    )
     p_build.add_argument(
         "--venue",
         choices=("topstepx", "amp", "unknown"),

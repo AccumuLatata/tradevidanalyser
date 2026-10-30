@@ -300,18 +300,163 @@ def _opt_float(value: Any) -> float | None:
     return float(value)
 
 
+def _positions_from_payload(payload: Any) -> list[dict[str, Any]]:
+    if payload is None:
+        return []
+    if hasattr(payload, "to_dict"):
+        try:
+            return list(payload.to_dict(orient="records"))
+        except TypeError:
+            pass
+    if isinstance(payload, list):
+        rows: list[dict[str, Any]] = []
+        for item in payload:
+            if isinstance(item, dict):
+                rows.append(item)
+            else:
+                rows.append({name: getattr(item, name) for name in dir(item) if not name.startswith("_")})
+        return rows
+    return []
+
+
+def _attach_position_ids(trades: list[JournalTrade], positions: list[dict[str, Any]]) -> list[JournalTrade]:
+    by_trade: dict[str, str] = {}
+    for raw in positions:
+        pid = raw.get("position_id") or raw.get("id")
+        if pid is None or str(pid).strip() == "":
+            continue
+        lot_ids = raw.get("lot_trade_ids") or raw.get("trade_ids") or ()
+        for trade_id in lot_ids:
+            if trade_id is None or str(trade_id).strip() == "":
+                continue
+            by_trade[str(trade_id)] = str(pid)
+    if not by_trade:
+        return trades
+    return [
+        replace(trade, position_id=by_trade.get(trade.trade_id, trade.position_id))
+        for trade in trades
+    ]
+
+
+def _fills_from_journal_trades(trades: list[JournalTrade]) -> list[FillRecord]:
+    fills: list[FillRecord] = []
+    for trade in trades:
+        entry_side = "buy" if trade.direction == "long" else "sell"
+        fills.append(
+            FillRecord(
+                fill_id=trade.entry_fill_id,
+                source="tradesviz",
+                source_group_id=trade.source_group_id,
+                instrument=trade.instrument,
+                contract_month=trade.contract_month,
+                contract_year=trade.contract_year,
+                side=entry_side,  # type: ignore[arg-type]
+                qty=trade.qty,
+                price=trade.entry_price,
+                timestamp=trade.entry_timestamp,
+                session_date=trade.session_date,
+                entry_kind="imported",
+                tags=trade.tags,
+                notes_text=trade.notes_text,
+                declared_stop=trade.stop_price,
+                declared_target=trade.target_price,
+                flags=(),
+                csv_calendar_date=trade.session_date,
+            )
+        )
+        if trade.exit_fill_id is None or trade.exit_timestamp is None or trade.exit_price is None:
+            continue
+        exit_side = "sell" if entry_side == "buy" else "buy"
+        fills.append(
+            FillRecord(
+                fill_id=trade.exit_fill_id,
+                source="tradesviz",
+                source_group_id=trade.source_group_id,
+                instrument=trade.instrument,
+                contract_month=trade.contract_month,
+                contract_year=trade.contract_year,
+                side=exit_side,  # type: ignore[arg-type]
+                qty=trade.qty,
+                price=trade.exit_price,
+                timestamp=trade.exit_timestamp,
+                session_date=trade.session_date,
+                entry_kind="imported",
+                tags=trade.tags,
+                notes_text=trade.notes_text,
+                declared_stop=trade.stop_price,
+                declared_target=trade.target_price,
+                flags=(),
+                csv_calendar_date=trade.session_date,
+            )
+        )
+    fills.sort(key=lambda fill: (fill.timestamp, fill.fill_id))
+    return fills
+
+
+def load_tt_journal_dir(journal_dir: Path) -> tuple[list[FillRecord], list[JournalTrade]]:
+    """Flag-on source: TT journal artifacts, not the TradesViz CSV."""
+    from tradevidanalyser.tt_journal import (
+        JOURNAL_LOT_SOURCES_NAME,
+        JOURNAL_TRADES_NAME,
+        build_journal_positions,
+        is_tt_journal_dir,
+        journal_positions_path,
+    )
+
+    root = Path(journal_dir)
+    if not is_tt_journal_dir(root):
+        raise JournalIngestError(NO_COST_SOURCE_ERROR)
+    trades_path = root / JOURNAL_TRADES_NAME
+    lots_path = root / JOURNAL_LOT_SOURCES_NAME
+    if not lots_path.is_file():
+        raise JournalIngestError(f"{JOURNAL_LOT_SOURCES_NAME} fehlt")
+    trades_table = pq.read_table(trades_path)
+    trades = [_trade_from_pandas_row(row) for row in trades_table.to_pylist()]
+    pos_file = journal_positions_path(root)
+    if pos_file is not None:
+        if pos_file.suffix == ".json":
+            payload = store.read_json(pos_file)
+            positions = payload if isinstance(payload, list) else payload.get("positions") or []
+            trades = _attach_position_ids(trades, _positions_from_payload(positions))
+        else:
+            trades = _attach_position_ids(trades, pq.read_table(pos_file).to_pylist())
+    else:
+        import pandas as pd
+
+        positions = build_journal_positions(
+            pd.read_parquet(trades_path),
+            pd.read_parquet(lots_path),
+        )
+        trades = _attach_position_ids(trades, _positions_from_payload(positions))
+    for trade in trades:
+        if trade.status != STATUS_CLOSED:
+            continue
+        has_cost = trade.commission_cost is not None or trade.day_fee_allocation is not None
+        if not has_cost:
+            raise JournalIngestError(NO_COST_SOURCE_ERROR)
+    return _fills_from_journal_trades(trades), trades
+
+
 def load_fills(
     executions: Path,
     *,
     prefer_import: bool | None = None,
 ) -> tuple[str, list[FillRecord]]:
+    from tradevidanalyser.flags import net_fees_enabled
+
+    path = Path(executions)
+    if net_fees_enabled():
+        if path.is_file():
+            raise JournalIngestError(NO_COST_SOURCE_ERROR)
+        fills, _trades = load_tt_journal_dir(path)
+        return "journal", fills
     use_import = thesistester_available() if prefer_import is None else prefer_import
     if use_import:
         if not thesistester_available():
             raise FillsError("ThesisTester is not installed (pip install 'tradevidanalyser[journal]')")
-        fills = _import_load(executions)
-        return "import", attach_csv_calendar_dates(fills, executions)
-    return "mirror", mirror_load(executions, profile=TRADESVIZ_EXECUTIONS_PROFILE)
+        fills = _import_load(path)
+        return "import", attach_csv_calendar_dates(fills, path)
+    return "mirror", mirror_load(path, profile=TRADESVIZ_EXECUTIONS_PROFILE)
 
 
 def _strip_to_tj1(trade: JournalTrade) -> JournalTrade:
@@ -353,16 +498,20 @@ def pair_fills(
     *,
     include_manual: bool = False,
     loader: str = "mirror",
+    trades: list[JournalTrade] | None = None,
 ) -> list[JournalTrade]:
     from tradevidanalyser.flags import net_fees_enabled
 
+    if loader == "journal":
+        if trades is None:
+            raise JournalIngestError(NO_COST_SOURCE_ERROR)
+        return trades
     if loader == "import":
         return _apply_imported_net_policy(_import_pair(fills, include_manual=include_manual))
-    trades = mirror_pair(fills, include_manual=include_manual)
+    paired = mirror_pair(fills, include_manual=include_manual)
     if net_fees_enabled():
-        # Mirror never has a TT JX1/TJ4 cost source (TV commission/fees are discarded).
         raise JournalIngestError(NO_COST_SOURCE_ERROR)
-    return trades
+    return paired
 
 
 def load_and_pair(
@@ -371,7 +520,15 @@ def load_and_pair(
     include_manual: bool = False,
     prefer_import: bool | None = None,
 ) -> tuple[str, list[FillRecord], list[JournalTrade]]:
-    loader, fills = load_fills(executions, prefer_import=prefer_import)
+    from tradevidanalyser.flags import net_fees_enabled
+
+    path = Path(executions)
+    if net_fees_enabled():
+        if path.is_file():
+            raise JournalIngestError(NO_COST_SOURCE_ERROR)
+        fills, trades = load_tt_journal_dir(path)
+        return "journal", fills, trades
+    loader, fills = load_fills(path, prefer_import=prefer_import)
     return loader, fills, pair_fills(fills, include_manual=include_manual, loader=loader)
 
 
@@ -718,6 +875,18 @@ def assert_no_cost_columns(table: pa.Table) -> None:
         raise FillsError("cost columns leaked into parquet: " + ", ".join(leaked))
 
 
+def _window_journal_trades(
+    fills: list[FillRecord],
+    trades: list[JournalTrade],
+    start: datetime,
+    end: datetime,
+) -> tuple[list[FillRecord], list[JournalTrade]]:
+    windowed = filter_fills_to_window(fills, start, end)
+    keep = {fill.fill_id for fill in windowed}
+    kept_trades = [trade for trade in trades if trade.entry_fill_id in keep]
+    return windowed, kept_trades
+
+
 def ingest_fills(
     record: SessionRecord,
     executions: Path,
@@ -729,7 +898,7 @@ def ingest_fills(
     reconcile_dir: Path | None = None,
 ) -> FillsResult:
     from tradevidanalyser.day_fills import ingest_fills_exclusive
-    from tradevidanalyser.flags import exclusive_fills_enabled
+    from tradevidanalyser.flags import exclusive_fills_enabled, net_fees_enabled
 
     if exclusive_fills_enabled():
         exclusive = ingest_fills_exclusive(
@@ -743,16 +912,26 @@ def ingest_fills(
         )
         if exclusive is not None:
             return exclusive
-    csv_path = Path(executions)
-    chosen_venue = venue_from_hint(csv_path, venue)
+    source = Path(executions)
+    chosen_venue = venue_from_hint(source, venue)
+    journal_trades: list[JournalTrade] | None = None
     try:
-        loader, fills = load_fills(csv_path, prefer_import=prefer_import)
+        if net_fees_enabled():
+            if source.is_file():
+                raise JournalIngestError(NO_COST_SOURCE_ERROR)
+            fills, journal_trades = load_tt_journal_dir(source)
+            loader = "journal"
+        else:
+            loader, fills = load_fills(source, prefer_import=prefer_import)
     except Exception as exc:
         if _is_journal_ingest_error(exc):
             raise FillsError(str(exc)) from exc
         raise
     start, end = session_utc_window(record)
-    windowed = filter_fills_to_window(fills, start, end)
+    if journal_trades is not None:
+        windowed, journal_trades = _window_journal_trades(fills, journal_trades, start, end)
+    else:
+        windowed = filter_fills_to_window(fills, start, end)
     recon_map = None
     if reconcile_dir is not None:
         # Fail closed on a bad --reconcile-dir even when the window is empty
@@ -783,7 +962,12 @@ def ingest_fills(
             reason="no fills in session window",
         )
     try:
-        trades = pair_fills(windowed, include_manual=include_manual, loader=loader)
+        trades = pair_fills(
+            windowed,
+            include_manual=include_manual,
+            loader=loader,
+            trades=journal_trades,
+        )
     except Exception as exc:
         if _is_journal_ingest_error(exc):
             raise FillsError(str(exc)) from exc
