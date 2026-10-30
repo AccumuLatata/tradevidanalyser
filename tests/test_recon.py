@@ -15,6 +15,7 @@ from tradevidanalyser.fills import (
     attach_recon_status,
     load_reconcile_status_map,
     lookup_recon_status,
+    thesistester_available,
     trades_table,
 )
 from tradevidanalyser.fills_mirror import load_tradesviz_executions, pair_journal_trades
@@ -287,34 +288,49 @@ def test_conflicting_status_fails_closed(tmp_path: Path) -> None:
         load_reconcile_status_map(path)
 
 
-def test_reconcile_tt_schema_without_instrument(tmp_path: Path) -> None:
-    """TT 4fc4af05 DayReconcile is day-wide: no instrument field on the day row."""
-    path = tmp_path / "reconcile.json"
-    path.write_text(
-        json.dumps(
-            {
-                "schema_version": "journal/v1",
-                "days": [
-                    {
-                        "session_date": "2026-05-14",
-                        "status": "reconciled",
-                        "journal_fill_count": 4,
-                        "amp_fill_count": 4,
-                        "journal_gross_usd": 1.5,
-                        "amp_ps_usd": 1.5,
-                        "fee_total_usd": 0.0,
-                        "day_fees_extra": 0.0,
-                        "note": "",
-                    }
-                ],
-            }
-        )
-        + "\n",
-        encoding="utf-8",
+@pytest.mark.skipif(not thesistester_available(), reason="thesistester extra not installed")
+def test_reconcile_accepts_tt_topstepx_real_shape(tmp_path: Path) -> None:
+    """Load the reconcile.json ThesisTester 4fc4af05 actually writes."""
+    from test_tt_journal import (
+        ACCOUNT,
+        _write_synthetic_topstepx_lots,
+        _write_synthetic_tv_csv,
+        _write_test_accounts_yaml,
     )
-    mapping = load_reconcile_status_map(path)
-    assert lookup_recon_status(date(2026, 5, 14), "MNQ", mapping) == "reconciled"
-    assert lookup_recon_status(date(2026, 5, 14), "MES", mapping) == "reconciled"
+    from tradevidanalyser.tt_journal import RECONCILE_NAME, TOPSTEPX_MODULE, ingest_topstepx, require_tt_symbol
+
+    require_tt_symbol(TOPSTEPX_MODULE, "ingest_topstepx")
+    journal = tmp_path / "journal"
+    journal.mkdir()
+    ingest_topstepx(
+        trades=_write_synthetic_topstepx_lots(tmp_path / "lots.csv"),
+        tradesviz=_write_synthetic_tv_csv(tmp_path / "tv.csv"),
+        account=ACCOUNT,
+        accounts=_write_test_accounts_yaml(tmp_path / "accounts.yaml"),
+        output_dir=journal,
+    )
+    recon = journal / RECONCILE_NAME
+    assert recon.is_file(), "ingest_topstepx must write reconcile.json"
+    payload = json.loads(recon.read_text(encoding="utf-8"))
+    assert isinstance(payload.get("days"), list)
+    assert payload["days"], "TT wrote no reconcile days"
+    for row in payload["days"]:
+        assert isinstance(row, dict)
+        assert "instruments" not in row
+        assert "by_instrument" not in row
+        assert "per_instrument" not in row
+        assert "rows" not in row
+    mapping = load_reconcile_status_map(journal)
+    assert mapping
+    assert set(mapping.values()) <= RECON_STATUSES
+    extra = dict(payload["days"][0])
+    extra["status"] = "topstepx_missing"
+    extra["session_date"] = "2026-05-14"
+    payload["days"].append(extra)
+    recon.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+    mapping = load_reconcile_status_map(journal)
+    assert "topstepx_missing" in mapping.values()
+    assert lookup_recon_status(date(2026, 5, 14), "MNQ", mapping) == "topstepx_missing"
 
 
 def test_wrong_schema_version_fails_closed(tmp_path: Path) -> None:
@@ -367,6 +383,7 @@ def test_attach_does_not_parse_pdf(tmp_path: Path) -> None:
         "reconciled",
         "journal_missing",
         "amp_missing",
+        "topstepx_missing",
         "multiset_mismatch",
         "pnl_mismatch",
     }

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -10,6 +11,8 @@ from typing import Any
 import yaml
 
 from tradevidanalyser.rules import RulesConfig, _config_from_mapping
+
+ENV_ACCOUNTS_FILE = "TVA_ACCOUNTS_FILE"
 
 TOPSTEP_DESK = "topstepx"
 ACCOUNT_MISSING = "Konto fehlt"
@@ -41,6 +44,12 @@ class AccountsConfig:
 
 
 def default_accounts_path() -> Path:
+    override = (os.environ.get(ENV_ACCOUNTS_FILE) or "").strip()
+    if override:
+        path = Path(override)
+        if not path.is_file():
+            raise FileNotFoundError(f"accounts.yaml not found: {path}")
+        return path
     here = Path(__file__).resolve().parent
     path = here / "accounts.yaml"
     if not path.is_file():

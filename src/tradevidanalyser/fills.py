@@ -51,6 +51,7 @@ RECON_STATUSES = frozenset(
         "reconciled",
         "journal_missing",
         "amp_missing",
+        "topstepx_missing",
         "multiset_mismatch",
         "pnl_mismatch",
     }
@@ -271,17 +272,29 @@ def _apply_csv_fees(trades: list[JournalTrade], fills: list[FillRecord]) -> list
     return out
 
 
+def _cost_identity(fill: FillRecord) -> tuple[Any, ...]:
+    return (fill.timestamp, fill.side, fill.price, fill.qty, fill.source_group_id)
+
+
 def _overlay_csv_costs(fills: list[FillRecord], path: Path) -> list[FillRecord]:
     """Copy TV commission/fees from the CSV. Import drops them; sidecar needs them."""
     if not fills or not path.is_file():
         return fills
-    by_id = {
-        fill.fill_id: fill
-        for fill in mirror_load(path, profile=TRADESVIZ_EXECUTIONS_PROFILE)
-    }
+    mirrored = mirror_load(path, profile=TRADESVIZ_EXECUTIONS_PROFILE)
+    by_id = {fill.fill_id: fill for fill in mirrored}
+    unused: dict[tuple[Any, ...], list[FillRecord]] = {}
+    for fill in mirrored:
+        unused.setdefault(_cost_identity(fill), []).append(fill)
     out: list[FillRecord] = []
     for fill in fills:
         src = by_id.get(fill.fill_id)
+        if src is None:
+            bucket = unused.get(_cost_identity(fill), [])
+            src = bucket.pop(0) if bucket else None
+        else:
+            bucket = unused.get(_cost_identity(src), [])
+            if src in bucket:
+                bucket.remove(src)
         if src is None:
             out.append(fill)
             continue
@@ -1032,43 +1045,12 @@ def _recon_instrument(value: Any) -> str | None:
 DAY_WIDE_INSTRUMENT = ""
 
 
-def _recon_session_date(raw: dict[str, Any]) -> Any:
-    if raw.get("session_date") is not None:
-        return raw.get("session_date")
-    return raw.get("date")
-
-
-def _recon_row_instrument(raw: dict[str, Any]) -> str | None:
-    for key in ("instrument", "symbol", "underlying"):
-        inst = _recon_instrument(raw.get(key))
-        if inst is not None:
-            return inst
-    return None
-
-
-def _recon_nested_rows(raw: dict[str, Any]) -> list[dict[str, Any]]:
-    """TT 4fc4af05 may nest per-instrument rows or omit instrument (day-wide)."""
-    for key in ("instruments", "by_instrument", "per_instrument", "rows"):
-        nested = raw.get(key)
-        if isinstance(nested, dict):
-            rows: list[dict[str, Any]] = []
-            for name, body in nested.items():
-                if isinstance(body, dict):
-                    rows.append({**body, "instrument": body.get("instrument") or name})
-                elif isinstance(body, str):
-                    rows.append({"instrument": name, "status": body})
-            return rows
-        if isinstance(nested, list):
-            return [item for item in nested if isinstance(item, dict)]
-    return []
-
-
 def load_reconcile_status_map(reconcile_dir: Path) -> dict[tuple[date, str], str]:
     """Read ThesisTester ``reconcile.json`` → ``(session_date, instrument) → status``.
 
     Join key is ThesisTester ``DayReconcile``: exact ``(session_date, instrument)``.
-    TT 4fc4af05 may omit ``instrument`` (day-wide status) or nest it. No PDF is
-    opened. Unknown statuses and a non-object root fail closed.
+    TT 4fc4af05 TopstepX rows may omit ``instrument`` (day-wide status). No PDF
+    is opened. Unknown statuses and a non-object root fail closed.
     """
     path = reconcile_json_path(reconcile_dir)
     if not path.is_file():
@@ -1085,48 +1067,33 @@ def load_reconcile_status_map(reconcile_dir: Path) -> dict[tuple[date, str], str
             f"reconcile.json schema_version must be {JOURNAL_STORE_SCHEMA} (got {schema!r})"
         )
     days = payload.get("days")
-    if isinstance(days, dict):
-        expanded: list[dict[str, Any]] = []
-        for key, body in days.items():
-            if isinstance(body, dict):
-                row = dict(body)
-                row.setdefault("session_date", key)
-                expanded.append(row)
-            else:
-                raise FillsError("reconcile.json days entries must be objects")
-        days = expanded
     if not isinstance(days, list):
         raise FillsError("reconcile.json has no days array")
     mapping: dict[tuple[date, str], str] = {}
     for index, raw in enumerate(days):
         if not isinstance(raw, dict):
             raise FillsError(f"reconcile.json days[{index}] is not an object")
-        session = _recon_session_date(raw)
-        nested = _recon_nested_rows(raw)
-        rows = nested or [raw]
+        session = raw.get("session_date")
         if not isinstance(session, str) or not session.strip():
             raise FillsError(f"reconcile.json days[{index}] missing session_date")
         day = _recon_date(session)
         if day is None:
             raise FillsError(f"reconcile.json days[{index}] bad session_date {session!r}")
-        for row in rows:
-            instrument = _recon_row_instrument(row)
-            status = row.get("status", raw.get("status"))
-            if instrument is None and nested:
-                raise FillsError(f"reconcile.json days[{index}] missing instrument")
-            if instrument is None:
-                instrument = DAY_WIDE_INSTRUMENT
-            if status not in RECON_STATUSES:
-                raise FillsError(
-                    f"reconcile.json days[{index}] status must be one of "
-                    + ", ".join(sorted(RECON_STATUSES))
-                    + f" (got {status!r})"
-                )
-            key = (day, instrument)
-            if key in mapping and mapping[key] != status:
-                label = instrument or "day"
-                raise FillsError(f"reconcile.json has conflicting status for {label} on {session}")
-            mapping[key] = status
+        instrument = _recon_instrument(raw.get("instrument"))
+        if instrument is None:
+            instrument = DAY_WIDE_INSTRUMENT
+        status = raw.get("status")
+        if status not in RECON_STATUSES:
+            raise FillsError(
+                f"reconcile.json days[{index}] status must be one of "
+                + ", ".join(sorted(RECON_STATUSES))
+                + f" (got {status!r})"
+            )
+        key = (day, instrument)
+        if key in mapping and mapping[key] != status:
+            label = instrument or "day"
+            raise FillsError(f"reconcile.json has conflicting status for {label} on {session}")
+        mapping[key] = status
     return mapping
 
 
