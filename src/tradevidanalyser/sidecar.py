@@ -5,6 +5,11 @@ Q-15 = B: measure the first-frame offset per clip as
 minus pause wall spans, minus ffprobe duration. ffprobe ``start_time``
 below 0.1 s is unusable (container default), never a measured value.
 1.043 s is a loud fallback (warning + ``offset_source: fallback``), never silent.
+
+First-frame validity is two measured bands (plan amendment 2026-10-30):
+low 0.20–0.45 s and high 0.80–1.30 s. ``time_anchor.json`` stamps
+``offset_mode: low|high``. The gap and anything outside both bands fail
+loudly. ``record_start`` without ``record_stop`` is ``incomplete``.
 """
 
 from __future__ import annotations
@@ -26,8 +31,13 @@ from tradevidanalyser.schema import SCHEMA_VERSION, SessionRecord
 from tradevidanalyser.sidecar_copy import sidecar_source_path
 
 FIRST_FRAME_OFFSET_EXPECTED_S = 1.043
-FIRST_FRAME_OFFSET_MIN_S = 0.8
-FIRST_FRAME_OFFSET_MAX_S = 1.3
+FIRST_FRAME_OFFSET_LOW_MIN_S = 0.20
+FIRST_FRAME_OFFSET_LOW_MAX_S = 0.45
+FIRST_FRAME_OFFSET_HIGH_MIN_S = 0.80
+FIRST_FRAME_OFFSET_HIGH_MAX_S = 1.30
+# Historical single-band names: the high band (kept for callers / docs).
+FIRST_FRAME_OFFSET_MIN_S = FIRST_FRAME_OFFSET_HIGH_MIN_S
+FIRST_FRAME_OFFSET_MAX_S = FIRST_FRAME_OFFSET_HIGH_MAX_S
 RESUME_OFFSET_MIN_S = 0.4
 RESUME_OFFSET_MAX_S = 0.8
 SPAN_RESIDUAL_MAX_S = 0.10
@@ -46,6 +56,7 @@ REASON_SEGMENT_INVALID = "segment_invalid"
 REASON_SPAN = "span_residual_out_of_band"
 REASON_OUTSIDE = "outside_sections"
 REASON_INVALID_JSON = "invalid_json"
+REASON_INCOMPLETE = "missing_record_stop"
 
 START_TIME_USABLE_MIN_S = 0.1
 
@@ -54,6 +65,8 @@ _LOG = logging.getLogger(__name__)
 SOURCE_MEASURED = "measured"
 SOURCE_FIXED = "fixed"
 OFFSET_SOURCE_FALLBACK = "fallback"
+OFFSET_MODE_LOW = "low"
+OFFSET_MODE_HIGH = "high"
 
 EVENT_RECORD_START = "record_start"
 EVENT_RECORD_STOP = "record_stop"
@@ -67,6 +80,10 @@ FALLBACK_WARNING = (
     "Erstbild-Versatz: Messung fehlgeschlagen, Fallback 1.043 s "
     "(offset_source=fallback)"
 )
+INCOMPLETE_WARNING = (
+    "Sidecar unvollständig: record_start ohne record_stop "
+    "(status=incomplete, kein first-frame offset)"
+)
 
 AnchorStatus = Literal[
     "verified",
@@ -78,10 +95,15 @@ AnchorStatus = Literal[
 ]
 SectionStatus = Literal["verified", "segment_invalid"]
 OffsetSource = Literal["measured", "fixed"]
+OffsetMode = Literal["low", "high"]
 
 
 class SidecarFallbackWarning(UserWarning):
     """Loud first-frame fallback; never a silent substitute (TT:441, Q-15 = B)."""
+
+
+class SidecarIncompleteWarning(UserWarning):
+    """Loud incomplete sidecar: record_start without record_stop (TT:444)."""
 
 
 @dataclass(frozen=True)
@@ -164,6 +186,7 @@ class TimeAnchor:
     first_frame_offset_s: float | None = None
     first_frame_offset_source: OffsetSource | None = None
     offset_source: str | None = None
+    offset_mode: OffsetMode | None = None
     file: str | None = None
     video_duration_s: float | None = None
     sidecar_duration_s: float | None = None
@@ -185,6 +208,8 @@ class TimeAnchor:
             payload["first_frame_offset_source"] = self.first_frame_offset_source
         if self.offset_source:
             payload["offset_source"] = self.offset_source
+        if self.offset_mode:
+            payload["offset_mode"] = self.offset_mode
         if self.file:
             payload["file"] = self.file
         if self.video_duration_s is not None:
@@ -249,6 +274,23 @@ def _emit_fallback_warning() -> None:
     with warnings.catch_warnings():
         warnings.simplefilter("always", SidecarFallbackWarning)
         warnings.warn(FALLBACK_WARNING, SidecarFallbackWarning, stacklevel=3)
+
+
+def _emit_incomplete_warning() -> None:
+    """Fire on every clip. Default ``once`` filtering would hide later clips."""
+    _LOG.warning(INCOMPLETE_WARNING)
+    with warnings.catch_warnings():
+        warnings.simplefilter("always", SidecarIncompleteWarning)
+        warnings.warn(INCOMPLETE_WARNING, SidecarIncompleteWarning, stacklevel=3)
+
+
+def classify_first_frame_offset(offset: float) -> OffsetMode | None:
+    """Return ``low`` / ``high`` when *offset* is in a validity band, else None."""
+    if FIRST_FRAME_OFFSET_LOW_MIN_S <= offset <= FIRST_FRAME_OFFSET_LOW_MAX_S:
+        return OFFSET_MODE_LOW
+    if FIRST_FRAME_OFFSET_HIGH_MIN_S <= offset <= FIRST_FRAME_OFFSET_HIGH_MAX_S:
+        return OFFSET_MODE_HIGH
+    return None
 
 
 def _pause_wall_span_s(events: list[SidecarEvent]) -> float | None:
@@ -361,6 +403,17 @@ def build_time_anchor(
     video_duration = duration_s
     if video_duration is None and probe is not None:
         video_duration = media.duration_s(probe)
+
+    if not any(item.event == EVENT_RECORD_STOP for item in ours):
+        _emit_incomplete_warning()
+        return TimeAnchor(
+            session_id=session_id,
+            status=STATUS_INCOMPLETE,
+            reason=REASON_INCOMPLETE,
+            file=video_name,
+            video_duration_s=_opt_round(video_duration),
+        )
+
     sidecar_duration = _sidecar_duration_s(ours)
     if video_duration is None or sidecar_duration is None:
         return TimeAnchor(
@@ -379,15 +432,6 @@ def build_time_anchor(
             sidecar_duration_s=_r(sidecar_duration),
         )
 
-    if not any(item.event == EVENT_RECORD_STOP for item in ours):
-        return TimeAnchor(
-            session_id=session_id,
-            status=STATUS_INCOMPLETE,
-            file=video_name,
-            video_duration_s=_r(video_duration),
-            sidecar_duration_s=_r(sidecar_duration),
-        )
-
     if measured_offset_s is not None:
         offset = _r(measured_offset_s)
         source: OffsetSource = SOURCE_MEASURED
@@ -397,7 +441,8 @@ def build_time_anchor(
             ours, video_duration, probe=probe
         )
 
-    if not (FIRST_FRAME_OFFSET_MIN_S <= offset <= FIRST_FRAME_OFFSET_MAX_S):
+    offset_mode = classify_first_frame_offset(offset)
+    if offset_mode is None:
         return TimeAnchor(
             session_id=session_id,
             status=STATUS_INVALID,
@@ -421,6 +466,7 @@ def build_time_anchor(
             first_frame_offset_s=offset,
             first_frame_offset_source=source,
             offset_source=offset_source,
+            offset_mode=offset_mode,
             video_duration_s=_r(video_duration),
             sidecar_duration_s=_r(sidecar_duration),
         )
@@ -436,6 +482,7 @@ def build_time_anchor(
         first_frame_offset_s=offset,
         first_frame_offset_source=source,
         offset_source=offset_source,
+        offset_mode=offset_mode,
         video_duration_s=_r(video_duration),
         sidecar_duration_s=_r(sidecar_duration),
         sections=sections,
@@ -834,6 +881,9 @@ def _anchor_from_payload(raw: dict[str, Any]) -> TimeAnchor | None:
     source = raw.get("first_frame_offset_source")
     if source not in {None, SOURCE_MEASURED, SOURCE_FIXED}:
         source = None
+    offset_mode = raw.get("offset_mode")
+    if offset_mode not in {None, OFFSET_MODE_LOW, OFFSET_MODE_HIGH}:
+        offset_mode = None
     return TimeAnchor(
         session_id=str(raw.get("session_id") or ""),
         status=status,
@@ -843,6 +893,7 @@ def _anchor_from_payload(raw: dict[str, Any]) -> TimeAnchor | None:
         first_frame_offset_s=_finite_float(raw.get("first_frame_offset_s")),
         first_frame_offset_source=source,
         offset_source=str(raw["offset_source"]) if raw.get("offset_source") else None,
+        offset_mode=offset_mode,
         file=str(raw["file"]) if raw.get("file") else None,
         video_duration_s=_finite_float(raw.get("video_duration_s")),
         sidecar_duration_s=_finite_float(raw.get("sidecar_duration_s")),
