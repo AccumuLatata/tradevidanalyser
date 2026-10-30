@@ -14,6 +14,7 @@ from tradevidanalyser.rules import RulesConfig, _config_from_mapping
 TOPSTEP_DESK = "topstepx"
 ACCOUNT_MISSING = "Konto fehlt"
 ACCOUNT_UNKNOWN = "Konto nicht in accounts.yaml"
+ACCOUNT_MISMATCH = "Konto stimmt nicht"
 MULTI_ACCOUNT_ERROR = "mehrere Konten"
 TOPSTEP_ON_OTHER_ERROR = "Topstep-Regeln gelten nicht für andere Konten"
 FEE_SCHEDULE_ERROR = "fee_schedule must be a per-instrument mapping"
@@ -172,7 +173,9 @@ def desk_rules_for_account(
     return cfg.desks[entry.desk]
 
 
-def assert_desk_allowed(account: str | None, desk: str, *, config: AccountsConfig | None = None) -> None:
+def assert_desk_allowed(
+    account: str | None, desk: str, *, config: AccountsConfig | None = None
+) -> None:
     """Topstep desk/rules must not be applied to a non-Topstep account."""
     if desk != TOPSTEP_DESK:
         return

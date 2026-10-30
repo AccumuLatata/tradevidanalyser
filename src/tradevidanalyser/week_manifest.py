@@ -85,12 +85,17 @@ def require_locked_week_manifest(
     day: date,
     *,
     account: str | None,
+    journal_dir: Path | None = None,
+    positions_dir: Path | None = None,
+    prepare_manifest: Path | None = None,
+    accounts: Path | None = None,
 ) -> dict[str, Any]:
     """Publish only when TT JX8 accepts the manifest for this week+account."""
     from tradevidanalyser.tt_journal import (
         assert_claimed_lock_supported,
         assert_manifest_inputs_match,
         hashed_input_files,
+        lock_source_paths,
         validate_week_manifest,
     )
 
@@ -102,7 +107,6 @@ def require_locked_week_manifest(
         raise WeekManifestError(WEEK_MANIFEST_MISMATCH)
     if account is None or payload.get("account") != account:
         raise WeekManifestError(WEEK_MANIFEST_MISMATCH)
-    path = week_manifest_path(root)
     try:
         validate_week_manifest(payload)
     except ImportError as exc:
@@ -110,11 +114,20 @@ def require_locked_week_manifest(
     except WeekManifestError:
         raise
     except Exception as exc:
-        raise WeekManifestError(f"{WEEK_MANIFEST_NOT_LOCKED}: {week}") from exc
+        raise WeekManifestError(f"{WEEK_MANIFEST_NOT_LOCKED}: {week}: {exc}") from exc
     try:
-        files = hashed_input_files(payload, path.parent)
+        files = hashed_input_files(
+            payload,
+            **lock_source_paths(
+                root,
+                journal_dir=journal_dir,
+                positions_dir=positions_dir,
+                prepare_manifest=prepare_manifest,
+                accounts=accounts,
+            ),
+        )
     except ValueError as exc:
-        raise WeekManifestError(WEEK_MANIFEST_INPUTS) from exc
+        raise WeekManifestError(str(exc) or WEEK_MANIFEST_INPUTS) from exc
     try:
         assert_manifest_inputs_match(payload, files)
         assert_claimed_lock_supported(payload, files)
@@ -123,7 +136,7 @@ def require_locked_week_manifest(
     except WeekManifestError:
         raise
     except Exception as exc:
-        raise WeekManifestError(f"{WEEK_MANIFEST_NOT_LOCKED}: {week}") from exc
+        raise WeekManifestError(f"{WEEK_MANIFEST_NOT_LOCKED}: {week}: {exc}") from exc
     if payload.get("lock_status") != STATUS_LOCKED:
         raise WeekManifestError(f"{WEEK_MANIFEST_NOT_LOCKED}: {week}")
     return payload

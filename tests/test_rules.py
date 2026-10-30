@@ -196,6 +196,7 @@ def test_r_max10_net_fees_falls_back_to_lots(
     trades = [_trade(i + 1, entry_s=i * 60, exit_s=i * 60 + 20, pnl=1.0) for i in range(3)]
     check = _check(trades, "R-MAX10")
     assert check.evidence["count_basis"] == "lots"
+    assert check.evidence["count_basis_reason"] == "position_id fehlt"
     assert check.evidence["count"] == 3
     assert check.evidence["trade_ids"] == ["T01", "T02", "T03"]
 

@@ -322,8 +322,8 @@ Source: TT §10.3 (TT:883–907). Flag row TT:892 / 894. Series order after JX1,
 | `TVA_NET_FEES` | Only with the Vierer-Set `TVA_EXCLUSIVE_FILLS` + `TVA_DAY_RULES` + `TVA_DAY_PUBLISH` + `TVA_TRADING_HOURS` (those four already require pause + manifest). `TVA_SIDECAR` does not license it (TT:892, 894) | ignored; combo check skipped |
 | Other sets | `ungültige Flag-Kombination` (TT:894) | n/a |
 | `fills_mirror.py` | Flag-off only (TJ1). Flag on reads a TT journal dir; a TradesViz CSV is `Netto ohne Kostenquelle` | TJ1: costs discarded, net equals gross |
-| `tva publish` | TT `week_manifest.json` written by `lock_files` (tick `prepare_manifest` required) and verified by `validate_week_manifest` + `assert_manifest_inputs_match` + `assert_claimed_lock_supported` (report.py:654-657). Hand-written / tampered hash cannot unlock. `DayStale` carries the date | clip publish / existing lock rules unchanged |
+| `tva publish` | TT `week_manifest.json` written by `lock_files` (tick `prepare_manifest` required) and verified by `validate_week_manifest` + `assert_manifest_inputs_match` + `assert_claimed_lock_supported` (report.py:654-657). Inputs are `inputs: [{role, path, sha256}]`. Hand-edited `locked` (`lock_status_inconsistent`) / tampered hash (`input hash mismatch`) cannot unlock. `DayStale` carries the date | clip publish / existing lock rules unchanged |
 | Desk rules | TT `accounts.yaml` (per-instrument `fee_schedule`, date `trading_days`) plus TVA `desk_rules.yaml` account → desk. Missing account → `Konto fehlt`. Topstep desk never applied to other accounts | `rules.yaml` as on main |
-| R-MAX10 | counts JX2 `position_id`s; if none, counts lots and stamps `count_basis: lots` | existing evidence (`count` / `max` / `trade_ids` only) |
+| R-MAX10 | counts JX2 `position_id`s from `--positions-dir`; if none, counts lots and stamps `count_basis: lots` plus `count_basis_reason` | existing evidence (`count` / `max` / `trade_ids` only) |
 
 Independent recomputation stays with the coach (R8 / PR-46). `docs/JOURNAL_EXTENSION_PLAN.md` is still not in the extract [NV].

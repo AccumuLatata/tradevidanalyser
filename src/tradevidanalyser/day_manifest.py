@@ -406,6 +406,8 @@ def build_day(
     include_manual: bool = False,
     reconcile_dir: Path | None = None,
     provider: str | None = None,
+    positions_dir: Path | None = None,
+    account: str | None = None,
 ) -> DayBuildResult:
     if not day_manifest_enabled():
         raise DayManifestError(MANIFEST_OFF_ERROR)
@@ -445,7 +447,9 @@ def build_day(
             if net_fees_enabled():
                 from tradevidanalyser.fills import load_tt_journal_dir
 
-                fills, journal_trades = load_tt_journal_dir(csv_path)
+                fills, journal_trades = load_tt_journal_dir(
+                    csv_path, positions_dir=positions_dir, account=account
+                )
                 loader = "journal"
             else:
                 loader, fills = load_fills(csv_path)

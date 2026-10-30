@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -150,6 +150,16 @@ def test_net_fees_without_tt_cost_source_is_loud(
         if trade.status == "closed":
             assert trade.commission_cost is None
             assert trade.net_pnl_currency == trade.gross_pnl_currency
+
+
+def test_as_date_parses_iso_strings() -> None:
+    from tradevidanalyser.fills import _as_date, _account_from_trade_id, _positions_from_payload
+
+    assert _as_date("2026-09-14") == date(2026, 9, 14)
+    assert _as_date("2026-09-14T07:05:00+00:00") == date(2026, 9, 14)
+    assert _account_from_trade_id("tx:synth-topstepx:s1") == "synth-topstepx"
+    with pytest.raises(TypeError):
+        _positions_from_payload(object())
 
 
 def test_commission_fees_discarded() -> None:

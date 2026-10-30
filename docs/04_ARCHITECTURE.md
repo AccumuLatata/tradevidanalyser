@@ -316,15 +316,20 @@ PR-16 consumes ThesisTester; it does not fork it.
   journal directory (`journal_trades.parquet`,
   `journal_lot_sources.parquet`, positions, `week_manifest.json`).
   Costs, net, and `account` come from those artifacts (JX1/TJ4
-  already applied). Positions come from TT JX2
-  (`build_journal_positions` or `write_journal_positions` output).
-  A TradesViz CSV under the flag is `Netto ohne Kostenquelle`.
+  already applied). Account is taken from `journal_lot_sources` or
+  `trade_id` `tx:{account}:{Id}` and checked against `--account`.
+  Positions come from an explicit `--positions-dir`
+  (`journal_positions.parquet`); without it the fallback is
+  `build_journal_positions`. A TradesViz CSV under the flag is
+  `Netto ohne Kostenquelle`.
   Publish follows TT `report.py:654-657`: `validate_week_manifest`,
   `assert_manifest_inputs_match`, `assert_claimed_lock_supported`,
   then `lock_status == locked` with matching week and account.
   The week file is written by `lock_files` (a tick `prepare_manifest`
-  is required). A hand-written `locked` or a tampered hash cannot
-  unlock.
+  is required). Hashed inputs are TT `inputs: [{role, path, sha256}]`
+  mapped to the caller-supplied journal/positions/prepare/accounts
+  paths. A hand-edited `locked` (`lock_status_inconsistent`) or a
+  tampered hash (`input hash mismatch`) cannot unlock.
   Desk rules: TT-shaped synthetic `accounts.yaml` (per-instrument
   `fee_schedule`, explicit `trading_days` dates) plus TVA
   `desk_rules.yaml` (account → desk). Topstep rules never apply to

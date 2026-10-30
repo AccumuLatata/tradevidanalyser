@@ -451,15 +451,22 @@ def _eval_max10(trades: list[RuleTrade], config: RulesConfig) -> RuleCheck:
         if position_ids:
             ids = list(dict.fromkeys(position_ids))
             count_basis = "positions"
+            evidence = {
+                "count": len(ids),
+                "max": config.max_trades_per_day,
+                "trade_ids": ids,
+                "count_basis": count_basis,
+            }
         else:
             ids = [trade.tva_trade_id for trade in trades]
             count_basis = "lots"
-        evidence = {
-            "count": len(ids),
-            "max": config.max_trades_per_day,
-            "trade_ids": ids,
-            "count_basis": count_basis,
-        }
+            evidence = {
+                "count": len(ids),
+                "max": config.max_trades_per_day,
+                "trade_ids": ids,
+                "count_basis": count_basis,
+                "count_basis_reason": "position_id fehlt",
+            }
     else:
         ids = [trade.tva_trade_id for trade in trades]
         evidence = {"count": len(ids), "max": config.max_trades_per_day, "trade_ids": ids}

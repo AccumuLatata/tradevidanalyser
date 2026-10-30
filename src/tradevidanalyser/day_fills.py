@@ -311,6 +311,8 @@ def ingest_fills_exclusive(
     include_manual: bool,
     prefer_import: bool | None,
     reconcile_dir: Path | None,
+    positions_dir: Path | None = None,
+    account: str | None = None,
 ) -> FillsResult | None:
     """Write the whole day when exclusive+day-path, else None (legacy window)."""
     if not exclusive_fills_enabled():
@@ -337,7 +339,9 @@ def ingest_fills_exclusive(
             if net_fees_enabled():
                 if csv_path.is_file():
                     raise FillsError(NO_COST_SOURCE_ERROR)
-                fills, journal_trades = load_tt_journal_dir(csv_path)
+                fills, journal_trades = load_tt_journal_dir(
+                    csv_path, positions_dir=positions_dir, account=account
+                )
                 loader = "journal"
             else:
                 loader, fills = load_fills(csv_path, prefer_import=prefer_import)

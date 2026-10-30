@@ -31,9 +31,17 @@ from tradevidanalyser.fills_mirror import (
     pair_journal_trades as mirror_pair,
     trade_to_dict,
 )
+from tradevidanalyser.accounts import (
+    ACCOUNT_MISMATCH,
+    ACCOUNT_MISSING,
+    AccountsError,
+    MULTI_ACCOUNT_ERROR,
+)
 from tradevidanalyser.schema import SessionRecord
 
 VENUES = ("topstepx", "amp", "unknown")
+POSITIONS_MAPPING_MISSING = "positions mapping fehlt"
+_TX_ACCOUNT_RE = re.compile(r"^tx:(?P<account>[^:]+):")
 FORBIDDEN_COST_COLUMNS = ("commission", "fees")
 WINDOW_PAD = timedelta(minutes=30)
 TVA_FILL_COLUMNS = FILL_RECORD_COLUMNS + ("venue",)
@@ -146,7 +154,9 @@ def filter_fills_to_window(
 
 
 def assign_tva_trade_ids(trades: list[JournalTrade]) -> list[str]:
-    ordered = sorted(range(len(trades)), key=lambda i: (trades[i].entry_timestamp, trades[i].trade_id))
+    ordered = sorted(
+        range(len(trades)), key=lambda i: (trades[i].entry_timestamp, trades[i].trade_id)
+    )
     ids = [""] * len(trades)
     for rank, index in enumerate(ordered, start=1):
         ids[index] = f"T{rank:02d}"
@@ -252,7 +262,9 @@ def _trade_from_pandas_row(row: dict[str, Any]) -> JournalTrade:
         fee_ticks=_opt_float(row.get("fee_ticks")),
         net_ticks=_opt_float(row.get("net_ticks")),
         hold_seconds=_opt_float(row.get("hold_seconds")),
-        bars_held=None if row.get("bars_held") is None or _is_nan(row.get("bars_held")) else int(row["bars_held"]),
+        bars_held=None
+        if row.get("bars_held") is None or _is_nan(row.get("bars_held"))
+        else int(row["bars_held"]),
         mae_points=_opt_float(row.get("mae_points")),
         mfe_points=_opt_float(row.get("mfe_points")),
         stop_price=_opt_float(row.get("stop_price")),
@@ -285,6 +297,12 @@ def _as_date(value: Any) -> date:
         return value.date()
     if isinstance(value, date):
         return value
+    if isinstance(value, str):
+        raw = value.strip()
+        try:
+            return date.fromisoformat(raw[:10])
+        except ValueError as exc:
+            raise FillsError(f"fill session_date must be a calendar date (got {value!r})") from exc
     raise FillsError(f"fill session_date must be a calendar date (got {value!r})")
 
 
@@ -304,22 +322,26 @@ def _positions_from_payload(payload: Any) -> list[dict[str, Any]]:
     if payload is None:
         return []
     if hasattr(payload, "to_dict"):
-        try:
-            return list(payload.to_dict(orient="records"))
-        except TypeError:
-            pass
+        return list(payload.to_dict(orient="records"))
     if isinstance(payload, list):
         rows: list[dict[str, Any]] = []
         for item in payload:
             if isinstance(item, dict):
                 rows.append(item)
             else:
-                rows.append({name: getattr(item, name) for name in dir(item) if not name.startswith("_")})
+                rows.append(
+                    {name: getattr(item, name) for name in dir(item) if not name.startswith("_")}
+                )
         return rows
-    return []
+    raise TypeError(f"positions payload {type(payload).__name__} is not a table or list")
 
 
-def _attach_position_ids(trades: list[JournalTrade], positions: list[dict[str, Any]]) -> list[JournalTrade]:
+def _attach_position_ids(
+    trades: list[JournalTrade],
+    positions: list[dict[str, Any]],
+    *,
+    expected: bool,
+) -> list[JournalTrade]:
     by_trade: dict[str, str] = {}
     for raw in positions:
         pid = raw.get("position_id") or raw.get("id")
@@ -331,11 +353,65 @@ def _attach_position_ids(trades: list[JournalTrade], positions: list[dict[str, A
                 continue
             by_trade[str(trade_id)] = str(pid)
     if not by_trade:
+        if expected:
+            raise JournalIngestError(POSITIONS_MAPPING_MISSING)
         return trades
     return [
         replace(trade, position_id=by_trade.get(trade.trade_id, trade.position_id))
         for trade in trades
     ]
+
+
+def _unique_accounts(values: list[str]) -> list[str]:
+    found: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        key = str(raw).strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        found.append(key)
+    return found
+
+
+def _account_from_trade_id(trade_id: str) -> str | None:
+    match = _TX_ACCOUNT_RE.match(str(trade_id))
+    if match is None:
+        return None
+    return match.group("account")
+
+
+def _account_from_lot_sources(lots_rows: list[dict[str, Any]]) -> str | None:
+    values = _unique_accounts(
+        [str(row["account"]) for row in lots_rows if row.get("account") not in {None, ""}]
+    )
+    if len(values) > 1:
+        raise AccountsError(MULTI_ACCOUNT_ERROR)
+    return values[0] if values else None
+
+
+def _account_from_trade_ids(trades: list[JournalTrade]) -> str | None:
+    values = _unique_accounts(
+        [acc for acc in (_account_from_trade_id(trade.trade_id) for trade in trades) if acc]
+    )
+    if len(values) > 1:
+        raise AccountsError(MULTI_ACCOUNT_ERROR)
+    return values[0] if values else None
+
+
+def _stamp_journal_account(
+    trades: list[JournalTrade],
+    lots_rows: list[dict[str, Any]],
+    *,
+    account: str | None,
+) -> list[JournalTrade]:
+    derived = _account_from_lot_sources(lots_rows) or _account_from_trade_ids(trades)
+    if derived is None:
+        raise AccountsError(ACCOUNT_MISSING)
+    requested = None if account is None or not str(account).strip() else str(account).strip()
+    if requested is not None and requested != derived:
+        raise AccountsError(f"{ACCOUNT_MISMATCH}: {requested} != {derived}")
+    return [replace(trade, account=derived) for trade in trades]
 
 
 def _fills_from_journal_trades(trades: list[JournalTrade]) -> list[FillRecord]:
@@ -393,14 +469,23 @@ def _fills_from_journal_trades(trades: list[JournalTrade]) -> list[FillRecord]:
     return fills
 
 
-def load_tt_journal_dir(journal_dir: Path) -> tuple[list[FillRecord], list[JournalTrade]]:
-    """Flag-on source: TT journal artifacts, not the TradesViz CSV."""
+def load_tt_journal_dir(
+    journal_dir: Path,
+    *,
+    positions_dir: Path | None = None,
+    account: str | None = None,
+) -> tuple[list[FillRecord], list[JournalTrade]]:
+    """Flag-on source: TT journal artifacts, not the TradesViz CSV.
+
+    Positions come from ``positions_dir/journal_positions.parquet`` when that
+    directory is given. Without it the fallback is ``build_journal_positions``.
+    """
     from tradevidanalyser.tt_journal import (
         JOURNAL_LOT_SOURCES_NAME,
+        JOURNAL_POSITIONS_PARQUET,
         JOURNAL_TRADES_NAME,
         build_journal_positions,
         is_tt_journal_dir,
-        journal_positions_path,
     )
 
     root = Path(journal_dir)
@@ -411,15 +496,14 @@ def load_tt_journal_dir(journal_dir: Path) -> tuple[list[FillRecord], list[Journ
     if not lots_path.is_file():
         raise JournalIngestError(f"{JOURNAL_LOT_SOURCES_NAME} fehlt")
     trades_table = pq.read_table(trades_path)
+    lots_rows = pq.read_table(lots_path).to_pylist()
     trades = [_trade_from_pandas_row(row) for row in trades_table.to_pylist()]
-    pos_file = journal_positions_path(root)
-    if pos_file is not None:
-        if pos_file.suffix == ".json":
-            payload = store.read_json(pos_file)
-            positions = payload if isinstance(payload, list) else payload.get("positions") or []
-            trades = _attach_position_ids(trades, _positions_from_payload(positions))
-        else:
-            trades = _attach_position_ids(trades, pq.read_table(pos_file).to_pylist())
+    trades = _stamp_journal_account(trades, lots_rows, account=account)
+    if positions_dir is not None:
+        pos_file = Path(positions_dir) / JOURNAL_POSITIONS_PARQUET
+        if not pos_file.is_file():
+            raise JournalIngestError(f"{JOURNAL_POSITIONS_PARQUET} fehlt")
+        trades = _attach_position_ids(trades, pq.read_table(pos_file).to_pylist(), expected=True)
     else:
         import pandas as pd
 
@@ -427,7 +511,7 @@ def load_tt_journal_dir(journal_dir: Path) -> tuple[list[FillRecord], list[Journ
             pd.read_parquet(trades_path),
             pd.read_parquet(lots_path),
         )
-        trades = _attach_position_ids(trades, _positions_from_payload(positions))
+        trades = _attach_position_ids(trades, _positions_from_payload(positions), expected=False)
     for trade in trades:
         if trade.status != STATUS_CLOSED:
             continue
@@ -441,6 +525,8 @@ def load_fills(
     executions: Path,
     *,
     prefer_import: bool | None = None,
+    positions_dir: Path | None = None,
+    account: str | None = None,
 ) -> tuple[str, list[FillRecord]]:
     from tradevidanalyser.flags import net_fees_enabled
 
@@ -448,12 +534,14 @@ def load_fills(
     if net_fees_enabled():
         if path.is_file():
             raise JournalIngestError(NO_COST_SOURCE_ERROR)
-        fills, _trades = load_tt_journal_dir(path)
+        fills, _trades = load_tt_journal_dir(path, positions_dir=positions_dir, account=account)
         return "journal", fills
     use_import = thesistester_available() if prefer_import is None else prefer_import
     if use_import:
         if not thesistester_available():
-            raise FillsError("ThesisTester is not installed (pip install 'tradevidanalyser[journal]')")
+            raise FillsError(
+                "ThesisTester is not installed (pip install 'tradevidanalyser[journal]')"
+            )
         fills = _import_load(path)
         return "import", attach_csv_calendar_dates(fills, path)
     return "mirror", mirror_load(path, profile=TRADESVIZ_EXECUTIONS_PROFILE)
@@ -519,6 +607,8 @@ def load_and_pair(
     *,
     include_manual: bool = False,
     prefer_import: bool | None = None,
+    positions_dir: Path | None = None,
+    account: str | None = None,
 ) -> tuple[str, list[FillRecord], list[JournalTrade]]:
     from tradevidanalyser.flags import net_fees_enabled
 
@@ -526,7 +616,7 @@ def load_and_pair(
     if net_fees_enabled():
         if path.is_file():
             raise JournalIngestError(NO_COST_SOURCE_ERROR)
-        fills, trades = load_tt_journal_dir(path)
+        fills, trades = load_tt_journal_dir(path, positions_dir=positions_dir, account=account)
         return "journal", fills, trades
     loader, fills = load_fills(path, prefer_import=prefer_import)
     return loader, fills, pair_fills(fills, include_manual=include_manual, loader=loader)
@@ -561,7 +651,9 @@ def fills_table(fills: list[FillRecord], *, venue: str) -> pa.Table:
     arrays["tags"] = pa.array([row["tags"] for row in rows], type=pa.list_(pa.string()))
     arrays["notes_text"] = pa.array([row["notes_text"] for row in rows], type=pa.string())
     arrays["declared_stop"] = pa.array([row["declared_stop"] for row in rows], type=pa.float64())
-    arrays["declared_target"] = pa.array([row["declared_target"] for row in rows], type=pa.float64())
+    arrays["declared_target"] = pa.array(
+        [row["declared_target"] for row in rows], type=pa.float64()
+    )
     arrays["flags"] = pa.array([row["flags"] for row in rows], type=pa.list_(pa.string()))
     arrays["venue"] = pa.array([row["venue"] for row in rows], type=pa.string())
     table = pa.table(arrays)
@@ -835,9 +927,7 @@ def load_reconcile_status_map(reconcile_dir: Path) -> dict[tuple[date, str], str
             raise FillsError(f"reconcile.json days[{index}] bad session_date {session!r}")
         key = (day, instrument)
         if key in mapping and mapping[key] != status:
-            raise FillsError(
-                f"reconcile.json has conflicting status for {instrument} on {session}"
-            )
+            raise FillsError(f"reconcile.json has conflicting status for {instrument} on {session}")
         mapping[key] = status
     return mapping
 
@@ -896,6 +986,8 @@ def ingest_fills(
     include_manual: bool = False,
     prefer_import: bool | None = None,
     reconcile_dir: Path | None = None,
+    positions_dir: Path | None = None,
+    account: str | None = None,
 ) -> FillsResult:
     from tradevidanalyser.day_fills import ingest_fills_exclusive
     from tradevidanalyser.flags import exclusive_fills_enabled, net_fees_enabled
@@ -909,6 +1001,8 @@ def ingest_fills(
             include_manual=include_manual,
             prefer_import=prefer_import,
             reconcile_dir=reconcile_dir,
+            positions_dir=positions_dir,
+            account=account,
         )
         if exclusive is not None:
             return exclusive
@@ -919,7 +1013,9 @@ def ingest_fills(
         if net_fees_enabled():
             if source.is_file():
                 raise JournalIngestError(NO_COST_SOURCE_ERROR)
-            fills, journal_trades = load_tt_journal_dir(source)
+            fills, journal_trades = load_tt_journal_dir(
+                source, positions_dir=positions_dir, account=account
+            )
             loader = "journal"
         else:
             loader, fills = load_fills(source, prefer_import=prefer_import)

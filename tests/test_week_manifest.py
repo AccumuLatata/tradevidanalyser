@@ -7,7 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from tradevidanalyser.tt_journal import TT_LOCK_VALIDATE_MISSING
+from tradevidanalyser.tt_journal import (
+    TT_LOCK_VALIDATE_MISSING,
+    WEEK_MANIFEST_INPUT_MISSING,
+    WEEK_MANIFEST_ROLE_UNKNOWN,
+    hashed_input_files,
+)
 from tradevidanalyser.week_manifest import (
     SCHEMA_VERSION,
     WEEK_MANIFEST_MISSING,
@@ -73,3 +78,55 @@ def test_handwritten_locked_file_still_needs_tt_verify(tmp_path: Path) -> None:
         match=f"{re.escape(TT_LOCK_VALIDATE_MISSING)}|{re.escape(WEEK_MANIFEST_NOT_LOCKED)}|{re.escape(WEEK_MANIFEST_INPUTS)}",
     ):
         require_locked_week_manifest(tmp_path, DAY, account="synth-amp")
+
+
+def _role_sources(tmp_path: Path) -> dict[str, Path]:
+    journal = tmp_path / "journal"
+    positions = tmp_path / "positions"
+    prepare_dir = tmp_path / "prepare"
+    journal.mkdir()
+    positions.mkdir()
+    prepare_dir.mkdir()
+    (journal / "journal_trades.parquet").write_bytes(b"j")
+    (positions / "journal_positions.parquet").write_bytes(b"p")
+    prepare = prepare_dir / "prepare_manifest.json"
+    prepare.write_text("{}", encoding="utf-8")
+    accounts = tmp_path / "accounts.yaml"
+    accounts.write_text("accounts: []\n", encoding="utf-8")
+    return {
+        "journal_dir": journal,
+        "positions_dir": positions,
+        "prepare_manifest": prepare,
+        "accounts": accounts,
+    }
+
+
+def test_hashed_input_files_maps_roles(tmp_path: Path) -> None:
+    sources = _role_sources(tmp_path)
+    manifest = {
+        "inputs": [
+            {"role": "journal", "path": "journal_trades.parquet", "sha256": "aa"},
+            {"role": "positions", "path": "journal_positions.parquet", "sha256": "bb"},
+            {"role": "prepare", "path": "prepare_manifest.json", "sha256": "cc"},
+            {"role": "accounts", "path": "accounts.yaml", "sha256": "dd"},
+        ]
+    }
+    files = hashed_input_files(manifest, **sources)
+    assert files["journal"] == sources["journal_dir"]
+    assert files["positions"] == sources["positions_dir"]
+    assert files["prepare"] == sources["prepare_manifest"]
+    assert files["accounts"] == sources["accounts"]
+
+
+def test_hashed_input_files_unknown_role_is_loud(tmp_path: Path) -> None:
+    sources = _role_sources(tmp_path)
+    manifest = {"inputs": [{"role": "ticks", "path": "ticks.parquet", "sha256": "00"}]}
+    with pytest.raises(ValueError, match=WEEK_MANIFEST_ROLE_UNKNOWN):
+        hashed_input_files(manifest, **sources)
+
+
+def test_hashed_input_files_missing_path_is_loud(tmp_path: Path) -> None:
+    sources = _role_sources(tmp_path)
+    manifest = {"inputs": [{"role": "journal", "path": "missing.parquet", "sha256": "00"}]}
+    with pytest.raises(ValueError, match=WEEK_MANIFEST_INPUT_MISSING):
+        hashed_input_files(manifest, **sources)

@@ -180,35 +180,95 @@ def tt_writer_api_available() -> bool:
     return True
 
 
-def hashed_input_files(manifest: dict[str, Any], journal_dir: Path) -> dict[str, Path]:
-    """Resolve the manifest's hashed input files against ``journal_dir``."""
-    raw = manifest.get("files")
-    if raw is None:
-        raise ValueError("Wochenmanifest hashed inputs fehlen")
+WEEK_MANIFEST_INPUTS = "Wochenmanifest hashed inputs fehlen"
+WEEK_MANIFEST_ROLE_UNKNOWN = "Wochenmanifest role unbekannt"
+WEEK_MANIFEST_INPUT_MISSING = "Wochenmanifest input fehlt"
+
+# TT week_manifest.json inputs[].role → lock_files source the caller supplied.
+_INPUT_ROLE_SOURCES = {
+    "journal": "journal_dir",
+    "journal_dir": "journal_dir",
+    "positions": "positions_dir",
+    "positions_dir": "positions_dir",
+    "prepare": "prepare_manifest",
+    "prepare_manifest": "prepare_manifest",
+    "accounts": "accounts",
+}
+
+
+def lock_source_paths(
+    root: Path,
+    *,
+    journal_dir: Path | None = None,
+    positions_dir: Path | None = None,
+    prepare_manifest: Path | None = None,
+    accounts: Path | None = None,
+) -> dict[str, Path]:
+    """Conventional lock sources under ``root``, with explicit overrides."""
+    return {
+        "journal_dir": Path(journal_dir) if journal_dir is not None else Path(root) / "journal",
+        "positions_dir": Path(positions_dir)
+        if positions_dir is not None
+        else Path(root) / "positions",
+        "prepare_manifest": (
+            Path(prepare_manifest)
+            if prepare_manifest is not None
+            else Path(root) / "prepare" / "prepare_manifest.json"
+        ),
+        "accounts": Path(accounts) if accounts is not None else Path(root) / "accounts.yaml",
+    }
+
+
+def _resolve_role_path(source: Path, basename: str) -> Path:
+    name = Path(basename)
+    if name.is_absolute():
+        return name
+    if source.is_file():
+        if source.name == name.name:
+            return source
+        return source.parent / name.name
+    return source / name.name
+
+
+def hashed_input_files(
+    manifest: dict[str, Any],
+    *,
+    journal_dir: Path,
+    positions_dir: Path,
+    prepare_manifest: Path,
+    accounts: Path,
+) -> dict[str, Path]:
+    """Map TT ``inputs: [{role, path, sha256}]`` to the caller-supplied sources.
+
+    Roles are ``journal`` / ``positions`` / ``prepare`` / ``accounts`` (and the
+    lock_files kwarg aliases). Unknown role or a missing path is loud.
+    """
+    raw = manifest.get("inputs")
+    if not isinstance(raw, list) or not raw:
+        raise ValueError(WEEK_MANIFEST_INPUTS)
+    supplied = {
+        "journal_dir": Path(journal_dir),
+        "positions_dir": Path(positions_dir),
+        "prepare_manifest": Path(prepare_manifest),
+        "accounts": Path(accounts),
+    }
     files: dict[str, Path] = {}
-    if isinstance(raw, dict):
-        for name, spec in raw.items():
-            key = str(name)
-            if isinstance(spec, dict) and spec.get("path"):
-                path = Path(str(spec["path"]))
-                files[key] = path if path.is_absolute() else journal_dir / path
-            else:
-                files[key] = journal_dir / key
-        return files
-    if isinstance(raw, list):
-        for spec in raw:
-            if isinstance(spec, str):
-                files[spec] = journal_dir / spec
-            elif isinstance(spec, dict):
-                name = spec.get("name") or spec.get("path")
-                if not name:
-                    raise ValueError("Wochenmanifest hashed inputs fehlen")
-                path = Path(str(spec.get("path") or name))
-                files[str(name)] = path if path.is_absolute() else journal_dir / path
-            else:
-                raise ValueError("Wochenmanifest hashed inputs fehlen")
-        return files
-    raise ValueError("Wochenmanifest hashed inputs fehlen")
+    for spec in raw:
+        if not isinstance(spec, dict):
+            raise ValueError(WEEK_MANIFEST_INPUTS)
+        role = spec.get("role")
+        source_key = _INPUT_ROLE_SOURCES.get(str(role) if role is not None else "")
+        if source_key is None:
+            raise ValueError(f"{WEEK_MANIFEST_ROLE_UNKNOWN}: {role!r}")
+        source = supplied[source_key]
+        basename = spec.get("path")
+        if basename is None or str(basename).strip() == "":
+            raise ValueError(WEEK_MANIFEST_INPUTS)
+        resolved = _resolve_role_path(source, str(basename))
+        if not resolved.exists():
+            raise ValueError(f"{WEEK_MANIFEST_INPUT_MISSING}: {role} {basename}")
+        files[str(role)] = source
+    return files
 
 
 def is_tt_journal_dir(path: Path) -> bool:
