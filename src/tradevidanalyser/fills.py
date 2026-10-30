@@ -271,6 +271,24 @@ def _apply_csv_fees(trades: list[JournalTrade], fills: list[FillRecord]) -> list
     return out
 
 
+def _overlay_csv_costs(fills: list[FillRecord], path: Path) -> list[FillRecord]:
+    """Copy TV commission/fees from the CSV. Import drops them; sidecar needs them."""
+    if not fills or not path.is_file():
+        return fills
+    by_id = {
+        fill.fill_id: fill
+        for fill in mirror_load(path, profile=TRADESVIZ_EXECUTIONS_PROFILE)
+    }
+    out: list[FillRecord] = []
+    for fill in fills:
+        src = by_id.get(fill.fill_id)
+        if src is None:
+            out.append(fill)
+            continue
+        out.append(replace(fill, commission=src.commission, fees=src.fees))
+    return out
+
+
 def assign_tva_trade_ids(trades: list[JournalTrade]) -> list[str]:
     ordered = sorted(
         range(len(trades)), key=lambda i: (trades[i].entry_timestamp, trades[i].trade_id)
@@ -660,8 +678,12 @@ def load_fills(
             raise FillsError(
                 "ThesisTester is not installed (pip install 'tradevidanalyser[journal]')"
             )
-        fills = _import_load(path)
-        return "import", attach_csv_calendar_dates(fills, path)
+        fills = attach_csv_calendar_dates(_import_load(path), path)
+        from tradevidanalyser.flags import sidecar_enabled
+
+        if sidecar_enabled():
+            fills = _overlay_csv_costs(fills, path)
+        return "import", fills
     return "mirror", mirror_load(path, profile=TRADESVIZ_EXECUTIONS_PROFILE)
 
 

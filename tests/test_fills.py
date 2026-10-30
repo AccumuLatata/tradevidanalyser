@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -442,6 +443,32 @@ def test_sidecar_carries_fees_net_equals_gross_minus_fees(
     assert commission == pytest.approx(4.5)
     assert day_fee == pytest.approx(2.5)
     assert net == pytest.approx(gross - commission - day_fee)
+
+    # Journal CI uses the import loader, which drops TV commission/fees.
+    from tradevidanalyser.fills import load_fills, pair_fills
+
+    monkeypatch.setattr("tradevidanalyser.fills.thesistester_available", lambda: True)
+    monkeypatch.setattr(
+        "tradevidanalyser.fills._import_load",
+        lambda path: [
+            replace(fill, commission=None, fees=None)
+            for fill in load_tradesviz_executions(path, profile="tradesviz_executions")
+        ],
+    )
+    monkeypatch.setattr(
+        "tradevidanalyser.fills._import_pair",
+        lambda fills, include_manual=False: pair_journal_trades(
+            fills, include_manual=include_manual
+        ),
+    )
+    loader, loaded = load_fills(csv)
+    assert loader == "import"
+    imported = pair_fills(loaded, loader=loader)
+    assert imported[0].commission_cost == pytest.approx(4.5)
+    assert imported[0].day_fee_allocation == pytest.approx(2.5)
+    assert imported[0].net_pnl_currency == pytest.approx(
+        imported[0].gross_pnl_currency - 4.5 - 2.5
+    )
 
 
 def test_zero_fills_clears_previous_parquet(tva_root: Path, tmp_path: Path) -> None:
