@@ -466,7 +466,9 @@ def publish_session(
     require_fresh_for_session(root, session_id)
     lock = acquire_day_publish_lock(root, session_id)
     if net_fees_enabled() and lock is None and store.session_json_path(root, session_id).is_file():
-        raise DayStale([])
+        from tradevidanalyser.day_manifest import nominal_vienna_date
+
+        raise DayStale([nominal_vienna_date(store.load_session(root, session_id))])
     try:
         return run_publish(
             session_id, root=root, notion=notion, provider_name=provider_name

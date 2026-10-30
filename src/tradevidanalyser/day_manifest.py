@@ -735,20 +735,28 @@ def csv_window_fill_identities(fills: list[FillRecord], day: date) -> list[FillI
 def acquire_day_publish_lock(root: Path, session_id: str) -> Path | None:
     """Lock a built day-path day for ``tva publish``. Does not create ``days/<date>/``.
 
-    ``TVA_NET_FEES`` (TT:892) may only publish under a held day lock. A missing
-    built day is ``DayStale``, not an unlocked clip publish.
+    ``TVA_NET_FEES`` (TT:903) may only publish under a held day lock **and** a
+    weekly manifest with ``status: locked``. A missing built day is
+    ``DayStale`` (always dated). An open or missing week is
+    ``WeekManifestError``.
     """
     require_lock = net_fees_enabled()
-    if not day_manifest_enabled():
-        if require_lock:
-            raise DayStale([])
-        return None
     if not store.is_safe_path_name(session_id):
         raise ValueError(f"unsafe session id {session_id!r}")
     if not store.session_json_path(root, session_id).is_file():
+        if require_lock and not day_manifest_enabled():
+            raise DayStale([])
         return None
     record = store.load_session(root, session_id)
     day = nominal_vienna_date(record)
+    if require_lock:
+        from tradevidanalyser.week_manifest import require_locked_week_manifest
+
+        require_locked_week_manifest(root, day)
+    if not day_manifest_enabled():
+        if require_lock:
+            raise DayStale([day])
+        return None
     folder = day_dir(root, day)
     if not folder.is_dir() or not is_day_path(root, clips_for_day(root, day)):
         if require_lock:

@@ -783,6 +783,11 @@ def publish_session(
         )
     from tradevidanalyser.flags import day_publish_enabled, net_fees_enabled
 
+    if net_fees_enabled():
+        from tradevidanalyser.day_manifest import nominal_vienna_date
+        from tradevidanalyser.week_manifest import require_locked_week_manifest
+
+        require_locked_week_manifest(root, nominal_vienna_date(record))
     if day_publish_enabled():
         from tradevidanalyser.day_manifest import DayStale, day_state, nominal_vienna_date
         from tradevidanalyser.day_publish import publish_session_day_path
