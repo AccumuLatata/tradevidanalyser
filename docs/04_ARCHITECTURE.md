@@ -322,6 +322,9 @@ PR-16 consumes ThesisTester; it does not fork it.
   Publish follows TT `report.py:654-657`: `validate_week_manifest`,
   `assert_manifest_inputs_match`, `assert_claimed_lock_supported`,
   then `lock_status == locked` with matching week and account.
+  The week file is written by `lock_files` (a tick `prepare_manifest`
+  is required). A hand-written `locked` or a tampered hash cannot
+  unlock.
   Desk rules: TT-shaped synthetic `accounts.yaml` (per-instrument
   `fee_schedule`, explicit `trading_days` dates) plus TVA
   `desk_rules.yaml` (account → desk). Topstep rules never apply to

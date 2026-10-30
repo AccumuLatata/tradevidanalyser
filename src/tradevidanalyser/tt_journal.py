@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -51,19 +52,97 @@ def build_journal_positions(trades: Any, lot_sources: Any) -> Any:
     return fn(trades, lot_sources)
 
 
-def write_journal_positions(*args: Any, **kwargs: Any) -> Any:
+def write_journal_positions(
+    *,
+    journal_dir: Any,
+    account: str,
+    output_dir: Any,
+) -> Any:
     fn = require_tt_symbol(POSITIONS_MODULE, "write_journal_positions")
-    return fn(*args, **kwargs)
+    return fn(journal_dir=journal_dir, account=account, output_dir=output_dir)
 
 
-def ingest_topstepx(*args: Any, **kwargs: Any) -> Any:
+def ingest_topstepx(
+    *,
+    trades: Any,
+    tradesviz: Any,
+    account: str,
+    accounts: Any,
+    output_dir: Any,
+    accept_phantoms: Any = None,
+    journal_risk_ticks: Any = None,
+) -> Any:
     fn = require_tt_symbol(TOPSTEPX_MODULE, "ingest_topstepx")
-    return fn(*args, **kwargs)
+    kwargs: dict[str, Any] = {
+        "trades": trades,
+        "tradesviz": tradesviz,
+        "account": account,
+        "accounts": accounts,
+        "output_dir": output_dir,
+    }
+    if accept_phantoms is not None:
+        kwargs["accept_phantoms"] = accept_phantoms
+    if journal_risk_ticks is not None:
+        kwargs["journal_risk_ticks"] = journal_risk_ticks
+    return fn(**kwargs)
 
 
-def write_topstepx_artifacts(*args: Any, **kwargs: Any) -> Any:
+def reconcile_topstepx(
+    lots: Any,
+    fills: Any,
+    *,
+    account: str,
+    fee_schedule: Mapping[str, float],
+    accepted_phantoms: Any = (),
+    journal_risk_ticks: Any = None,
+) -> Any:
+    fn = require_tt_symbol(TOPSTEPX_MODULE, "reconcile_topstepx")
+    kwargs: dict[str, Any] = {
+        "account": account,
+        "fee_schedule": fee_schedule,
+        "accepted_phantoms": accepted_phantoms,
+    }
+    if journal_risk_ticks is not None:
+        kwargs["journal_risk_ticks"] = journal_risk_ticks
+    return fn(lots, fills, **kwargs)
+
+
+def write_topstepx_artifacts(
+    output_dir: Any,
+    trades: Any,
+    sources: Any,
+    days: Any,
+    *,
+    account: str,
+) -> Any:
     fn = require_tt_symbol(TOPSTEPX_MODULE, "write_topstepx_artifacts")
-    return fn(*args, **kwargs)
+    return fn(output_dir, trades, sources, days, account=account)
+
+
+def lock_files(
+    *,
+    week: str,
+    account: str,
+    accounts: Any,
+    journal_dir: Any,
+    positions_dir: Any,
+    prepare_manifest: Any,
+    output_dir: Any,
+    tva_inventory: Any = None,
+    exceptions: Any = None,
+) -> Any:
+    fn = require_tt_symbol(LOCK_MODULE, "lock_files")
+    return fn(
+        week=week,
+        account=account,
+        accounts=accounts,
+        journal_dir=journal_dir,
+        positions_dir=positions_dir,
+        prepare_manifest=prepare_manifest,
+        output_dir=output_dir,
+        tva_inventory=tva_inventory,
+        exceptions=exceptions,
+    )
 
 
 def reconcile_files(*args: Any, **kwargs: Any) -> Any:
@@ -76,6 +155,7 @@ def tt_lock_api_available() -> bool:
         require_tt_symbol(LOCK_MODULE, "validate_week_manifest")
         require_tt_symbol(LOCK_MODULE, "assert_manifest_inputs_match")
         require_tt_symbol(LOCK_MODULE, "assert_claimed_lock_supported")
+        require_tt_symbol(LOCK_MODULE, "lock_files")
     except ImportError:
         return False
     return True
@@ -84,6 +164,17 @@ def tt_lock_api_available() -> bool:
 def tt_position_api_available() -> bool:
     try:
         require_tt_symbol(POSITIONS_MODULE, "build_journal_positions")
+        require_tt_symbol(POSITIONS_MODULE, "write_journal_positions")
+    except ImportError:
+        return False
+    return True
+
+
+def tt_writer_api_available() -> bool:
+    try:
+        require_tt_symbol(TOPSTEPX_MODULE, "ingest_topstepx")
+        require_tt_symbol(POSITIONS_MODULE, "write_journal_positions")
+        require_tt_symbol(LOCK_MODULE, "lock_files")
     except ImportError:
         return False
     return True
