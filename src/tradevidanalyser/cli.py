@@ -254,7 +254,7 @@ def main(argv: list[str] | None = None) -> int:
         "--executions",
         type=Path,
         default=None,
-        help="TradesViz executions CSV; omit for fills_match=not_run",
+        help="TradesViz executions CSV; TT journal directory when TVA_NET_FEES is on; omit for fills_match=not_run",
     )
     p_audit.add_argument(
         "--loader",

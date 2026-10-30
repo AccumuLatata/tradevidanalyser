@@ -287,6 +287,36 @@ def test_conflicting_status_fails_closed(tmp_path: Path) -> None:
         load_reconcile_status_map(path)
 
 
+def test_reconcile_tt_schema_without_instrument(tmp_path: Path) -> None:
+    """TT 4fc4af05 DayReconcile is day-wide: no instrument field on the day row."""
+    path = tmp_path / "reconcile.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "journal/v1",
+                "days": [
+                    {
+                        "session_date": "2026-05-14",
+                        "status": "reconciled",
+                        "journal_fill_count": 4,
+                        "amp_fill_count": 4,
+                        "journal_gross_usd": 1.5,
+                        "amp_ps_usd": 1.5,
+                        "fee_total_usd": 0.0,
+                        "day_fees_extra": 0.0,
+                        "note": "",
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    mapping = load_reconcile_status_map(path)
+    assert lookup_recon_status(date(2026, 5, 14), "MNQ", mapping) == "reconciled"
+    assert lookup_recon_status(date(2026, 5, 14), "MES", mapping) == "reconciled"
+
+
 def test_wrong_schema_version_fails_closed(tmp_path: Path) -> None:
     path = tmp_path / "reconcile.json"
     path.write_text(

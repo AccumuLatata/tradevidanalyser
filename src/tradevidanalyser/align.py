@@ -239,6 +239,22 @@ def compute_alignment(
     measurements = _clock_measurements(root, session_id, start)
     if manual_offset is not None:
         return _manual_alignment(manual_offset, measurements)
+    if sidecar_enabled():
+        from tradevidanalyser.sidecar import STATUS_VERIFIED, load_time_anchor
+
+        anchor = load_time_anchor(root, session_id)
+        if (
+            anchor is not None
+            and anchor.status == STATUS_VERIFIED
+            and anchor.first_frame_offset_s is not None
+        ):
+            return Alignment(
+                offset_s=_r(anchor.first_frame_offset_s, 6),
+                drift_s_per_h=0.0,
+                confidence=1.0,
+                method="sidecar",
+                samples=[],
+            )
     if not measurements:
         return _filename_alignment()
     return _ocr_alignment(measurements)

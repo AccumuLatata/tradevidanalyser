@@ -153,6 +153,124 @@ def filter_fills_to_window(
     return kept
 
 
+def session_core_utc_window(record: SessionRecord) -> tuple[datetime, datetime]:
+    """Unpadded clip span. ``session_utc_window`` adds ``WINDOW_PAD`` on both sides."""
+    start, end = session_utc_window(record)
+    return start + WINDOW_PAD, end - WINDOW_PAD
+
+
+def _fill_instant_utc(fill: FillRecord) -> datetime:
+    ts = fill.timestamp
+    if ts.tzinfo is None:
+        raise FillsError(f"fill {fill.fill_id!r} timestamp must be tz-aware")
+    return ts.astimezone(timezone.utc)
+
+
+def _core_distance_s(instant: datetime, start: datetime, end: datetime) -> float:
+    if start <= instant <= end:
+        return 0.0
+    if instant < start:
+        return (start - instant).total_seconds()
+    return (instant - end).total_seconds()
+
+
+def assign_fills_once(
+    target: SessionRecord,
+    fills: list[FillRecord],
+    *,
+    root: Path,
+) -> list[FillRecord]:
+    """Assign each fill to at most one session (sidecar fallback, no day flags).
+
+    Prefer the unpadded clip that contains the fill. Pad-only hits go to the
+    nearest unique clip so isolated sessions keep the ±30 min window.
+    """
+    sessions: list[SessionRecord] = []
+    for session_id in store.list_session_ids(root):
+        record = store.load_session(root, session_id)
+        sessions.append(record)
+    if not sessions:
+        sessions = [target]
+    cores: list[tuple[str, datetime, datetime]] = []
+    pads: list[tuple[str, datetime, datetime]] = []
+    for record in sessions:
+        pad_start, pad_end = session_utc_window(record)
+        core_start, core_end = session_core_utc_window(record)
+        cores.append((record.id, core_start, core_end))
+        pads.append((record.id, pad_start, pad_end))
+    owner: dict[str, str] = {}
+    for fill in fills:
+        instant = _fill_instant_utc(fill)
+        in_core = [
+            (session_id, start, end)
+            for session_id, start, end in cores
+            if start <= instant <= end
+        ]
+        if in_core:
+            in_core.sort(key=lambda item: (item[1], item[0]))
+            owner[fill.fill_id] = in_core[0][0]
+            continue
+        in_pad = [
+            (session_id, start, end)
+            for (session_id, start, end), (_, core_start, core_end) in zip(
+                pads, cores, strict=True
+            )
+            if start <= instant <= end
+        ]
+        if not in_pad:
+            continue
+        in_pad.sort(
+            key=lambda item: (
+                _core_distance_s(
+                    instant,
+                    next(core[1] for core in cores if core[0] == item[0]),
+                    next(core[2] for core in cores if core[0] == item[0]),
+                ),
+                item[1],
+                item[0],
+            )
+        )
+        owner[fill.fill_id] = in_pad[0][0]
+    return [fill for fill in fills if owner.get(fill.fill_id) == target.id]
+
+
+def _apply_csv_fees(trades: list[JournalTrade], fills: list[FillRecord]) -> list[JournalTrade]:
+    """Sidecar fallback: net = gross − (commission + fees), TVA_NET_FEES formula."""
+    from tradevidanalyser.fills_mirror import JOURNAL_POINT_VALUE, JOURNAL_TICK_SIZE
+
+    by_id = {fill.fill_id: fill for fill in fills}
+    out: list[JournalTrade] = []
+    for trade in trades:
+        if trade.status != STATUS_CLOSED or trade.gross_pnl_currency is None:
+            out.append(trade)
+            continue
+        commission = 0.0
+        fees = 0.0
+        for fill_id in (trade.entry_fill_id, trade.exit_fill_id):
+            fill = by_id.get(fill_id or "")
+            if fill is None:
+                continue
+            if fill.commission is not None:
+                commission += float(fill.commission)
+            if fill.fees is not None:
+                fees += float(fill.fees)
+        total = commission + fees
+        net = float(trade.gross_pnl_currency) - total
+        tick_value = JOURNAL_TICK_SIZE * JOURNAL_POINT_VALUE.get(trade.instrument, 0.0)
+        net_ticks = (net / tick_value) if tick_value else trade.net_ticks
+        out.append(
+            replace(
+                trade,
+                commission_cost=commission if commission else None,
+                day_fee_allocation=fees if fees else None,
+                net_pnl_currency=net,
+                fee_ticks=(total / tick_value) if tick_value and total else None,
+                net_ticks=net_ticks,
+            )
+        )
+    return out
+
+
 def assign_tva_trade_ids(trades: list[JournalTrade]) -> list[str]:
     ordered = sorted(
         range(len(trades)), key=lambda i: (trades[i].entry_timestamp, trades[i].trade_id)
@@ -594,11 +712,18 @@ def pair_fills(
         if trades is None:
             raise JournalIngestError(NO_COST_SOURCE_ERROR)
         return trades
+    from tradevidanalyser.flags import sidecar_enabled
+
     if loader == "import":
-        return _apply_imported_net_policy(_import_pair(fills, include_manual=include_manual))
+        imported = _apply_imported_net_policy(_import_pair(fills, include_manual=include_manual))
+        if sidecar_enabled() and not net_fees_enabled():
+            return _apply_csv_fees(imported, fills)
+        return imported
     paired = mirror_pair(fills, include_manual=include_manual)
     if net_fees_enabled():
         raise JournalIngestError(NO_COST_SOURCE_ERROR)
+    if sidecar_enabled():
+        return _apply_csv_fees(paired, fills)
     return paired
 
 
@@ -882,11 +1007,46 @@ def _recon_instrument(value: Any) -> str | None:
     return text or None
 
 
+DAY_WIDE_INSTRUMENT = ""
+
+
+def _recon_session_date(raw: dict[str, Any]) -> Any:
+    if raw.get("session_date") is not None:
+        return raw.get("session_date")
+    return raw.get("date")
+
+
+def _recon_row_instrument(raw: dict[str, Any]) -> str | None:
+    for key in ("instrument", "symbol", "underlying"):
+        inst = _recon_instrument(raw.get(key))
+        if inst is not None:
+            return inst
+    return None
+
+
+def _recon_nested_rows(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    """TT 4fc4af05 may nest per-instrument rows or omit instrument (day-wide)."""
+    for key in ("instruments", "by_instrument", "per_instrument", "rows"):
+        nested = raw.get(key)
+        if isinstance(nested, dict):
+            rows: list[dict[str, Any]] = []
+            for name, body in nested.items():
+                if isinstance(body, dict):
+                    rows.append({**body, "instrument": body.get("instrument") or name})
+                elif isinstance(body, str):
+                    rows.append({"instrument": name, "status": body})
+            return rows
+        if isinstance(nested, list):
+            return [item for item in nested if isinstance(item, dict)]
+    return []
+
+
 def load_reconcile_status_map(reconcile_dir: Path) -> dict[tuple[date, str], str]:
     """Read ThesisTester ``reconcile.json`` → ``(session_date, instrument) → status``.
 
     Join key is ThesisTester ``DayReconcile``: exact ``(session_date, instrument)``.
-    No PDF is opened. Unknown statuses and a non-object root fail closed.
+    TT 4fc4af05 may omit ``instrument`` (day-wide status) or nest it. No PDF is
+    opened. Unknown statuses and a non-object root fail closed.
     """
     path = reconcile_json_path(reconcile_dir)
     if not path.is_file():
@@ -903,32 +1063,48 @@ def load_reconcile_status_map(reconcile_dir: Path) -> dict[tuple[date, str], str
             f"reconcile.json schema_version must be {JOURNAL_STORE_SCHEMA} (got {schema!r})"
         )
     days = payload.get("days")
+    if isinstance(days, dict):
+        expanded: list[dict[str, Any]] = []
+        for key, body in days.items():
+            if isinstance(body, dict):
+                row = dict(body)
+                row.setdefault("session_date", key)
+                expanded.append(row)
+            else:
+                raise FillsError("reconcile.json days entries must be objects")
+        days = expanded
     if not isinstance(days, list):
         raise FillsError("reconcile.json has no days array")
     mapping: dict[tuple[date, str], str] = {}
     for index, raw in enumerate(days):
         if not isinstance(raw, dict):
             raise FillsError(f"reconcile.json days[{index}] is not an object")
-        session = raw.get("session_date")
-        instrument = _recon_instrument(raw.get("instrument"))
-        status = raw.get("status")
+        session = _recon_session_date(raw)
+        nested = _recon_nested_rows(raw)
+        rows = nested or [raw]
         if not isinstance(session, str) or not session.strip():
             raise FillsError(f"reconcile.json days[{index}] missing session_date")
-        if instrument is None:
-            raise FillsError(f"reconcile.json days[{index}] missing instrument")
-        if status not in RECON_STATUSES:
-            raise FillsError(
-                f"reconcile.json days[{index}] status must be one of "
-                + ", ".join(sorted(RECON_STATUSES))
-                + f" (got {status!r})"
-            )
         day = _recon_date(session)
         if day is None:
             raise FillsError(f"reconcile.json days[{index}] bad session_date {session!r}")
-        key = (day, instrument)
-        if key in mapping and mapping[key] != status:
-            raise FillsError(f"reconcile.json has conflicting status for {instrument} on {session}")
-        mapping[key] = status
+        for row in rows:
+            instrument = _recon_row_instrument(row)
+            status = row.get("status", raw.get("status"))
+            if instrument is None and nested:
+                raise FillsError(f"reconcile.json days[{index}] missing instrument")
+            if instrument is None:
+                instrument = DAY_WIDE_INSTRUMENT
+            if status not in RECON_STATUSES:
+                raise FillsError(
+                    f"reconcile.json days[{index}] status must be one of "
+                    + ", ".join(sorted(RECON_STATUSES))
+                    + f" (got {status!r})"
+                )
+            key = (day, instrument)
+            if key in mapping and mapping[key] != status:
+                label = instrument or "day"
+                raise FillsError(f"reconcile.json has conflicting status for {label} on {session}")
+            mapping[key] = status
     return mapping
 
 
@@ -937,12 +1113,14 @@ def lookup_recon_status(
     instrument: str,
     mapping: dict[tuple[date, str], str],
 ) -> str | None:
-    """Exact ThesisTester ``DayReconcile`` key. Unmatched stays null."""
+    """Exact ThesisTester ``DayReconcile`` key. Day-wide status is the fallback."""
     day = _recon_date(session_date)
     inst = _recon_instrument(instrument)
     if day is None or inst is None:
         return None
-    return mapping.get((day, inst))
+    if (day, inst) in mapping:
+        return mapping[(day, inst)]
+    return mapping.get((day, DAY_WIDE_INSTRUMENT))
 
 
 def attach_recon_status(table: pa.Table, mapping: dict[tuple[date, str], str]) -> pa.Table:
@@ -1023,8 +1201,15 @@ def ingest_fills(
         if _is_journal_ingest_error(exc):
             raise FillsError(str(exc)) from exc
         raise
+    from tradevidanalyser.flags import sidecar_enabled
+
     start, end = session_utc_window(record)
-    if journal_trades is not None:
+    if sidecar_enabled() and not exclusive_fills_enabled():
+        windowed = assign_fills_once(record, fills, root=root)
+        if journal_trades is not None:
+            keep = {fill.fill_id for fill in windowed}
+            journal_trades = [trade for trade in journal_trades if trade.entry_fill_id in keep]
+    elif journal_trades is not None:
         windowed, journal_trades = _window_journal_trades(fills, journal_trades, start, end)
     else:
         windowed = filter_fills_to_window(fills, start, end)

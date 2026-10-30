@@ -17,6 +17,7 @@ from tradevidanalyser.evidence import (
     ALIGNMENT_LOW,
     DEFAULT_POST_S,
     DEFAULT_PRE_S,
+    NO_VIDEO_SPEECH_GAP,
     evidence_session,
     segments_in_window,
     wall_to_video_t,
@@ -335,6 +336,29 @@ def test_naive_utc_trade_timestamps_map_to_video(tva_root: Path) -> None:
     trade = evidence.trades[0]
     assert trade.window.t0 == pytest.approx(200.0 - DEFAULT_PRE_S)
     assert trade.window.t1 == pytest.approx(260.0 + DEFAULT_POST_S)
+
+
+def test_preclip_trade_is_no_video_no_speech(tva_root: Path) -> None:
+    """A trade that ends before the clip must not clamp to 0 s and pick up start speech."""
+    record = _session(tva_root, duration_s=3600.0)
+    _write_trades(tva_root, record.id, [("T01", -1500.0, -1480.0)])
+    _write_transcript(tva_root, record.id, [_seg(1, 0.0, 8.0, "Bias ist long.")])
+    result = evidence_session(record.id, root=tva_root)
+    assert result.status == "ok"
+    assert result.no_video_coverage == 1
+    assert list(result.no_video_trades) == ["T01"]
+    evidence = Evidence.model_validate(store.read_json(store.evidence_path(tva_root, record.id)))
+    trade = evidence.trades[0]
+    assert trade.window.t0 < 0.0
+    assert trade.window.t1 < 0.0
+    assert trade.window.t0 != 0.0
+    assert trade.window.t1 != 0.0
+    assert trade.commentary == []
+    assert trade.stated.setup is None
+    assert trade.stated.bias is None
+    assert NO_VIDEO_SPEECH_GAP in trade.gaps
+    assert evidence.no_video_coverage == 1
+    assert evidence.no_video_trades == ["T01"]
 
 
 def test_window_clamps_past_duration(tva_root: Path) -> None:

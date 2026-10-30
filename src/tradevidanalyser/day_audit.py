@@ -151,15 +151,30 @@ def run_day_audit(
     csv_path: str | None = None
     if executions is not None:
         path = Path(executions)
-        if not path.is_file():
-            raise DayAuditError(f"executions file not found: {path}")
+        from tradevidanalyser.fills_mirror import NO_COST_SOURCE_ERROR
+        from tradevidanalyser.flags import net_fees_enabled
+
         try:
-            _used_loader, csv_fills = load_fills(path, prefer_import=prefer_import)
+            if net_fees_enabled():
+                if path.is_file():
+                    raise DayAuditError(NO_COST_SOURCE_ERROR)
+                if not path.is_dir():
+                    raise DayAuditError(f"executions file not found: {path}")
+                from tradevidanalyser.fills import load_tt_journal_dir
+
+                csv_fills, _journal_trades = load_tt_journal_dir(path)
+                del _journal_trades
+            else:
+                if not path.is_file():
+                    raise DayAuditError(f"executions file not found: {path}")
+                _used_loader, csv_fills = load_fills(path, prefer_import=prefer_import)
+                del _used_loader
+        except DayAuditError:
+            raise
         except Exception as exc:
             raise DayAuditError(str(exc)) from exc
         fills_match = FILLS_MATCH_OK
         csv_path = str(path)
-        del _used_loader
 
     payload = _build_payload(
         root,

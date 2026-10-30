@@ -421,10 +421,10 @@ def build_day(
             raise DayManifestError(f"executions file not found: {csv_path}")
     elif not csv_path.is_file():
         raise DayManifestError(f"executions file not found: {csv_path}")
-    if read_enabled_from(root) is None:
-        write_enabled_from_if_absent(root, day)
     clips = clips_for_day(root, day)
     if not is_day_path(root, clips):
+        if read_enabled_from(root) is None:
+            write_enabled_from_if_absent(root, day)
         return DayBuildResult(
             date=day,
             status="legacy",
@@ -433,6 +433,9 @@ def build_day(
             reason="single clip without suspected",
         )
     lock = day_lock_path(root, day)
+    had_day_dir = day_dir(root, day).is_dir()
+    had_enabled = enabled_from_path(root).is_file()
+    created_build: Path | None = None
     if not try_acquire_lock(lock):
         raise DayManifestError(LOCK_ERROR)
     try:
@@ -499,6 +502,7 @@ def build_day(
             build_id = new_ulid()
             dest = day_dir(root, day) / "builds" / build_id / "day.json"
             dest.parent.mkdir(parents=True, exist_ok=True)
+            created_build = dest.parent
             built = apply_exclusive_build(
                 root,
                 day,
@@ -528,6 +532,7 @@ def build_day(
             build_id = new_ulid()
             dest = day_dir(root, day) / "builds" / build_id / "day.json"
             dest.parent.mkdir(parents=True, exist_ok=True)
+            created_build = dest.parent
             tz_assumption = TZ_ASSUMPTION_CSV
             claimed_legacy = []
             proposal_remaps = []
@@ -552,6 +557,8 @@ def build_day(
             payload["proposals_discarded"] = proposals_discarded
         store.write_json(dest, payload)
         _replace_current(root, day, build_id)
+        if read_enabled_from(root) is None:
+            write_enabled_from_if_absent(root, day)
         if exclusive_fills_enabled():
             for record in clips:
                 store.compute_status(root, record.id)
@@ -569,6 +576,15 @@ def build_day(
             written=True,
             clips=len(clips),
         )
+    except BaseException:
+        _discard_failed_day_build(
+            root,
+            day,
+            had_day_dir=had_day_dir,
+            had_enabled=had_enabled,
+            build_dir=created_build,
+        )
+        raise
     finally:
         release_lock(lock)
 
@@ -868,3 +884,30 @@ def _rmtree(path: Path) -> None:
     import shutil
 
     shutil.rmtree(path)
+
+
+def _discard_failed_day_build(
+    root: Path,
+    day: date,
+    *,
+    had_day_dir: bool,
+    had_enabled: bool,
+    build_dir: Path | None,
+) -> None:
+    """Remove days/<date> artifacts from an aborted build. Nothing else."""
+    if build_dir is not None and build_dir.is_dir():
+        _rmtree(build_dir)
+        builds = build_dir.parent
+        if builds.is_dir() and not any(builds.iterdir()):
+            builds.rmdir()
+    if not had_enabled:
+        path = enabled_from_path(root)
+        if path.is_file() and read_enabled_from(root) == day:
+            path.unlink(missing_ok=True)
+    if not had_day_dir:
+        folder = day_dir(root, day)
+        if folder.is_dir() and not current_pointer_path(root, day).is_file():
+            lock = day_lock_path(root, day)
+            release_lock(lock)
+            if folder.is_dir():
+                _rmtree(folder)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -15,6 +16,7 @@ from tradevidanalyser.align import (
     confidence_from_residuals,
     theil_sen,
 )
+from tradevidanalyser.flags import ENV_SIDECAR
 from tradevidanalyser.cli import main
 from tradevidanalyser.ingest import ingest
 from tradevidanalyser.ocr import OcrRow, write_ocr_parquet
@@ -172,6 +174,38 @@ def test_unparsed_clock_rows_filename_fallback(tva_root: Path) -> None:
     assert alignment.method == "filename"
     assert alignment.confidence == FILENAME_CONFIDENCE
     assert alignment.samples == []
+
+
+def test_align_uses_verified_time_anchor(
+    tva_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ENV_SIDECAR, "1")
+    record = _session(tva_root, duration_s=10.0)
+    video = tva_root / "recordings" / record.recording.filename
+    video.parent.mkdir(parents=True, exist_ok=True)
+    offset = 0.31
+    stop = START + timedelta(seconds=10.0 + offset)
+    rows = [
+        {
+            "event": "record_start",
+            "wall": START.isoformat(),
+            "video_s": 0.0,
+            "file": record.recording.filename,
+        },
+        {"event": "record_stop", "wall": stop.isoformat(), "video_s": 10.0},
+    ]
+    video.with_suffix(".jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    alignment = align_session(record.id, root=tva_root)
+    assert alignment.method == "sidecar"
+    assert alignment.offset_s == pytest.approx(offset, abs=1e-6)
+    assert alignment.confidence == 1.0
+    assert alignment.confidence != FILENAME_CONFIDENCE
+    loaded = store.load_session(tva_root, record.id)
+    assert loaded.alignment is not None
+    assert loaded.alignment.method == "sidecar"
 
 
 def test_manual_offset_recorded(tva_root: Path, capsys) -> None:

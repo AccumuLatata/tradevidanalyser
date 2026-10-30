@@ -33,7 +33,7 @@ from tradevidanalyser.fills_mirror import (
     load_tradesviz_executions,
     pair_journal_trades,
 )
-from tradevidanalyser.flags import ENV_NET_FEES
+from tradevidanalyser.flags import ENV_NET_FEES, ENV_SIDECAR
 from tradevidanalyser.ingest import ingest
 from tradevidanalyser.pipeline import extract_session, fills_session, transcribe_session
 from tradevidanalyser.schema import RecordingInfo, SessionRecord
@@ -371,6 +371,77 @@ def test_window_includes_closed_boundaries() -> None:
     assert filter_fills_to_window([_fill_at(hi)], start, end)
     assert not filter_fills_to_window([_fill_at(lo - timedelta(seconds=1))], start, end)
     assert not filter_fills_to_window([_fill_at(hi + timedelta(seconds=1))], start, end)
+
+
+def test_sidecar_assigns_each_fill_once(
+    tva_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """±30 min pad must not count the same fill on two nearby clips."""
+    monkeypatch.setenv(ENV_SIDECAR, "1")
+    morning = _session(
+        tva_root,
+        session_id="2026-10-27_090000",
+        start="2026-10-27T09:00:00+01:00",
+        duration_s=1800.0,
+    )
+    afternoon = SessionRecord(
+        id="2026-10-27_092000",
+        recording=RecordingInfo(
+            path="recordings/2026-10-27 09-20-00.mp4",
+            sha256="b" * 64,
+            start_wallclock_vienna="2026-10-27T09:20:00+01:00",
+            duration_s=1800.0,
+            filename="2026-10-27 09-20-00.mp4",
+        ),
+    )
+    store.save_session(tva_root, afternoon)
+    store.compute_status(tva_root, afternoon.id)
+    csv = tmp_path / "kw44.csv"
+    csv.write_text(
+        "date,symbol,side,currency,underlying,asset_type,price,quantity,"
+        "commission,fees,stop_loss,profit_target,tags,notes,spread_id\n"
+        "2026-10-27T08:05:00+0000,MNQM26,buy,USD,MNQ,future,21000.0,1.0,"
+        "0,0,N/A,N/A,,,once\n"
+        "2026-10-27T08:06:00+0000,MNQM26,sell,USD,MNQ,future,21001.0,1.0,"
+        "0,0,N/A,N/A,,,once\n",
+        encoding="utf-8",
+    )
+    first = fills_session(morning.id, root=tva_root, executions=csv, venue="amp")
+    second = fills_session(afternoon.id, root=tva_root, executions=csv, venue="amp")
+    assert first.fills == 2
+    assert second.status == "skipped"
+    morning_ids = set(pq.read_table(store.fills_path(tva_root, morning.id)).column("fill_id").to_pylist())
+    assert not store.fills_path(tva_root, afternoon.id).is_file()
+    assert len(morning_ids) == 2
+
+
+def test_sidecar_carries_fees_net_equals_gross_minus_fees(
+    tva_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ENV_SIDECAR, "1")
+    record = _session(tva_root)
+    csv = tmp_path / "fees.csv"
+    csv.write_text(
+        "date,symbol,side,currency,underlying,asset_type,price,quantity,"
+        "commission,fees,stop_loss,profit_target,tags,notes,spread_id\n"
+        "2026-05-14T14:03:25+0000,MNQM26,buy,USD,MNQ,future,21000.0,1.0,"
+        "4.5,1.5,N/A,N/A,,,fee1\n"
+        "2026-05-14T14:04:25+0000,MNQM26,sell,USD,MNQ,future,21010.0,1.0,"
+        "0.0,1.0,N/A,N/A,,,fee1\n",
+        encoding="utf-8",
+    )
+    result = fills_session(record.id, root=tva_root, executions=csv, venue="amp")
+    assert result.status == "ok"
+    trades = pq.read_table(store.trades_path(tva_root, record.id))
+    assert trades.num_rows == 1
+    gross = trades.column("gross_pnl_currency").to_pylist()[0]
+    net = trades.column("net_pnl_currency").to_pylist()[0]
+    commission = trades.column("commission_cost").to_pylist()[0]
+    day_fee = trades.column("day_fee_allocation").to_pylist()[0]
+    assert gross == pytest.approx(20.0)
+    assert commission == pytest.approx(4.5)
+    assert day_fee == pytest.approx(2.5)
+    assert net == pytest.approx(gross - commission - day_fee)
 
 
 def test_zero_fills_clears_previous_parquet(tva_root: Path, tmp_path: Path) -> None:

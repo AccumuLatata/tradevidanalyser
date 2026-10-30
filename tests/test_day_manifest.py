@@ -13,6 +13,7 @@ from tradevidanalyser.cli import main
 from tradevidanalyser.coach import coach_session
 from tradevidanalyser.day_manifest import (
     DAY_STALE_ERROR,
+    DayManifestError,
     DayStale,
     MANIFEST_OFF_ERROR,
     PAUSE_KEY_ERROR,
@@ -288,6 +289,30 @@ def test_m3_one_session_writes_no_days(
     assert not day_dir(tva_root, date(2026, 9, 11)).exists()
     assert read_enabled_from(tva_root) == date(2026, 9, 11)
     assert day_state(tva_root, date(2026, 9, 11)).kind == "legacy"
+
+
+def test_aborted_day_build_writes_nothing(
+    tva_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pause-key abort must not leave days/enabled_from or an empty day folder."""
+    _on(monkeypatch, ENV_DAY_MANIFEST, ENV_PAUSE_GUARD)
+    _session(
+        tva_root,
+        "2026-09-14_093000",
+        start=datetime(2026, 9, 14, 9, 30, tzinfo=VIENNA),
+    )
+    _session(
+        tva_root,
+        "2026-09-14_140000",
+        start=datetime(2026, 9, 14, 14, 0, tzinfo=VIENNA),
+        sha256="b" * 64,
+    )
+    csv = _write_csv(tmp_path / "exec.csv")
+    with pytest.raises(DayManifestError, match=PAUSE_KEY_ERROR):
+        build_day(tva_root, date(2026, 9, 14), executions=csv, venue="amp")
+    assert read_enabled_from(tva_root) is None
+    assert not enabled_from_path(tva_root).exists()
+    assert not day_dir(tva_root, date(2026, 9, 14)).exists()
 
 
 def test_m4_two_sessions_write_day_json(

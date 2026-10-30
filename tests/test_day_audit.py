@@ -22,6 +22,7 @@ from tradevidanalyser.day_audit import (
 )
 from tradevidanalyser.fills import fills_table, session_utc_window
 from tradevidanalyser.fills_mirror import FillRecord
+from tradevidanalyser.flags import ENV_NET_FEES
 from tradevidanalyser.ingest import SPLIT_GAP_S
 from tradevidanalyser.pipeline import fills_session
 from tradevidanalyser.schema import RecordingInfo, RecordingPart, SessionRecord
@@ -241,6 +242,45 @@ def test_missing_csv_is_not_run(tva_root: Path) -> None:
     assert data["shifts"] is None
     assert data["executions"] is None
     assert data["classes"]["other_account"] == "not_in_schema"
+
+
+def test_day_audit_net_fees_accepts_journal_dir(
+    tva_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ENV_NET_FEES, "1")
+    _session(
+        tva_root,
+        "2026-09-14_100000",
+        start="2026-09-14T10:00:00+02:00",
+    )
+    journal = tmp_path / "journal"
+    journal.mkdir()
+    fill = _extra_fill(
+        instrument="MNQ",
+        timestamp=datetime(2026, 9, 14, 8, 30, tzinfo=timezone.utc),
+    )
+
+    def _load_journal(path: Path, **_kwargs):
+        assert Path(path) == journal
+        return [fill], []
+
+    monkeypatch.setattr("tradevidanalyser.fills.load_tt_journal_dir", _load_journal)
+    result = run_day_audit(
+        root=tva_root,
+        date_from="2026-09-14",
+        date_to="2026-09-14",
+        executions=journal,
+    )
+    assert result.fills_match == "ok"
+    csv = tmp_path / "tv.csv"
+    csv.write_text("date,symbol\n", encoding="utf-8")
+    with pytest.raises(DayAuditError, match="Kostenquelle"):
+        run_day_audit(
+            root=tva_root,
+            date_from="2026-09-14",
+            date_to="2026-09-14",
+            executions=csv,
+        )
 
 
 def test_shift_sign_is_csv_plus_delta(tva_root: Path, tmp_path: Path) -> None:
