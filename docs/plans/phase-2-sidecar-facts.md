@@ -15,7 +15,7 @@
 PR-37 is the Phase 2 plan, docs only (TT:898). It records:
 
 - sidecar contract with pause rule and `file` check (§7.1)
-- tolerances, first-frame offset ≈ 1.043 s as expected value, band 0.8–1.3 s
+- tolerances, first-frame offset ≈ 1.043 s as expected value, band 0.8–1.3 s. Plan amendment 2026-10-30, approved by Accumu: two bands, low 0.20–0.45 / high 0.80–1.30, from KW42–44 evidence (44/55 low).
 - flag table
 - contract v2 with **coach independence** (R8; already recorded here, implemented later in PR-46) (TT:885, 907)
 - coach profile without judgments, account field, CD list, B.5 rules
@@ -74,7 +74,7 @@ Source: TT:439–441, 463–468, 902. First-frame measurement [Rv] in the extrac
 
 | Check | Rule |
 |---|---|
-| First-frame offset | Expected value ≈ **1.043 s** after `record_start`. Band **0.8–1.3 s** per OBS version. Outside → sidecar `invalid`, reason `first_frame_offset_out_of_band` (TT:440, 465, 902). |
+| First-frame offset | Expected value ≈ **1.043 s** after `record_start`. Band **0.8–1.3 s** per OBS version. Outside → sidecar `invalid`, reason `first_frame_offset_out_of_band` (TT:440, 465, 902). Plan amendment 2026-10-30, approved by Accumu: two bands, low 0.20–0.45 / high 0.80–1.30, from KW42–44 evidence (44/55 low). `time_anchor.json` stamps `offset_mode: low\|high` when the measured offset is in a band. |
 | Span residual | `\|wall_span − video_span − first_frame_offset\| ≤ 0.10 s` (TT:464). |
 | Resume band | 0.4–0.8 s; outside → `resume_offset_out_of_band` on that section (TT:449–452, 466, 902). |
 | Sidecar duration | ±0.1 s vs video / `ffprobe` (TT:467, 902). |

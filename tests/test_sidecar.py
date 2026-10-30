@@ -29,9 +29,13 @@ from tradevidanalyser.sidecar import (
     EVENT_RESUME,
     FALLBACK_WARNING,
     FIRST_FRAME_OFFSET_EXPECTED_S,
+    INCOMPLETE_WARNING,
     METHOD_SIDECAR,
+    OFFSET_MODE_HIGH,
+    OFFSET_MODE_LOW,
     OFFSET_SOURCE_FALLBACK,
     REASON_FIRST_FRAME,
+    REASON_INCOMPLETE,
     REASON_INVALID_JSON,
     REASON_SEGMENT_INVALID,
     SOURCE_FIXED,
@@ -44,7 +48,9 @@ from tradevidanalyser.sidecar import (
     STATUS_VERIFIED,
     SidecarFallbackWarning,
     SidecarFill,
+    SidecarIncompleteWarning,
     build_time_anchor,
+    classify_first_frame_offset,
     load_time_anchor,
     measure_first_frame_offset,
     parse_sidecar_jsonl,
@@ -149,6 +155,7 @@ def test_verified_sidecar_measured_offset() -> None:
     assert anchor.first_frame_offset_s == OFFSET
     assert anchor.first_frame_offset_source == SOURCE_MEASURED
     assert anchor.offset_source is None
+    assert anchor.offset_mode == OFFSET_MODE_HIGH
     assert len(anchor.sections) == 2
     assert all(section.status == "verified" for section in anchor.sections)
     assert all(section.method == METHOD_SIDECAR for section in anchor.sections)
@@ -175,6 +182,7 @@ def test_fallback_is_loud() -> None:
     assert anchor.first_frame_offset_s == FIRST_FRAME_OFFSET_EXPECTED_S
     assert anchor.first_frame_offset_source == SOURCE_FIXED
     assert anchor.offset_source == OFFSET_SOURCE_FALLBACK
+    assert anchor.offset_mode == OFFSET_MODE_HIGH
     assert FALLBACK_WARNING in FALLBACK_WARNING
 
 
@@ -213,10 +221,35 @@ def test_start_time_below_0_1_is_not_measured() -> None:
     assert anchor.offset_source is None
 
 
+def _simple_clip(offset: float, *, duration: float = 10.0) -> tuple[list, float]:
+    """Start+stop only; measured offset is ``wall_span − duration``."""
+    stop_wall = T0 + timedelta(seconds=duration + offset)
+    rows = [
+        _event(EVENT_RECORD_START, wall=T0, video_s=0.0, file=VIDEO),
+        _event(EVENT_RECORD_STOP, wall=stop_wall, video_s=duration),
+    ]
+    return [_event_from_raw(row) for row in rows], duration
+
+
+def test_low_band_measured_offset_mode() -> None:
+    events, duration = _simple_clip(0.31)
+    anchor = build_time_anchor(
+        session_id=SESSION_ID,
+        video_name=VIDEO,
+        events=events,
+        duration_s=duration,
+    )
+    assert anchor.status == STATUS_VERIFIED
+    assert anchor.first_frame_offset_source == SOURCE_MEASURED
+    assert anchor.first_frame_offset_s == pytest.approx(0.31, abs=1e-6)
+    assert anchor.offset_mode == OFFSET_MODE_LOW
+    assert classify_first_frame_offset(anchor.first_frame_offset_s or 0.0) == OFFSET_MODE_LOW
+
+
 def test_first_frame_out_of_band() -> None:
     events = [_event_from_raw(row) for row in _verified_events()]
     duration = events[-1].video_s or 0.0
-    for offset in (0.7, 1.4):
+    for offset in (0.15, 0.60, 0.7, 1.4):
         anchor = build_time_anchor(
             session_id=SESSION_ID,
             video_name=VIDEO,
@@ -228,6 +261,25 @@ def test_first_frame_out_of_band() -> None:
         assert anchor.reason == REASON_FIRST_FRAME
         assert anchor.method is None
         assert anchor.first_frame_offset_s == offset
+        assert anchor.offset_mode is None
+        assert "offset_mode" not in anchor.as_dict()
+
+
+def test_gap_and_outside_bands_fail_loudly() -> None:
+    """0.60 s (gap), 1.40 s (above high), 0.15 s (below low) stay invalid."""
+    for offset in (0.60, 1.40, 0.15):
+        events, duration = _simple_clip(offset)
+        anchor = build_time_anchor(
+            session_id=SESSION_ID,
+            video_name=VIDEO,
+            events=events,
+            duration_s=duration,
+        )
+        assert anchor.status == STATUS_INVALID
+        assert anchor.reason == REASON_FIRST_FRAME
+        assert anchor.offset_mode is None
+        assert anchor.first_frame_offset_s == pytest.approx(offset, abs=1e-6)
+        assert anchor.first_frame_offset_source == SOURCE_MEASURED
 
 
 def test_n5_second_of_three_pauses_partial() -> None:
@@ -321,15 +373,52 @@ def test_no_record_stop_is_incomplete() -> None:
         _event_from_raw(_event(EVENT_RECORD_START, wall=T0, video_s=0.0, file=VIDEO)),
         _event_from_raw(_event(EVENT_PAUSE, wall=_wall(10.0), video_s=10.0)),
     ]
-    anchor = build_time_anchor(
-        session_id=SESSION_ID,
-        video_name=VIDEO,
-        events=events,
-        duration_s=10.0,
-        measured_offset_s=OFFSET,
-    )
+    with pytest.warns(SidecarIncompleteWarning, match="status=incomplete"):
+        anchor = build_time_anchor(
+            session_id=SESSION_ID,
+            video_name=VIDEO,
+            events=events,
+            duration_s=10.0,
+            measured_offset_s=OFFSET,
+        )
     assert anchor.status == STATUS_INCOMPLETE
+    assert anchor.reason == REASON_INCOMPLETE
     assert anchor.method is None
+    assert anchor.first_frame_offset_s is None
+    assert anchor.offset_mode is None
+    assert INCOMPLETE_WARNING
+
+
+def test_incomplete_sidecar_start_only_no_bogus_offset() -> None:
+    """Real shape: 2026-10-16 15-41-31.jsonl — record_start, no record_stop.
+
+    Synthetic only. Duration would not match a last-event fallback (0.0 vs 120 s),
+    which previously became sidecar_mismatch or a fallback offset.
+    """
+    video = "2026-10-16 15-41-31.mp4"
+    events = [
+        _event_from_raw(
+            _event(EVENT_RECORD_START, wall=T0, video_s=0.0, file=video)
+        )
+    ]
+    with pytest.warns(SidecarIncompleteWarning, match="kein first-frame offset"):
+        anchor = build_time_anchor(
+            session_id="2026-10-16_154131",
+            video_name=video,
+            events=events,
+            duration_s=120.0,
+        )
+    assert anchor.status == STATUS_INCOMPLETE
+    assert anchor.reason == REASON_INCOMPLETE
+    assert anchor.method is None
+    assert anchor.first_frame_offset_s is None
+    assert anchor.first_frame_offset_source is None
+    assert anchor.offset_source is None
+    assert anchor.offset_mode is None
+    assert "first_frame_offset_s" not in anchor.as_dict()
+    assert "offset_mode" not in anchor.as_dict()
+    payload = json.dumps(anchor.as_dict())
+    assert "1.043" not in payload
 
 
 def test_bit_identical_repeat(tva_root: Path) -> None:
@@ -524,6 +613,7 @@ def _assert_rv_first_frame(stem: str, *, section_residual_max_s: float | None = 
     assert anchor.first_frame_offset_s == pytest.approx(
         RV_EXPECTED_OFFSET_S[name], abs=RV_OFFSET_TOL_S
     )
+    assert anchor.offset_mode == OFFSET_MODE_HIGH
     if section_residual_max_s is not None:
         assert anchor.sections
         for section in anchor.sections:
