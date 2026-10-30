@@ -4,7 +4,9 @@ Used when the ``tradevidanalyser[journal]`` extra is not installed. Must
 produce the same ``FILL_RECORD_COLUMNS`` / ``JOURNAL_TRADE_COLUMNS`` frames
 as ``thesistester.journal.tradesviz.load_tradesviz_executions`` and
 ``thesistester.journal.pair.pair_journal_trades``. ``commission`` / ``fees``
-are read then discarded (TJ1).
+are read then discarded (TJ1 / TT schema.py). This mirror is the flag-off
+TradesViz path only. Under ``TVA_NET_FEES`` the fills path reads a TT
+journal directory; a TradesViz CSV is ``Netto ohne Kostenquelle``.
 """
 
 from __future__ import annotations
@@ -78,6 +80,9 @@ _ISO_TS_RE = re.compile(
     r"(?P<off>Z|[+-]\d{2}:?\d{2})$"
 )
 _NAIVE_ISO_TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?$")
+NO_COST_SOURCE_ERROR = "Netto ohne Kostenquelle"
+FILL_RECORD_EXTRAS = ("csv_calendar_date",)
+JOURNAL_TRADE_EXTRAS = ("account", "position_id")
 
 
 class JournalIngestError(ValueError):
@@ -108,7 +113,7 @@ class FillRecord:
 
 
 FILL_RECORD_COLUMNS: tuple[str, ...] = tuple(
-    f.name for f in fields(FillRecord) if f.name != "csv_calendar_date"
+    f.name for f in fields(FillRecord) if f.name not in FILL_RECORD_EXTRAS
 )
 
 
@@ -152,9 +157,13 @@ class JournalTrade:
     status: Literal["closed", "open"]
     signal_id: str | None
     trigger: str | None
+    account: str | None = None
+    position_id: str | None = None
 
 
-JOURNAL_TRADE_COLUMNS: tuple[str, ...] = tuple(f.name for f in fields(JournalTrade))
+JOURNAL_TRADE_COLUMNS: tuple[str, ...] = tuple(
+    f.name for f in fields(JournalTrade) if f.name not in JOURNAL_TRADE_EXTRAS
+)
 
 
 def trading_session_date(ts_utc: datetime) -> date:
@@ -177,31 +186,10 @@ def load_tradesviz_executions(path: str | Path, *, profile: str) -> list[FillRec
         raise JournalIngestError(f"TradesViz executions file not found: {csv_path}")
     raw_rows = _read_csv_rows(csv_path)
     records = [_row_to_record(index, row) for index, row in enumerate(raw_rows)]
-    filled: list[FillRecord] = []
-    for record in records:
-        filled.append(
-            FillRecord(
-                fill_id=record.fill_id,
-                source=record.source,
-                source_group_id=record.source_group_id,
-                instrument=record.instrument,
-                contract_month=record.contract_month,
-                contract_year=record.contract_year,
-                side=record.side,
-                qty=record.qty,
-                price=record.price,
-                timestamp=record.timestamp,
-                session_date=trading_session_date(record.timestamp),
-                entry_kind=record.entry_kind,
-                tags=record.tags,
-                notes_text=record.notes_text,
-                declared_stop=record.declared_stop,
-                declared_target=record.declared_target,
-                flags=record.flags,
-                csv_calendar_date=record.csv_calendar_date,
-            )
-        )
-    return filled
+    return [
+        replace(record, session_date=trading_session_date(record.timestamp))
+        for record in records
+    ]
 
 
 def _read_csv_rows(csv_path: Path) -> list[dict[str, str]]:
@@ -606,7 +594,11 @@ def pair_journal_trades(
 def _as_record(item: FillRecord | Mapping[str, Any]) -> FillRecord:
     if isinstance(item, FillRecord):
         return item
-    return FillRecord(**{name: item[name] for name in FILL_RECORD_COLUMNS})
+    kwargs = {name: item[name] for name in FILL_RECORD_COLUMNS}
+    for extra in FILL_RECORD_EXTRAS:
+        if extra in item:
+            kwargs[extra] = item[extra]
+    return FillRecord(**kwargs)
 
 
 def _fills_from_records(

@@ -1,6 +1,6 @@
 # Phase 2 — Sidecar facts (PR-37)
 
-**Status:** Plan (PR-37, docs-only) plus owner facts recorded in PR-38 (D7 / D8 / Q-15 = B). PR-39 ships the opt-in `<stem>.jsonl` copy. **PR-40** ships `sidecar.py` facts and `time_anchor.json` (Q-15 = B, measured per clip; 1.043 s loud fallback).
+**Status:** Plan (PR-37, docs-only) plus owner facts recorded in PR-38 (D7 / D8 / Q-15 = B). PR-39 ships the opt-in `<stem>.jsonl` copy. **PR-40** ships `sidecar.py` facts and `time_anchor.json` (Q-15 = B, measured per clip; 1.043 s loud fallback). **PR-42** ships `TVA_NET_FEES` (Vierer-Set only, TT:892 / 903): facts mirror (lots, positions, costs, `account`), net only under the flag, publish only with a `locked` weekly manifest, desk rules from `accounts.yaml`, R-MAX10 positions-or-lots.
 **Stand geprüft:** TVA `main` @ `674a9bf` (PR-37 landed; PR-36 @ `c6029b8`). ThesisTester source: extract of `docs/research/TVA_TT_Research_Plan.md` with original line numbers (Revision 4, stand 12.10.2026; TT lesestand `251b5099`, TVA `c6029b8`) (TT:6).
 **Danach:** Review. Sidecar implementation remains the later series below. PR-38 does not start that code.
 **Authoritative source:** AccumuLatata/ThesisTester `docs/research/TVA_TT_Research_Plan.md` (German), via the attached line-numbered extract. `docs/JOURNAL_EXTENSION_PLAN.md` is **not** in that extract and stays [NV].
@@ -302,7 +302,7 @@ Source: TT:902, Q-15 = B (TT:441, 1100; owner 2026-10-29). `TVA_SIDECAR` remains
 
 Owner [Rv] goldens (Test 1 / Test 2 / 17:11:06 / T-S2 / T-S3) are **not** committed. Tests use synthetic fixtures; [Rv] cases are skipped until the owner confirms values.
 
-## 12. Out of scope for this PR
+## 12. Out of scope for PR-40
 
 PR-40 implements the TT:902 reader. This file stays the Phase 2 plan.
 
@@ -312,3 +312,18 @@ PR-40 implements the TT:902 reader. This file stays the Phase 2 plan.
 - No Program B results.
 - Report / Notion / coach / VLM factories keep their existing defaults (not on the N4 list).
 - Doctor is not an N4 run entry point (TT:900); unset ASR / OCR / extract is warn (`TVA_*_PROVIDER fehlt`), not fail.
+
+## 13. PR-42 shipped (`TVA_NET_FEES` + facts mirror)
+
+Source: TT §10.3 (TT:883–907). Flag row TT:892 / 894. Series order after JX1, JX2, JX8 (TT:885, 903). Unset/empty is off; then pairing, L0, and unlocked clip publish stay as on main.
+
+| Surface | Flag on | Flag off |
+|---|---|---|
+| `TVA_NET_FEES` | Only with the Vierer-Set `TVA_EXCLUSIVE_FILLS` + `TVA_DAY_RULES` + `TVA_DAY_PUBLISH` + `TVA_TRADING_HOURS` (those four already require pause + manifest). `TVA_SIDECAR` does not license it (TT:892, 894) | ignored; combo check skipped |
+| Other sets | `ungültige Flag-Kombination` (TT:894) | n/a |
+| `fills_mirror.py` | Flag-off only (TJ1). Flag on reads a TT journal dir; a TradesViz CSV is `Netto ohne Kostenquelle` | TJ1: costs discarded, net equals gross |
+| `tva publish` | TT `week_manifest.json` written by `lock_files` (tick `prepare_manifest` required) and verified by `validate_week_manifest` + `assert_manifest_inputs_match` + `assert_claimed_lock_supported` (report.py:654-657). Inputs are `inputs: [{role, path, sha256}]`. Hand-edited `locked` (`lock_status_inconsistent`) / tampered hash (`input hash mismatch`) cannot unlock. `DayStale` carries the date | clip publish / existing lock rules unchanged |
+| Desk rules | TT `accounts.yaml` (per-instrument `fee_schedule`, date `trading_days`) plus TVA `desk_rules.yaml` account → desk. Missing account → `Konto fehlt`. Topstep desk never applied to other accounts | `rules.yaml` as on main |
+| R-MAX10 | counts JX2 `position_id`s from `--positions-dir`; if none, counts lots and stamps `count_basis: lots` plus `count_basis_reason` | existing evidence (`count` / `max` / `trade_ids` only) |
+
+Independent recomputation stays with the coach (R8 / PR-46). `docs/JOURNAL_EXTENSION_PLAN.md` is still not in the extract [NV].

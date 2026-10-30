@@ -12,6 +12,7 @@ ENV_DAY_PUBLISH = "TVA_DAY_PUBLISH"
 ENV_TRADING_HOURS = "TVA_TRADING_HOURS"
 ENV_ALLOW_SESSION_ID_OVERWRITE = "TVA_ALLOW_SESSION_ID_OVERWRITE"
 ENV_SIDECAR = "TVA_SIDECAR"
+ENV_NET_FEES = "TVA_NET_FEES"
 
 TRUTHY = frozenset({"1", "true", "yes", "on"})
 INVALID_FLAG_SET_ERROR = "ungültige Flag-Kombination"
@@ -61,6 +62,10 @@ def sidecar_enabled() -> bool:
     return env_flag(ENV_SIDECAR)
 
 
+def net_fees_enabled() -> bool:
+    return env_flag(ENV_NET_FEES)
+
+
 def active_flag_names() -> list[str]:
     names = [
         ENV_PAUSE_GUARD,
@@ -69,20 +74,25 @@ def active_flag_names() -> list[str]:
         ENV_DAY_RULES,
         ENV_DAY_PUBLISH,
         ENV_TRADING_HOURS,
+        ENV_NET_FEES,
     ]
     return [name for name in names if env_flag(name)]
 
 
 def require_allowed_flag_set() -> None:
-    """Abort on a combination that §3.6 does not list.
+    """Abort on a combination that §3.6 / TT:892 does not list.
 
     Orthogonal flags (``TVA_ALLOW_SESSION_ID_OVERWRITE``, ``TVA_SIDECAR``) are ignored.
+    ``TVA_NET_FEES`` is allowed only with the Vierer-Set (TT:892).
     """
     pause = env_flag(ENV_PAUSE_GUARD)
     manifest = env_flag(ENV_DAY_MANIFEST)
     four = [env_flag(name) for name in _DAY_PATH_FOUR]
     four_any = any(four)
     four_all = all(four)
+    net_fees = env_flag(ENV_NET_FEES)
+    if net_fees and not four_all:
+        raise ValueError(INVALID_FLAG_SET_ERROR)
     if not pause and not manifest and not four_any:
         return
     if four_any:

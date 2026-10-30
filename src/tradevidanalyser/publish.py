@@ -781,8 +781,19 @@ def publish_session(
         raise ValueError(
             f"session.json id {record.id!r} does not match directory {session_id!r}"
         )
-    from tradevidanalyser.flags import day_publish_enabled
+    from tradevidanalyser.flags import day_publish_enabled, net_fees_enabled
 
+    if net_fees_enabled():
+        from tradevidanalyser.day_manifest import nominal_vienna_date
+        from tradevidanalyser.week_manifest import require_locked_week_manifest
+
+        from tradevidanalyser.day_manifest import _session_account
+
+        require_locked_week_manifest(
+            root,
+            nominal_vienna_date(record),
+            account=_session_account(root, session_id),
+        )
     if day_publish_enabled():
         from tradevidanalyser.day_manifest import DayStale, day_state, nominal_vienna_date
         from tradevidanalyser.day_publish import publish_session_day_path
@@ -798,6 +809,10 @@ def publish_session(
                 client=client,
                 now=now,
             )
+    if net_fees_enabled():
+        from tradevidanalyser.day_manifest import DayStale, nominal_vienna_date
+
+        raise DayStale([nominal_vienna_date(record)])
     report = _load_debrief(root, session_id)
     payload = payload_from_debrief(record, report)
     publisher = get_publish_client(provider_name, root=root, client=client)

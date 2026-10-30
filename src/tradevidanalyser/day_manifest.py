@@ -19,6 +19,7 @@ from tradevidanalyser.fills_mirror import FillRecord
 from tradevidanalyser.flags import (
     active_flag_names,
     day_manifest_enabled,
+    net_fees_enabled,
     pause_guard_enabled,
 )
 from tradevidanalyser.naming import VIENNA, vienna_today
@@ -405,11 +406,20 @@ def build_day(
     include_manual: bool = False,
     reconcile_dir: Path | None = None,
     provider: str | None = None,
+    positions_dir: Path | None = None,
+    account: str | None = None,
 ) -> DayBuildResult:
     if not day_manifest_enabled():
         raise DayManifestError(MANIFEST_OFF_ERROR)
     csv_path = Path(executions)
-    if not csv_path.is_file():
+    from tradevidanalyser.fills_mirror import NO_COST_SOURCE_ERROR
+
+    if net_fees_enabled():
+        if csv_path.is_file():
+            raise DayManifestError(NO_COST_SOURCE_ERROR)
+        if not csv_path.is_dir():
+            raise DayManifestError(f"executions file not found: {csv_path}")
+    elif not csv_path.is_file():
         raise DayManifestError(f"executions file not found: {csv_path}")
     if read_enabled_from(root) is None:
         write_enabled_from_if_absent(root, day)
@@ -432,8 +442,17 @@ def build_day(
                 if check is None or not key_matches(check, record):
                     raise DayManifestError(f"{PAUSE_KEY_ERROR}: {record.id}")
         chosen_venue = venue_from_hint(csv_path, venue)
+        journal_trades = None
         try:
-            loader, fills = load_fills(csv_path)
+            if net_fees_enabled():
+                from tradevidanalyser.fills import load_tt_journal_dir
+
+                fills, journal_trades = load_tt_journal_dir(
+                    csv_path, positions_dir=positions_dir, account=account
+                )
+                loader = "journal"
+            else:
+                loader, fills = load_fills(csv_path)
         except Exception as exc:
             if type(exc).__name__ == "JournalIngestError":
                 raise DayManifestError(str(exc)) from exc
@@ -475,6 +494,7 @@ def build_day(
                 fills,
                 include_manual=include_manual,
                 loader=loader,
+                trades=journal_trades,
             )
             build_id = new_ulid()
             dest = day_dir(root, day) / "builds" / build_id / "day.json"
@@ -516,7 +536,9 @@ def build_day(
             "schema_version": SCHEMA_VERSION,
             "date": day.isoformat(),
             "tz_assumption": tz_assumption,
-            "executions_sha256": media.sha256_file(csv_path),
+            "executions_sha256": media.sha256_file(
+                csv_path / "journal_trades.parquet" if csv_path.is_dir() else csv_path
+            ),
             "input_fingerprint": fingerprint,
             "fingerprint_inputs": fp_inputs,
             "clips": clip_rows,
@@ -731,20 +753,46 @@ def csv_window_fill_identities(fills: list[FillRecord], day: date) -> list[FillI
     return identities
 
 
-def acquire_day_publish_lock(root: Path, session_id: str) -> Path | None:
-    """Lock a built day-path day for ``tva publish``. Does not create ``days/<date>/``."""
-    if not day_manifest_enabled():
+def _session_account(root: Path, session_id: str) -> str | None:
+    from tradevidanalyser.accounts import accounts_from_trades
+    from tradevidanalyser.rules import read_rule_trades
+
+    path = store.trades_path(root, session_id)
+    if not path.is_file():
         return None
+    accounts = accounts_from_trades(read_rule_trades(path))
+    return accounts[0] if len(accounts) == 1 else None
+
+
+def acquire_day_publish_lock(root: Path, session_id: str) -> Path | None:
+    """Lock a built day-path day for ``tva publish``. Does not create ``days/<date>/``.
+
+    ``TVA_NET_FEES`` (TT:903) may only publish under a held day lock **and** a
+    TT ``week_manifest.json`` whose ``lock_status`` TT re-derives as
+    ``locked``. A missing built day is ``DayStale`` (always dated). An
+    open, missing, or unverified week is ``WeekManifestError``.
+    """
+    require_lock = net_fees_enabled()
     if not store.is_safe_path_name(session_id):
         raise ValueError(f"unsafe session id {session_id!r}")
     if not store.session_json_path(root, session_id).is_file():
+        if require_lock and not day_manifest_enabled():
+            raise DayStale([])
         return None
     record = store.load_session(root, session_id)
     day = nominal_vienna_date(record)
-    folder = day_dir(root, day)
-    if not folder.is_dir():
+    if require_lock:
+        from tradevidanalyser.week_manifest import require_locked_week_manifest
+
+        require_locked_week_manifest(root, day, account=_session_account(root, session_id))
+    if not day_manifest_enabled():
+        if require_lock:
+            raise DayStale([day])
         return None
-    if not is_day_path(root, clips_for_day(root, day)):
+    folder = day_dir(root, day)
+    if not folder.is_dir() or not is_day_path(root, clips_for_day(root, day)):
+        if require_lock:
+            raise DayStale([day])
         return None
     lock = day_lock_path(root, day)
     if not try_acquire_lock(lock, create_parent=False):

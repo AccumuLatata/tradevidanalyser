@@ -174,6 +174,7 @@ def assign_day_ownership(
     *,
     include_manual: bool,
     loader: str,
+    trades: list[JournalTrade] | None = None,
 ) -> DayOwnership:
     clips = clips_for_day(root, day)
     neighbors = neighbor_sessions(root, day)
@@ -216,7 +217,12 @@ def assign_day_ownership(
     pairing_fills = [fill for fills_for in assigned.values() for fill in fills_for]
     pairing_fills.extend(item.fill for item in outside)
     pairing_fills.sort(key=lambda fill: (_utc(fill.timestamp), fill.fill_id))
-    trades = pair_fills(pairing_fills, include_manual=include_manual, loader=loader)
+    trades = pair_fills(
+        pairing_fills,
+        include_manual=include_manual,
+        loader=loader,
+        trades=trades,
+    )
     tva_ids = assign_tva_trade_ids(trades)
     session_trades: dict[str, list[tuple[JournalTrade, str]]] = {record.id: [] for record in clips}
     for trade, tva_id in zip(trades, tva_ids, strict=True):
@@ -305,6 +311,8 @@ def ingest_fills_exclusive(
     include_manual: bool,
     prefer_import: bool | None,
     reconcile_dir: Path | None,
+    positions_dir: Path | None = None,
+    account: str | None = None,
 ) -> FillsResult | None:
     """Write the whole day when exclusive+day-path, else None (legacy window)."""
     if not exclusive_fills_enabled():
@@ -322,8 +330,21 @@ def ingest_fills_exclusive(
             raise FillsError("Tag veraltet, tva day build ausführen")
         csv_path = Path(executions)
         chosen_venue = venue_from_hint(csv_path, venue)
+        journal_trades = None
         try:
-            loader, fills = load_fills(csv_path, prefer_import=prefer_import)
+            from tradevidanalyser.flags import net_fees_enabled
+            from tradevidanalyser.fills import load_tt_journal_dir
+            from tradevidanalyser.fills_mirror import NO_COST_SOURCE_ERROR
+
+            if net_fees_enabled():
+                if csv_path.is_file():
+                    raise FillsError(NO_COST_SOURCE_ERROR)
+                fills, journal_trades = load_tt_journal_dir(
+                    csv_path, positions_dir=positions_dir, account=account
+                )
+                loader = "journal"
+            else:
+                loader, fills = load_fills(csv_path, prefer_import=prefer_import)
         except Exception as exc:
             raise FillsError(str(exc)) from exc
         if not _options_and_identities_match(
@@ -338,7 +359,12 @@ def ingest_fills_exclusive(
             raise FillsError(FILLS_MISMATCH_ERROR)
         try:
             ownership = assign_day_ownership(
-                root, day, fills, include_manual=include_manual, loader=loader
+                root,
+                day,
+                fills,
+                include_manual=include_manual,
+                loader=loader,
+                trades=journal_trades,
             )
         except DayManifestError as exc:
             raise FillsError(str(exc)) from exc

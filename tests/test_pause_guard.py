@@ -21,10 +21,13 @@ from tradevidanalyser.flags import (
     ENV_DAY_PUBLISH,
     ENV_DAY_RULES,
     ENV_EXCLUSIVE_FILLS,
+    ENV_NET_FEES,
     ENV_PAUSE_GUARD,
     ENV_SIDECAR,
     ENV_TRADING_HOURS,
     INVALID_FLAG_SET_ERROR,
+    active_flag_names,
+    net_fees_enabled,
     pause_guard_enabled,
     require_allowed_flag_set,
     sidecar_enabled,
@@ -258,6 +261,7 @@ def test_flag_default_off(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_flag_combo_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(ENV_PAUSE_GUARD, raising=False)
     monkeypatch.delenv(ENV_DAY_MANIFEST, raising=False)
+    monkeypatch.delenv(ENV_NET_FEES, raising=False)
     for name in (ENV_EXCLUSIVE_FILLS, ENV_DAY_RULES, ENV_DAY_PUBLISH, ENV_TRADING_HOURS):
         monkeypatch.delenv(name, raising=False)
     require_allowed_flag_set()
@@ -319,6 +323,55 @@ def test_sidecar_flag_orthogonal(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(ValueError, match=INVALID_FLAG_SET_ERROR):
         require_allowed_flag_set()
     monkeypatch.delenv(ENV_SIDECAR)
+    with pytest.raises(ValueError, match=INVALID_FLAG_SET_ERROR):
+        require_allowed_flag_set()
+
+
+def test_net_fees_flag_default_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """TVA_NET_FEES is off when unset/empty (TT:887–894, 605)."""
+    monkeypatch.delenv(ENV_NET_FEES, raising=False)
+    assert net_fees_enabled() is False
+    assert ENV_NET_FEES not in active_flag_names()
+    for raw in ("", "0", "false", "off", "no"):
+        monkeypatch.setenv(ENV_NET_FEES, raw)
+        assert net_fees_enabled() is False
+        assert ENV_NET_FEES not in active_flag_names()
+    for raw in ("1", "true", "YES", "On"):
+        monkeypatch.setenv(ENV_NET_FEES, raw)
+        assert net_fees_enabled() is True
+        assert ENV_NET_FEES in active_flag_names()
+
+
+def test_net_fees_requires_vierer_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """TVA_NET_FEES only with the Vierer-Set (TT:892, 894). SIDECAR does not license it."""
+    for name in (
+        ENV_PAUSE_GUARD,
+        ENV_DAY_MANIFEST,
+        ENV_EXCLUSIVE_FILLS,
+        ENV_DAY_RULES,
+        ENV_DAY_PUBLISH,
+        ENV_TRADING_HOURS,
+        ENV_ALLOW_SESSION_ID_OVERWRITE,
+        ENV_SIDECAR,
+        ENV_NET_FEES,
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(ENV_NET_FEES, "1")
+    with pytest.raises(ValueError, match=INVALID_FLAG_SET_ERROR):
+        require_allowed_flag_set()
+    monkeypatch.setenv(ENV_SIDECAR, "1")
+    with pytest.raises(ValueError, match=INVALID_FLAG_SET_ERROR):
+        require_allowed_flag_set()
+    monkeypatch.setenv(ENV_PAUSE_GUARD, "1")
+    monkeypatch.setenv(ENV_DAY_MANIFEST, "1")
+    with pytest.raises(ValueError, match=INVALID_FLAG_SET_ERROR):
+        require_allowed_flag_set()
+    for name in (ENV_EXCLUSIVE_FILLS, ENV_DAY_RULES, ENV_DAY_PUBLISH, ENV_TRADING_HOURS):
+        monkeypatch.setenv(name, "1")
+    require_allowed_flag_set()
+    monkeypatch.setenv(ENV_ALLOW_SESSION_ID_OVERWRITE, "1")
+    require_allowed_flag_set()
+    monkeypatch.delenv(ENV_DAY_RULES)
     with pytest.raises(ValueError, match=INVALID_FLAG_SET_ERROR):
         require_allowed_flag_set()
 

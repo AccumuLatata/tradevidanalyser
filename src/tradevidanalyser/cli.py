@@ -141,7 +141,12 @@ def main(argv: list[str] | None = None) -> int:
 
     p_fills = sub.add_parser("fills", help="TradesViz executions → fills.parquet / trades.parquet")
     p_fills.add_argument("session")
-    p_fills.add_argument("--executions", type=Path, required=True, help="TradesViz executions CSV")
+    p_fills.add_argument(
+        "--executions",
+        type=Path,
+        required=True,
+        help="TradesViz executions CSV; TT journal directory when TVA_NET_FEES is on",
+    )
     p_fills.add_argument(
         "--venue",
         choices=("topstepx", "amp", "unknown"),
@@ -158,6 +163,17 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=None,
         help="ThesisTester journal output (reads reconcile.json; no PDF parse)",
+    )
+    p_fills.add_argument(
+        "--positions-dir",
+        type=Path,
+        default=None,
+        help="TT positions directory (journal_positions.parquet) when TVA_NET_FEES is on",
+    )
+    p_fills.add_argument(
+        "--account",
+        default=None,
+        help="journal account; must match lot sources / tx:{account}:{Id}",
     )
 
     p_al = sub.add_parser(
@@ -258,7 +274,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_build = day_sub.add_parser("build", help="write days/<date>/ manifest (TVA_DAY_MANIFEST)")
     p_build.add_argument("date", metavar="YYYY-MM-DD")
-    p_build.add_argument("--executions", type=Path, required=True, help="TradesViz executions CSV")
+    p_build.add_argument(
+        "--executions",
+        type=Path,
+        required=True,
+        help="TradesViz executions CSV; TT journal directory when TVA_NET_FEES is on",
+    )
     p_build.add_argument(
         "--venue",
         choices=("topstepx", "amp", "unknown"),
@@ -280,6 +301,17 @@ def main(argv: list[str] | None = None) -> int:
         "--provider",
         default=None,
         help="optional; recorded in the fingerprint only. No model is called",
+    )
+    p_build.add_argument(
+        "--positions-dir",
+        type=Path,
+        default=None,
+        help="TT positions directory (journal_positions.parquet) when TVA_NET_FEES is on",
+    )
+    p_build.add_argument(
+        "--account",
+        default=None,
+        help="journal account; must match lot sources / tx:{account}:{Id}",
     )
     p_enable = day_sub.add_parser("enable", help="write days/enabled_from (never from a reader)")
     p_enable.add_argument(
@@ -477,6 +509,8 @@ def main(argv: list[str] | None = None) -> int:
                 venue=args.venue,
                 include_manual=args.include_manual,
                 reconcile_dir=args.reconcile_dir,
+                positions_dir=args.positions_dir,
+                account=args.account,
             )
             _emit(result.as_dict(), as_json=True)
             return 0
@@ -541,6 +575,8 @@ def main(argv: list[str] | None = None) -> int:
                     include_manual=args.include_manual,
                     reconcile_dir=args.reconcile_dir,
                     provider=args.provider,
+                    positions_dir=args.positions_dir,
+                    account=args.account,
                 )
                 _emit(result.as_dict(), as_json=True)
                 return 0

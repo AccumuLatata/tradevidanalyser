@@ -1,0 +1,30 @@
+# Synthetic ThesisTester accounts list only (TT:903). No live account IDs.
+# fee_schedule is per-instrument (number or {rt_usd}).
+# trading_days is an explicit list of dates.
+accounts:
+  - account: synth-topstepx
+    fee_schedule:
+      MNQ: 1.34
+      MES:
+        rt_usd: 2.48
+    trading_days:
+      - 2026-05-14
+      - 2026-09-11
+      - 2026-09-14
+      - 2026-09-15
+      - 2026-09-16
+      - 2026-09-17
+      - 2026-09-18
+  - account: synth-amp
+    fee_schedule:
+      MNQ: 2.40
+      MES:
+        rt_usd: 4.80
+    trading_days:
+      - 2026-05-14
+      - 2026-09-11
+      - 2026-09-14
+      - 2026-09-15
+      - 2026-09-16
+      - 2026-09-17
+      - 2026-09-18

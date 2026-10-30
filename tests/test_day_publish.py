@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from tradevidanalyser import config, store
@@ -28,6 +31,7 @@ from tradevidanalyser.flags import (
     ENV_DAY_PUBLISH,
     ENV_DAY_RULES,
     ENV_EXCLUSIVE_FILLS,
+    ENV_NET_FEES,
     ENV_PAUSE_GUARD,
     ENV_TRADING_HOURS,
     day_publish_enabled,
@@ -50,6 +54,16 @@ from tradevidanalyser.schema import (
     SessionRecord,
 )
 from tradevidanalyser.watch import release_lock, try_acquire_lock
+from tradevidanalyser.tt_journal import TT_LOCK_VALIDATE_MISSING
+from tradevidanalyser.fills import write_table
+from tradevidanalyser.week_manifest import (
+    WEEK_MANIFEST_INPUTS,
+    WEEK_MANIFEST_MISSING,
+    WEEK_MANIFEST_NOT_LOCKED,
+    WeekManifestError,
+    iso_week_id,
+    write_week_manifest,
+)
 
 L0_DIR = Path(__file__).parent / "fixtures" / "l0_main_f44d864"
 L0_SESSION = "2026-05-14_160300"
@@ -390,6 +404,86 @@ def test_flag_off_second_clip_still_overwrites_title(
     assert page is not None
     assert page.properties["Summaries"] == "Second clip sentence."
     assert not day_publish_path(tva_root, DAY).is_file()
+
+
+def _stamp_account(root: Path, session_id: str, account: str) -> None:
+    path = store.trades_path(root, session_id)
+    assert path.is_file()
+    table = pq.read_table(path)
+    if "account" in table.column_names:
+        table = table.drop(["account"])
+    table = table.append_column(
+        "account", pa.array([account] * table.num_rows, type=pa.string())
+    )
+    write_table(path, table)
+
+
+def test_net_fees_handwritten_week_manifest_cannot_unlock(
+    tva_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A written week_manifest.json is not enough; TT lock.py must re-derive lock_status."""
+    a, b = _build_two(tva_root, tmp_path, monkeypatch)
+    monkeypatch.setenv(ENV_NET_FEES, "1")
+    _stamp_account(tva_root, a.id, "synth-amp")
+    write_week_manifest(tva_root, DAY, lock_status="locked", account="synth-amp")
+    _write_debrief(tva_root, a.id, learnings="Alpha one.")
+    _write_debrief(tva_root, b.id, learnings="Bravo one.")
+    with pytest.raises(
+        WeekManifestError,
+        match=(
+            f"{re.escape(TT_LOCK_VALIDATE_MISSING)}|"
+            f"{re.escape(WEEK_MANIFEST_NOT_LOCKED)}|"
+            f"{re.escape(WEEK_MANIFEST_INPUTS)}"
+        ),
+    ):
+        publish_session(a.id, root=tva_root, notion=True)
+    assert not day_publish_path(tva_root, DAY).is_file()
+    assert iso_week_id(DAY) == "2026-W38"
+
+
+def test_net_fees_open_week_manifest_blocks_publish(
+    tva_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Open weekly manifest (or unverified file) does not publish (TT:903)."""
+    a, b = _build_two(tva_root, tmp_path, monkeypatch)
+    monkeypatch.setenv(ENV_NET_FEES, "1")
+    write_week_manifest(tva_root, DAY, lock_status="open", account="synth-amp")
+    _write_debrief(tva_root, a.id, learnings="Alpha one.")
+    _write_debrief(tva_root, b.id, learnings="Bravo one.")
+    with pytest.raises(WeekManifestError):
+        publish_session(a.id, root=tva_root, notion=True)
+    assert not day_publish_path(tva_root, DAY).is_file()
+
+
+def test_net_fees_missing_week_manifest_blocks_publish(
+    tva_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    a, b = _build_two(tva_root, tmp_path, monkeypatch)
+    monkeypatch.setenv(ENV_NET_FEES, "1")
+    _write_debrief(tva_root, a.id, learnings="Alpha one.")
+    with pytest.raises(WeekManifestError, match=WEEK_MANIFEST_MISSING):
+        publish_session(a.id, root=tva_root, notion=True)
+    assert not day_publish_path(tva_root, DAY).is_file()
+
+
+def test_net_fees_direct_publish_no_legacy_fallback(
+    tva_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unlocked clip publish is not a fallback under TVA_NET_FEES (TT:892)."""
+    _four_on(monkeypatch)
+    monkeypatch.setenv(ENV_NET_FEES, "1")
+    lone = _session(
+        tva_root,
+        "2026-09-16_093000",
+        start=datetime(2026, 9, 16, 9, 30, tzinfo=VIENNA),
+        duration_s=600.0,
+        sha256="c" * 64,
+    )
+    _write_debrief(tva_root, lone.id)
+    write_week_manifest(tva_root, date(2026, 9, 16), lock_status="locked", account="synth-amp")
+    with pytest.raises((DayStale, WeekManifestError)):
+        publish_session(lone.id, root=tva_root, notion=True)
+    assert not store.publish_path(tva_root, lone.id).is_file()
 
 
 def test_concurrent_publish_one_gets_lock(

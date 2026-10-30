@@ -167,6 +167,38 @@ def test_r_max10_exactly_10_trade_ids() -> None:
     check = _check(trades, "R-MAX10")
     assert check.status == "pass"
     assert check.evidence["count"] == 10
+    assert "count_basis" not in check.evidence
+
+
+def test_r_max10_net_fees_counts_positions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TVA_NET_FEES", "1")
+    trades = [
+        _trade(1, entry_s=0, exit_s=30, pnl=1.0),
+        _trade(2, entry_s=60, exit_s=90, pnl=1.0),
+        _trade(3, entry_s=120, exit_s=150, pnl=1.0),
+    ]
+    trades[0] = RuleTrade(**{**trades[0].__dict__, "position_id": "pos-a"})
+    trades[1] = RuleTrade(**{**trades[1].__dict__, "position_id": "pos-a"})
+    trades[2] = RuleTrade(**{**trades[2].__dict__, "position_id": "pos-b"})
+    check = _check(trades, "R-MAX10", RulesConfig(max_trades_per_day=2))
+    assert check.evidence["count_basis"] == "positions"
+    assert check.evidence["count"] == 2
+    assert check.evidence["trade_ids"] == ["pos-a", "pos-b"]
+    assert check.status == "pass"
+
+
+def test_r_max10_net_fees_falls_back_to_lots(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TVA_NET_FEES", "1")
+    trades = [_trade(i + 1, entry_s=i * 60, exit_s=i * 60 + 20, pnl=1.0) for i in range(3)]
+    check = _check(trades, "R-MAX10")
+    assert check.evidence["count_basis"] == "lots"
+    assert check.evidence["count_basis_reason"] == "position_id fehlt"
+    assert check.evidence["count"] == 3
+    assert check.evidence["trade_ids"] == ["T01", "T02", "T03"]
 
 
 def _three_losses_then(next_entry_after_third_exit: float) -> list[RuleTrade]:

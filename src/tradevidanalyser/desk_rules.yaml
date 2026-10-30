@@ -1,0 +1,30 @@
+# TVA desk-rule map (TT:903). Separate from ThesisTester accounts.yaml.
+# account → desk; Topstep rules apply only to desk topstepx.
+accounts:
+  synth-topstepx: topstepx
+  synth-amp: amp
+desks:
+  topstepx:
+    daily_loss_limit_usd: null
+    max_trades_per_day: 10
+    consecutive_loss_timeout:
+      n: 3
+      minutes: 30
+    post_loss_block_minutes: 5
+    reentry:
+      window_s: 120
+      max: 1
+      block_minutes: 5
+    flat_by: null
+  amp:
+    daily_loss_limit_usd: null
+    max_trades_per_day: 20
+    consecutive_loss_timeout:
+      n: 3
+      minutes: 30
+    post_loss_block_minutes: 5
+    reentry:
+      window_s: 120
+      max: 1
+      block_minutes: 5
+    flat_by: null

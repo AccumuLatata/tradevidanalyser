@@ -323,6 +323,8 @@ def fills_session(
     include_manual: bool = False,
     prefer_import: bool | None = None,
     reconcile_dir: Path | None = None,
+    positions_dir: Path | None = None,
+    account: str | None = None,
 ) -> FillsResult:
     if not store.is_safe_path_name(session_id):
         raise ValueError(f"unsafe session id {session_id!r}")
@@ -338,6 +340,8 @@ def fills_session(
         include_manual=include_manual,
         prefer_import=prefer_import,
         reconcile_dir=reconcile_dir,
+        positions_dir=positions_dir,
+        account=account,
     )
 
 
@@ -455,11 +459,20 @@ def publish_session(
 ) -> PublishResult:
     if not store.is_safe_path_name(session_id):
         raise ValueError(f"unsafe session id {session_id!r}")
-    from tradevidanalyser.day_manifest import acquire_day_publish_lock, require_fresh_for_session
+    from tradevidanalyser.day_manifest import (
+        DayStale,
+        acquire_day_publish_lock,
+        require_fresh_for_session,
+    )
+    from tradevidanalyser.flags import net_fees_enabled
     from tradevidanalyser.watch import release_lock
 
     require_fresh_for_session(root, session_id)
     lock = acquire_day_publish_lock(root, session_id)
+    if net_fees_enabled() and lock is None and store.session_json_path(root, session_id).is_file():
+        from tradevidanalyser.day_manifest import nominal_vienna_date
+
+        raise DayStale([nominal_vienna_date(store.load_session(root, session_id))])
     try:
         return run_publish(
             session_id, root=root, notion=notion, provider_name=provider_name

@@ -38,8 +38,18 @@ def apply_day_rules(
     """Rewrite every clip rules.json, write day rules, replace ledger day rows."""
     if not day_rules_enabled():
         return
-    cfg = config or load_rules_config(config_path)
     day_trades = rule_trades_from_journal(ownership.trades, ownership.tva_trade_ids)
+    if config is not None:
+        cfg = config
+    else:
+        from tradevidanalyser.flags import net_fees_enabled
+
+        if net_fees_enabled():
+            from tradevidanalyser.accounts import desk_rules_for_trades
+
+            cfg = desk_rules_for_trades(day_trades)
+        else:
+            cfg = load_rules_config(config_path)
     day_checks = evaluate_day_rules(day_trades, cfg)
     store.write_json(
         build_dir / DAY_RULES_NAME,
@@ -109,7 +119,18 @@ def rules_session_day_path(
     config_path: Path | None = None,
 ) -> RulesResult:
     """tva rules on a day-path session: write session + day artifacts, or stale already aborted."""
-    cfg = config or load_rules_config(config_path)
+    trades_file = store.trades_path(root, record.id)
+    if config is not None:
+        cfg = config
+    else:
+        from tradevidanalyser.flags import net_fees_enabled
+
+        if net_fees_enabled() and trades_file.is_file():
+            from tradevidanalyser.accounts import desk_rules_for_trades
+
+            cfg = desk_rules_for_trades(read_rule_trades(trades_file))
+        else:
+            cfg = load_rules_config(config_path)
     day = nominal_vienna_date(record)
     report = _session_day_report(record, root=root, day=day, config=cfg)
     store.write_json(store.rules_path(root, record.id), report.model_dump(mode="json"))
