@@ -537,21 +537,3 @@ def test_rv_golden_test2_section_residual() -> None:
 def test_rv_golden_session_171106_first_frame_offset() -> None:
     """Session 17:11:06: first-frame ≈ 1.052 s (first-frame offset only)."""
     _assert_rv_first_frame("2026-10-12 17-11-06")
-
-
-@pytest.mark.skip(reason="needs fills")
-def test_rv_golden_session_171106_exit_t13() -> None:
-    """Session 17:11:06: Exit T13 at video second ≈ 407–409 (TT:902)."""
-    raise AssertionError("needs fills")
-
-
-@pytest.mark.skip(reason="pending owner clip mapping")
-def test_rv_golden_t_s2() -> None:
-    """T-S2 sidecar golden — values not in the extract [NV]."""
-    raise AssertionError("pending owner clip mapping")
-
-
-@pytest.mark.skip(reason="pending owner clip mapping")
-def test_rv_golden_t_s3() -> None:
-    """T-S3 sidecar golden — values not in the extract [NV]."""
-    raise AssertionError("pending owner clip mapping")
