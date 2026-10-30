@@ -597,6 +597,27 @@ def _span_residual(
     return abs(span - offset)
 
 
+def section_span_residual(
+    section: TimeAnchorSection,
+    *,
+    first_frame_offset_s: float = FIRST_FRAME_OFFSET_EXPECTED_S,
+) -> float | None:
+    """Per-section span residual from N5 wall/video bounds (TT:464 / TT:902).
+
+    The first-frame offset applies only on the ``record_start`` section. Later
+    sections already sit on media time (R13: resume continues at pause
+    ``video_s``), so their residual is ``|wall_span − video_span|``.
+    """
+    wall_start = _parse_wall(section.wall_start)
+    wall_end = _parse_wall(section.wall_end)
+    if wall_start is None or wall_end is None:
+        return None
+    wall_span = (wall_end - wall_start).total_seconds()
+    video_span = float(section.video_s_end) - float(section.video_s_start)
+    offset = first_frame_offset_s if section.start_event == EVENT_RECORD_START else 0.0
+    return _r(abs(wall_span - video_span - offset))
+
+
 def _build_sections(
     events: list[SidecarEvent], video_name: str
 ) -> tuple[list[TimeAnchorSection], bool]:

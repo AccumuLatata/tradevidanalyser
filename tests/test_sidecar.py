@@ -48,6 +48,7 @@ from tradevidanalyser.sidecar import (
     load_time_anchor,
     measure_first_frame_offset,
     parse_sidecar_jsonl,
+    section_span_residual,
     sidecar_replaces_detector,
     time_anchor_path,
     write_session_time_anchor,
@@ -484,6 +485,7 @@ def test_schema_version_is_1() -> None:
 
 SIDECARS = Path(__file__).resolve().parent / "fixtures" / "sidecars"
 RV_OFFSET_TOL_S = 0.005
+RV_SECTION_RESIDUAL_MAX_S = 0.026
 # Owner-confirmed ffprobe durations (no videos in repo).
 RV_FFPROBE_DURATION_S = {
     "2026-10-12 15-24-11.jsonl": 7.416667,
@@ -497,7 +499,7 @@ RV_EXPECTED_OFFSET_S = {
 }
 
 
-def _assert_rv_first_frame(stem: str) -> None:
+def _assert_rv_first_frame(stem: str, *, section_residual_max_s: float | None = None) -> None:
     """Measure first-frame offset from a committed sidecar + stored ffprobe duration."""
     name = f"{stem}.jsonl"
     path = SIDECARS / name
@@ -522,16 +524,31 @@ def _assert_rv_first_frame(stem: str) -> None:
     assert anchor.first_frame_offset_s == pytest.approx(
         RV_EXPECTED_OFFSET_S[name], abs=RV_OFFSET_TOL_S
     )
+    if section_residual_max_s is not None:
+        assert anchor.sections
+        for section in anchor.sections:
+            # Section 1 holds the first-frame offset, already covered by the
+            # per-clip measured goldens at ±5 ms (Q-15 B). Its wall−video is
+            # exactly the OBS 1.043 convention, so checking it is vacuous.
+            if section.index == 1:
+                continue
+            residual = section_span_residual(section)
+            assert residual is not None
+            assert round(residual, 3) <= section_residual_max_s, (
+                stem,
+                section.index,
+                residual,
+            )
 
 
 def test_rv_golden_test1_first_frame_offset() -> None:
     """Test 1 (2026-10-12 15-24-11): first-frame ≈ 1.067 s (TT:440, 902)."""
-    _assert_rv_first_frame("2026-10-12 15-24-11")
+    _assert_rv_first_frame("2026-10-12 15-24-11", section_residual_max_s=RV_SECTION_RESIDUAL_MAX_S)
 
 
 def test_rv_golden_test2_section_residual() -> None:
     """Test 2 (2026-10-12 15-40-45): first-frame ≈ 1.116 s; sections verified."""
-    _assert_rv_first_frame("2026-10-12 15-40-45")
+    _assert_rv_first_frame("2026-10-12 15-40-45", section_residual_max_s=RV_SECTION_RESIDUAL_MAX_S)
 
 
 def test_rv_golden_session_171106_first_frame_offset() -> None:
