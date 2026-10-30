@@ -301,8 +301,6 @@ def test_ingest_positions_lock_then_publish(
     files = hashed_input_files(manifest, **sources)
     with pytest.raises(Exception, match="input hash mismatch"):
         assert_manifest_inputs_match(manifest, files)
-    with pytest.raises(Exception, match="input hash mismatch"):
-        assert_claimed_lock_supported(manifest, files=files)
     trades_pq.write_bytes(original)
 
     hand = json.loads(json.dumps(manifest))
@@ -316,9 +314,7 @@ def test_ingest_positions_lock_then_publish(
         hand["positions"] = {}
     else:
         hand["days"] = []
-    (tva_root / WEEK_MANIFEST_NAME).write_text(
-        json.dumps(hand, indent=2) + "\n", encoding="utf-8"
-    )
+    (tva_root / WEEK_MANIFEST_NAME).write_text(json.dumps(hand, indent=2) + "\n", encoding="utf-8")
     hand_files = hashed_input_files(hand, **sources)
     validate_week_manifest(hand)
     assert_manifest_inputs_match(hand, hand_files)

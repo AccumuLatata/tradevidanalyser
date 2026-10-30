@@ -192,7 +192,7 @@ _JOURNAL_ROLE_FILES = {
     "journal_trades": JOURNAL_TRADES_NAME,
     "journal_lot_sources": JOURNAL_LOT_SOURCES_NAME,
     "journal_joined": "journal_joined.parquet",
-    "join": "join.parquet",
+    "join_json": "join.json",
 }
 _POSITIONS_ROLE_FILES = {
     "journal_positions": JOURNAL_POSITIONS_PARQUET,
@@ -209,6 +209,7 @@ def lock_source_paths(
     accounts: Path | None = None,
     tva_inventory: Path | None = None,
     exceptions: Path | None = None,
+    output_dir: Path | None = None,
 ) -> dict[str, Path]:
     """Conventional lock sources under ``root``, with explicit overrides."""
     sources: dict[str, Path] = {
@@ -222,6 +223,7 @@ def lock_source_paths(
             else Path(root) / "prepare" / "prepare_manifest.json"
         ),
         "accounts": Path(accounts) if accounts is not None else Path(root) / "accounts.yaml",
+        "output_dir": Path(output_dir) if output_dir is not None else Path(root),
     }
     if tva_inventory is not None:
         sources["tva_inventory"] = Path(tva_inventory)
@@ -230,13 +232,11 @@ def lock_source_paths(
     return sources
 
 
-def _canonical_role(role: str) -> str:
-    """``prepare_manifest:TOKEN`` / ``ticks:TOKEN`` collapse to the base role."""
-    if role.startswith("prepare_manifest:"):
-        return "prepare_manifest"
-    if role.startswith("ticks:"):
-        return "ticks"
-    return role
+def _contract_token(role: str, prefix: str) -> str | None:
+    if not role.startswith(f"{prefix}:"):
+        return None
+    token = role[len(prefix) + 1 :]
+    return token or None
 
 
 def _basename(raw: Any, default: str) -> str:
@@ -244,6 +244,16 @@ def _basename(raw: Any, default: str) -> str:
         return default
     path = Path(str(raw))
     return path.name if not path.is_absolute() else str(path)
+
+
+def _token_copy_basename(raw: Any, *, default: str, token: str) -> str:
+    """Lock-output copy name. Do not collapse TOKEN roles onto the bare file."""
+    name = _basename(raw, default)
+    if Path(name).is_absolute():
+        return name
+    if token in Path(name).stem:
+        return name
+    return default
 
 
 def _resolve_input_file(
@@ -256,28 +266,44 @@ def _resolve_input_file(
     accounts: Path,
     tva_inventory: Path | None,
     exceptions: Path | None,
+    output_dir: Path,
 ) -> Path:
-    base = _canonical_role(role)
-    if base in _JOURNAL_ROLE_FILES:
-        name = _basename(path_value, _JOURNAL_ROLE_FILES[base])
+    prepare_token = _contract_token(role, "prepare_manifest")
+    if prepare_token is not None:
+        name = _token_copy_basename(
+            path_value,
+            default=f"prepare_manifest.{prepare_token}.json",
+            token=prepare_token,
+        )
+        return Path(name) if Path(name).is_absolute() else output_dir / name
+    ticks_token = _contract_token(role, "ticks")
+    if ticks_token is not None:
+        name = _token_copy_basename(
+            path_value,
+            default=f"ticks.{ticks_token}.parquet",
+            token=ticks_token,
+        )
+        return Path(name) if Path(name).is_absolute() else output_dir / name
+    if role in _JOURNAL_ROLE_FILES:
+        name = _basename(path_value, _JOURNAL_ROLE_FILES[role])
         return Path(name) if Path(name).is_absolute() else journal_dir / name
-    if base in _POSITIONS_ROLE_FILES:
-        name = _basename(path_value, _POSITIONS_ROLE_FILES[base])
+    if role in _POSITIONS_ROLE_FILES:
+        name = _basename(path_value, _POSITIONS_ROLE_FILES[role])
         return Path(name) if Path(name).is_absolute() else positions_dir / name
-    if base == "prepare_manifest":
+    if role == "prepare_manifest":
         return Path(prepare_manifest)
-    if base == "ticks":
+    if role == "ticks":
         name = _basename(path_value, TICKS_NAME)
         parent = Path(prepare_manifest).parent
         return Path(name) if Path(name).is_absolute() else parent / name
-    if base == "accounts":
+    if role == "accounts":
         return Path(accounts)
-    if base == "tva_inventory":
+    if role == "tva_inventory":
         if tva_inventory is not None:
             return Path(tva_inventory)
         name = _basename(path_value, "tva_inventory.json")
         return Path(name) if Path(name).is_absolute() else journal_dir / name
-    if base == "exceptions":
+    if role == "exceptions":
         if exceptions is not None:
             return Path(exceptions)
         name = _basename(path_value, "exceptions.json")
@@ -292,14 +318,17 @@ def hashed_input_files(
     positions_dir: Path,
     prepare_manifest: Path,
     accounts: Path,
+    output_dir: Path,
     tva_inventory: Path | None = None,
     exceptions: Path | None = None,
 ) -> dict[str, Path]:
     """Map TT ``inputs: [{role, path, sha256}]`` to resolved files.
 
     Roles match ``test_jx8_lock.py:364-370``. The returned map stores the
-    resolved file path, not the source directory. Unknown role or a listed
-    role whose file is missing is loud.
+    resolved file path, not the source directory. ``prepare_manifest:TOKEN``
+    and ``ticks:TOKEN`` resolve to lock-output copies
+    ``prepare_manifest.TOKEN.json`` / ``ticks.TOKEN.parquet``. Unknown role
+    or a listed role whose file is missing is loud.
     """
     raw = manifest.get("inputs")
     if not isinstance(raw, list) or not raw:
@@ -321,6 +350,7 @@ def hashed_input_files(
             accounts=Path(accounts),
             tva_inventory=None if tva_inventory is None else Path(tva_inventory),
             exceptions=None if exceptions is None else Path(exceptions),
+            output_dir=Path(output_dir),
         )
         if not resolved.is_file():
             raise ValueError(f"{WEEK_MANIFEST_INPUT_MISSING}: {key} {resolved}")

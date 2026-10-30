@@ -90,6 +90,7 @@ def _role_sources(tmp_path: Path) -> dict[str, Path]:
     (journal / "reconcile.json").write_bytes(b"r")
     (journal / "journal_trades.parquet").write_bytes(b"j")
     (journal / "journal_lot_sources.parquet").write_bytes(b"l")
+    (journal / "join.json").write_text("{}", encoding="utf-8")
     (positions / "journal_positions.parquet").write_bytes(b"p")
     (positions / "positions.json").write_text("[]", encoding="utf-8")
     prepare = prepare_dir / "prepare_manifest.json"
@@ -102,6 +103,7 @@ def _role_sources(tmp_path: Path) -> dict[str, Path]:
         "positions_dir": positions,
         "prepare_manifest": prepare,
         "accounts": accounts,
+        "output_dir": tmp_path,
     }
 
 
@@ -115,10 +117,9 @@ def test_hashed_input_files_maps_roles(tmp_path: Path) -> None:
             {"role": "journal_positions", "path": "journal_positions.parquet", "sha256": "dd"},
             {"role": "positions_json", "path": "positions.json", "sha256": "ee"},
             {"role": "prepare_manifest", "path": "prepare_manifest.json", "sha256": "ff"},
-            {"role": "prepare_manifest:MNQU6", "path": "prepare_manifest.json", "sha256": "ff"},
             {"role": "ticks", "path": "ticks.parquet", "sha256": "00"},
-            {"role": "ticks:MNQU6", "path": "ticks.parquet", "sha256": "00"},
             {"role": "accounts", "path": "accounts.yaml", "sha256": "11"},
+            {"role": "join_json", "path": "join.json", "sha256": "22"},
         ]
     }
     files = hashed_input_files(manifest, **sources)
@@ -131,10 +132,60 @@ def test_hashed_input_files_maps_roles(tmp_path: Path) -> None:
     assert files["journal_positions"] == positions / "journal_positions.parquet"
     assert files["positions_json"] == positions / "positions.json"
     assert files["prepare_manifest"] == prepare
-    assert files["prepare_manifest:MNQU6"] == prepare
     assert files["ticks"] == prepare.parent / "ticks.parquet"
-    assert files["ticks:MNQU6"] == prepare.parent / "ticks.parquet"
     assert files["accounts"] == sources["accounts"]
+    assert files["join_json"] == journal / "join.json"
+
+
+def test_hashed_input_files_maps_contract_token_roles(tmp_path: Path) -> None:
+    sources = _role_sources(tmp_path)
+    output_dir = sources["output_dir"]
+    (output_dir / "prepare_manifest.MNQU6.json").write_text("{}", encoding="utf-8")
+    (output_dir / "ticks.MNQU6.parquet").write_bytes(b"u")
+    (output_dir / "prepare_manifest.MNQM6.json").write_text("{}", encoding="utf-8")
+    (output_dir / "ticks.MNQM6.parquet").write_bytes(b"m")
+    manifest = {
+        "inputs": [
+            {"role": "prepare_manifest", "path": "prepare_manifest.json", "sha256": "ff"},
+            {"role": "ticks", "path": "ticks.parquet", "sha256": "00"},
+            {
+                "role": "prepare_manifest:MNQU6",
+                "path": "prepare_manifest.MNQU6.json",
+                "sha256": "11",
+            },
+            {"role": "ticks:MNQU6", "path": "ticks.MNQU6.parquet", "sha256": "22"},
+            {"role": "prepare_manifest:MNQM6", "path": "prepare_manifest.json", "sha256": "33"},
+            {"role": "ticks:MNQM6", "path": "ticks.parquet", "sha256": "44"},
+        ]
+    }
+    files = hashed_input_files(manifest, **sources)
+    prepare = sources["prepare_manifest"]
+    ticks = prepare.parent / "ticks.parquet"
+    assert files["prepare_manifest"] == prepare
+    assert files["ticks"] == ticks
+    assert files["prepare_manifest:MNQU6"] == output_dir / "prepare_manifest.MNQU6.json"
+    assert files["ticks:MNQU6"] == output_dir / "ticks.MNQU6.parquet"
+    assert files["prepare_manifest:MNQM6"] == output_dir / "prepare_manifest.MNQM6.json"
+    assert files["ticks:MNQM6"] == output_dir / "ticks.MNQM6.parquet"
+    assert files["prepare_manifest:MNQU6"] != prepare
+    assert files["ticks:MNQU6"] != ticks
+    assert files["prepare_manifest:MNQM6"] != prepare
+    assert files["ticks:MNQM6"] != ticks
+
+
+def test_hashed_input_files_missing_token_copy_is_loud(tmp_path: Path) -> None:
+    sources = _role_sources(tmp_path)
+    manifest = {
+        "inputs": [
+            {
+                "role": "prepare_manifest:MNQU6",
+                "path": "prepare_manifest.MNQU6.json",
+                "sha256": "11",
+            }
+        ]
+    }
+    with pytest.raises(ValueError, match=WEEK_MANIFEST_INPUT_MISSING):
+        hashed_input_files(manifest, **sources)
 
 
 def test_hashed_input_files_unknown_role_is_loud(tmp_path: Path) -> None:

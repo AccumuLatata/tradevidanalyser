@@ -329,7 +329,9 @@ PR-16 consumes ThesisTester; it does not fork it.
   is required). Hashed inputs are TT `inputs: [{role, path, sha256}]`
   mapped to resolved files (`reconcile`, `journal_trades`,
   `journal_lot_sources`, `journal_positions`, `positions_json`,
-  `prepare_manifest`, `ticks`, `accounts`). A hand-edited `locked`
+  `prepare_manifest`, `ticks`, `accounts`, `join_json`).
+  `prepare_manifest:TOKEN` / `ticks:TOKEN` resolve to lock-output
+  copies, not the single prepare path. A hand-edited `locked`
   (`lock_status_inconsistent`) or a tampered hash (`input hash
   mismatch`) cannot unlock.
   Desk rules: TT-shaped synthetic `accounts.yaml` (per-instrument

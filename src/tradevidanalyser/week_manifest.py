@@ -91,6 +91,7 @@ def require_locked_week_manifest(
     accounts: Path | None = None,
     tva_inventory: Path | None = None,
     exceptions: Path | None = None,
+    output_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Publish only when TT JX8 accepts the manifest for this week+account."""
     from tradevidanalyser.tt_journal import (
@@ -128,6 +129,7 @@ def require_locked_week_manifest(
                 accounts=accounts,
                 tva_inventory=tva_inventory,
                 exceptions=exceptions,
+                output_dir=output_dir,
             ),
         )
     except ValueError as exc:
