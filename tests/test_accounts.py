@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
 from tradevidanalyser.accounts import (
     ACCOUNT_MISSING,
     ENV_ACCOUNTS_FILE,
+    ENV_DESK_RULES_FILE,
     TOPSTEP_DESK,
     TOPSTEP_ON_OTHER_ERROR,
     AccountsError,
     assert_desk_allowed,
     default_accounts_path,
+    default_desk_rules_path,
     desk_rules_for_account,
     desk_rules_for_trades,
     load_accounts_config,
@@ -142,3 +145,38 @@ def test_accounts_file_override_uses_local_yaml(
     assert default_accounts_path() == local
     cfg = load_accounts_config()
     assert "synth-amp" in cfg.accounts
+
+
+def test_desk_rules_file_override_uses_local_yaml(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import yaml
+
+    shipped = yaml.safe_load(default_desk_rules_path().read_text(encoding="utf-8"))
+    shipped["desks"]["amp"]["max_trades_per_day"] = 99
+    local = tmp_path / "desk_rules.yaml"
+    local.write_text(yaml.safe_dump(shipped, sort_keys=False), encoding="utf-8")
+    monkeypatch.setenv(ENV_DESK_RULES_FILE, str(local))
+    assert default_desk_rules_path() == local
+    cfg = load_accounts_config()
+    assert cfg.desks["amp"].max_trades_per_day == 99
+
+
+def test_desk_rules_file_unset_uses_shipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tradevidanalyser import accounts as accounts_mod
+
+    monkeypatch.delenv(ENV_DESK_RULES_FILE, raising=False)
+    path = default_desk_rules_path()
+    assert path.is_file()
+    assert path == Path(accounts_mod.__file__).resolve().parent / "desk_rules.yaml"
+    cfg = load_accounts_config()
+    assert cfg.desks["amp"].max_trades_per_day == 20
+
+
+def test_desk_rules_file_missing_is_loud(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    missing = tmp_path / "no-such-desk-rules.yaml"
+    monkeypatch.setenv(ENV_DESK_RULES_FILE, str(missing))
+    with pytest.raises(FileNotFoundError, match="desk_rules.yaml not found"):
+        default_desk_rules_path()

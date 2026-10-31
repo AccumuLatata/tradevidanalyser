@@ -227,6 +227,21 @@ def test_unknown_status_fails_closed(tmp_path: Path) -> None:
         load_reconcile_status_map(path)
 
 
+def test_fee_mismatch_accepted_unknown_fails_closed(tmp_path: Path) -> None:
+    path = _write_reconcile(
+        tmp_path / "reconcile.json",
+        [{"session_date": "2026-05-14", "instrument": "MNQ", "status": "fee_mismatch"}],
+    )
+    mapping = load_reconcile_status_map(path)
+    assert mapping[(date(2026, 5, 14), "MNQ")] == "fee_mismatch"
+    unknown = _write_reconcile(
+        tmp_path / "unknown.json",
+        [{"session_date": "2026-05-14", "instrument": "MNQ", "status": "not_a_status"}],
+    )
+    with pytest.raises(FillsError, match="status"):
+        load_reconcile_status_map(unknown)
+
+
 def test_missing_reconcile_errors_even_when_no_fills(tva_root: Path, tmp_path: Path) -> None:
     record = _session(
         tva_root,
@@ -386,6 +401,7 @@ def test_attach_does_not_parse_pdf(tmp_path: Path) -> None:
         "topstepx_missing",
         "multiset_mismatch",
         "pnl_mismatch",
+        "fee_mismatch",
     }
     src = Path(__file__).resolve().parents[1] / "src" / "tradevidanalyser" / "fills.py"
     text = src.read_text(encoding="utf-8")
