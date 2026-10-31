@@ -61,8 +61,9 @@ on all 5 days.
 | Week | 42 | −97.50 | 61.00 | **−158.50** |
 
 Fee used for the dry-run accounts file: 1.22 USD/RT MNQ (from the
-TopstepX Fees + Commissions columns). The shipped repo `accounts.yaml`
-contains only synth accounts (MNQ 1.34).
+TopstepX Fees + Commissions columns). The shipped
+`src/tradevidanalyser/accounts.yaml` contains only synth accounts
+(`synth-topstepx` MNQ 1.34, `synth-amp` MNQ 2.40).
 
 ## Tags / publish / flags (first run)
 
@@ -95,8 +96,11 @@ bands):
 - Lots without video stay unassigned. Session-level net / evidence
   cover on-video trades only.
 - Vienna calendar date and Topstep `TradeDay` /
-  `trading_session_date` (ETH 18:00 America/New_York) differ for
-  trades after about 23:00 Vienna.
+  `trading_session_date` (ETH 18:00 America/New_York) differ after
+  that NY cutoff — about 23:00 Vienna in this late-October DST gap,
+  otherwise about midnight Vienna.
 - `PB_ODG` is not rewritten to `PB_OGB`.
 - The grammar validator is a copy of the TT test helper at
-  `4fc4af05`.
+  `4fc4af05`. In-repo check:
+  `test_grammar_errors_match_tt_reference` (inlined cases). Live TT
+  map parity: `test_shipped_tag_map_matches_thesistester`.

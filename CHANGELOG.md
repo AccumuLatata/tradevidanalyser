@@ -16,6 +16,10 @@ already-merged series, reconstructed from `git log` on `main`.
 
 - Docs for GitHub #45–#49, env/flag table, Bekannte Grenzen,
   commissioning plan, KW44 dry-run summary, Coach↔ThesisTester rules.
+- Review pass against `main` @ `dbde7ae`: sidecar align/fees/evidence,
+  OCR/extract unset, WhisperX batch-size default, grammar test names,
+  exclusive offset-band gap, Vienna vs NY cutoff, 0.026 s [Rv] vs
+  0.10 s code gate.
 - No code, tests, or goldens.
 
 ---

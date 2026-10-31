@@ -52,7 +52,9 @@ geht.
 - Florian nutzt bewusst Pause/Resume; OBS-Start vor dem ersten Trade.
 - Prüfung je Abschnitt: |Wandspanne − Videospanne − Erstbild-Versatz|
   ≤ 0,026 s, mit ms-Rundung (Wall-Zeiten auf ms, ffprobe auf ms runden,
-  dann vergleichen).
+  dann vergleichen). Das ist die engere [Rv]-Prüfung
+  (`RV_SECTION_RESIDUAL_MAX_S`); der Code-Gate bleibt 0,10 s
+  (`SPAN_RESIDUAL_MAX_S` in `sidecar.py`).
 - Weiterhin nur Lauf in Testverzeichnis, Report wie KW44.
 - **Freigabe Florian nötig.**
 

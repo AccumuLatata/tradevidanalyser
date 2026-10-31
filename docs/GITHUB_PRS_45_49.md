@@ -23,8 +23,9 @@ measured bands:
 | `low` | 0.20–0.45 s | `offset_mode: low` |
 | `high` | 0.80–1.30 s | `offset_mode: high` |
 
-Values in the gap (0.45–0.80 s) or outside both bands fail loudly
-(`first_frame_offset_out_of_band`). `record_start` without
+Values strictly between the bands (above 0.45 s and below 0.80 s) or
+outside both bands fail loudly (`first_frame_offset_out_of_band`).
+Endpoints 0.45 s and 0.80 s stay in-band. `record_start` without
 `record_stop` is `incomplete` (warning, no fallback offset). The
 1.043 s fallback stays loud (`offset_source: fallback`) when the
 measure itself fails. Flag-off output is unchanged. CI pin stays
@@ -98,12 +99,15 @@ trade's `session_date` (else the session-id date).
 
 Shipped `tag_map.yaml` (repo root and
 `src/tradevidanalyser/tag_map.yaml`) appends TT's A1 registries with
-`notion_url` stripped. `tests/test_proposals.py::test_grammar_errors_match_tt_reference`
-is the parity check against the TT helper at `4fc4af05`.
+`notion_url` stripped.
+`tests/test_proposals.py::test_grammar_errors_match_tt_reference` is
+the inlined case table against local `grammar_codes`. Live TT
+map/grammar parity (when the `thesistester` extra is installed) is
+`test_shipped_tag_map_matches_thesistester`.
 
 | Rule | Value |
 |---|---|
-| Prefixes | `PB_`, `E_`, `V_`, `T_`, `C_none` |
+| Prefixes | `PB_`, `E_`, `V_`, `T_`, `C_` |
 | Reserved | `PB_`, `E_`, `V_`, `T_`, `C_`, `X_` |
 | `X_` | Retired (D14): no valid values (`unknown_reserved`) |
 | Cardinality | `PB_=1`, `E_=1`, `V_=0..1` (also `T_=0..1` in YAML) |
