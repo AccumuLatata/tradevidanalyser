@@ -18,6 +18,12 @@ Build contract:
 Plans:
 
 - [`plans/multi-clip-day.md`](plans/multi-clip-day.md) — Phase 1: several clips per day and pauses (PR-28…PR-36).
-- [`plans/phase-2-sidecar-facts.md`](plans/phase-2-sidecar-facts.md) — Phase 2 sidecar facts (PR-37 plan; PR-38 autostart guard; PR-43 no silent fallbacks; PR-39 sidecar copy; PR-40 sidecar reader + time_anchor; PR-42 `TVA_NET_FEES`).
+- [`plans/phase-2-sidecar-facts.md`](plans/phase-2-sidecar-facts.md) — Phase 2 sidecar facts (PR-37 plan; PR-38 autostart guard; PR-43 no silent fallbacks; PR-39 sidecar copy; PR-40 sidecar reader + time_anchor; PR-42 `TVA_NET_FEES`). GitHub #45–#49 are not those plan numbers.
+- [`GITHUB_PRS_45_49.md`](GITHUB_PRS_45_49.md) — landed GitHub #45–#49 (two offset bands, sidecar fallback, `fee_mismatch`, day filter, TT tag grammar).
+- [`INBETRIEBNAHME.md`](INBETRIEBNAHME.md) — commissioning plan, including the #46–#49 addendum.
+- [`KW44_DRYRUN.md`](KW44_DRYRUN.md) — KW44 dry-run summary (no account IDs or local paths).
+- [`COACH_THESISTESTER_RULES.md`](COACH_THESISTESTER_RULES.md) — Coach ↔ ThesisTester rules (approved 2026-10-31).
+
+Also: [`../CHANGELOG.md`](../CHANGELOG.md) (plan PR ↔ GitHub # ↔ merge commit).
 
 Planned: `SESSION_RECORD_SCHEMA.md` (generated from Pydantic).

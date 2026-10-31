@@ -152,6 +152,10 @@ PR-42 adds `TVA_NET_FEES` (Vierer-Set only, TT:892 / 903): facts
 mirror (lots, positions, costs, `account`), net only under the flag,
 publish only with a `locked` weekly manifest, desk rules from
 `accounts.yaml`, R-MAX10 positions-or-lots.
+GitHub #45–#49 (not plan PR-45/46) are on `main`: two offset bands,
+sidecar-fallback fixes, `fee_mismatch`, same-day journal filter, TT
+`4fc4af05` tag grammar after 2026-11-02. See
+[`GITHUB_PRS_45_49.md`](GITHUB_PRS_45_49.md) and [`../CHANGELOG.md`](../CHANGELOG.md).
 
 ---
 
