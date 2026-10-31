@@ -13,6 +13,7 @@ import yaml
 from tradevidanalyser.rules import RulesConfig, _config_from_mapping
 
 ENV_ACCOUNTS_FILE = "TVA_ACCOUNTS_FILE"
+ENV_DESK_RULES_FILE = "TVA_DESK_RULES_FILE"
 
 TOPSTEP_DESK = "topstepx"
 ACCOUNT_MISSING = "Konto fehlt"
@@ -58,6 +59,12 @@ def default_accounts_path() -> Path:
 
 
 def default_desk_rules_path() -> Path:
+    override = (os.environ.get(ENV_DESK_RULES_FILE) or "").strip()
+    if override:
+        path = Path(override)
+        if not path.is_file():
+            raise FileNotFoundError(f"desk_rules.yaml not found: {path}")
+        return path
     here = Path(__file__).resolve().parent
     path = here / "desk_rules.yaml"
     if not path.is_file():

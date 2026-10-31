@@ -54,6 +54,7 @@ RECON_STATUSES = frozenset(
         "topstepx_missing",
         "multiset_mismatch",
         "pnl_mismatch",
+        "fee_mismatch",
     }
 )
 RECONCILE_FILENAME = "reconcile.json"

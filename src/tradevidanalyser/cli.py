@@ -12,7 +12,7 @@ import duckdb
 
 from tradevidanalyser import __version__, config, store
 from tradevidanalyser.doctor import run_doctor
-from tradevidanalyser.accounts import ENV_ACCOUNTS_FILE
+from tradevidanalyser.accounts import ENV_ACCOUNTS_FILE, ENV_DESK_RULES_FILE
 from tradevidanalyser.flags import pause_guard_enabled, require_allowed_flag_set
 from tradevidanalyser.day_manifest import (
     build_day,
@@ -61,6 +61,12 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=None,
         help="accounts.yaml override (TVA_ACCOUNTS_FILE); not committed",
+    )
+    parser.add_argument(
+        "--desk-rules-file",
+        type=Path,
+        default=None,
+        help="desk_rules.yaml override (TVA_DESK_RULES_FILE); not committed",
     )
     parser.add_argument("--json", action="store_true", help="machine-readable stdout")
     parser.add_argument("--version", action="version", version=f"tva {__version__}")
@@ -424,6 +430,8 @@ def main(argv: list[str] | None = None) -> int:
     root = config.resolve_root(args.root)
     if args.accounts_file is not None:
         os.environ[ENV_ACCOUNTS_FILE] = str(Path(args.accounts_file).resolve())
+    if args.desk_rules_file is not None:
+        os.environ[ENV_DESK_RULES_FILE] = str(Path(args.desk_rules_file).resolve())
 
     try:
         require_allowed_flag_set()
