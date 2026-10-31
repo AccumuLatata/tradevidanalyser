@@ -30,6 +30,7 @@ from tradevidanalyser.fills import (
     FillsResult,
     assign_tva_trade_ids,
     fills_table,
+    journal_trades_matching_fills,
     load_fills,
     pair_fills,
     trades_table,
@@ -167,6 +168,20 @@ def tz_assumption_for_build(root: Path) -> str:
     return TZ_ASSUMPTION_CSV
 
 
+def journal_trades_for_day(
+    trades: list[JournalTrade],
+    fills: list[FillRecord],
+    day: date,
+    cores_d: list[Core],
+) -> list[JournalTrade]:
+    """Keep journal trades whose entry fill is a candidate for ``day``.
+
+    Same membership as ``_candidate_fills``: Vienna calendar date of the
+    fill timestamp equals ``day``, or the fill sits in a core of D.
+    """
+    return journal_trades_matching_fills(trades, _candidate_fills(fills, day, cores_d))
+
+
 def assign_day_ownership(
     root: Path,
     day: date,
@@ -187,8 +202,11 @@ def assign_day_ownership(
     claimed_legacy: list[FillIdentity] = []
     fill_owner: dict[str, str | None] = {}
     legacy_claimed = _legacy_neighbor_identities(root, neighbors)
+    candidates = _candidate_fills(fills, day, cores_d)
+    if trades is not None:
+        trades = journal_trades_for_day(trades, fills, day, cores_d)
 
-    for fill in _candidate_fills(fills, day, cores_d):
+    for fill in candidates:
         ts = _utc(fill.timestamp)
         containing = [core for core in cores_all if core.start <= ts < core.end]
         near = _near_clip_ids(ts, cores_d)

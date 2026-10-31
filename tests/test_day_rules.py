@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -8,14 +9,28 @@ import duckdb
 import pytest
 
 from tradevidanalyser import config, store
+from tradevidanalyser.accounts import ENV_DESK_RULES_FILE
 from tradevidanalyser.cli import main
 from tradevidanalyser.coach import gather_pack
+from tradevidanalyser.day_fills import (
+    DayOwnership,
+    assign_day_ownership,
+    journal_trades_for_day,
+)
 from tradevidanalyser.day_manifest import DayStale, build_day, load_current_day_json
+from tradevidanalyser.day_rules import apply_day_rules
+from tradevidanalyser.fills_mirror import (
+    FillRecord,
+    JournalTrade,
+    pair_journal_trades,
+    trading_session_date,
+)
 from tradevidanalyser.flags import (
     ENV_DAY_MANIFEST,
     ENV_DAY_PUBLISH,
     ENV_DAY_RULES,
     ENV_EXCLUSIVE_FILLS,
+    ENV_NET_FEES,
     ENV_PAUSE_GUARD,
     ENV_TRADING_HOURS,
 )
@@ -33,6 +48,7 @@ from tradevidanalyser.rules import (
     EVIDENCE_BACKED_RULE_IDS,
     EVIDENCE_PENDING_REASON,
     RULE_IDS,
+    RulesConfig,
     day_rule_reason,
 )
 from tradevidanalyser.schema import (
@@ -51,6 +67,38 @@ L0_DIR = Path(__file__).parent / "fixtures" / "l0_main_f44d864"
 L0_SESSION = "2026-05-14_160300"
 VIENNA = timezone(timedelta(hours=2))
 DAY = date(2026, 9, 14)
+DAY_B = date(2026, 9, 15)
+SYNTH_ACCOUNT = "synth-amp"
+DESK_RULES_WITH_DLL = """\
+accounts:
+  synth-amp: amp
+  synth-topstepx: topstepx
+desks:
+  topstepx:
+    daily_loss_limit_usd: 100
+    max_trades_per_day: 10
+    consecutive_loss_timeout:
+      n: 3
+      minutes: 30
+    post_loss_block_minutes: 5
+    reentry:
+      window_s: 120
+      max: 1
+      block_minutes: 5
+    flat_by: null
+  amp:
+    daily_loss_limit_usd: 100
+    max_trades_per_day: 10
+    consecutive_loss_timeout:
+      n: 3
+      minutes: 30
+    post_loss_block_minutes: 5
+    reentry:
+      window_s: 120
+      max: 1
+      block_minutes: 5
+    flat_by: null
+"""
 CSV_HEADER = (
     "date,symbol,side,currency,underlying,asset_type,price,quantity,"
     "commission,fees,stop_loss,profit_target,tags,notes,spread_id"
@@ -539,3 +587,259 @@ def test_invalid_clip_keeps_alignment_invalid(
     session = _rules(tva_root, a.id)
     for rule in ("R-HOURLY", "R-ZONE", "R-TILT", "R-3C-CT", "R-ARRIVAL"):
         assert session[rule]["reason"] == "alignment_invalid"
+
+
+def _journal_fill(
+    *,
+    fill_id: str,
+    ts: datetime,
+    side: str,
+    price: float,
+    spread: str,
+) -> FillRecord:
+    session = trading_session_date(ts)
+    return FillRecord(
+        fill_id=fill_id,
+        source="tradesviz",
+        source_group_id=spread,
+        instrument="MNQ",
+        contract_month="SEP",
+        contract_year=2026,
+        side=side,  # type: ignore[arg-type]
+        qty=1,
+        price=price,
+        timestamp=ts,
+        session_date=session,
+        entry_kind="imported",
+        tags=(),
+        notes_text="",
+        declared_stop=None,
+        declared_target=None,
+        flags=(),
+        csv_calendar_date=session,
+    )
+
+
+def _journal_round(
+    entry: datetime,
+    exit_ts: datetime,
+    *,
+    spread: str,
+    entry_price: float = 21000.0,
+    exit_price: float = 21001.0,
+) -> list[FillRecord]:
+    return [
+        _journal_fill(
+            fill_id=f"tv:{spread}:e",
+            ts=entry,
+            side="buy",
+            price=entry_price,
+            spread=spread,
+        ),
+        _journal_fill(
+            fill_id=f"tv:{spread}:x",
+            ts=exit_ts,
+            side="sell",
+            price=exit_price,
+            spread=spread,
+        ),
+    ]
+
+
+def _multi_day_journal() -> tuple[list[FillRecord], list[JournalTrade]]:
+    """Day A: 1 in-clip win + 1 outside. Day B: DLL + MAX10 + 3L30 + 1 outside."""
+    fills: list[FillRecord] = []
+    fills.extend(
+        _journal_round(
+            datetime(2026, 9, 14, 6, 0, tzinfo=timezone.utc),
+            datetime(2026, 9, 14, 6, 1, tzinfo=timezone.utc),
+            spread="d14-out",
+        )
+    )
+    fills.extend(
+        _journal_round(
+            datetime(2026, 9, 14, 7, 5, tzinfo=timezone.utc),
+            datetime(2026, 9, 14, 7, 6, tzinfo=timezone.utc),
+            spread="d14-in",
+        )
+    )
+    for index, minute in enumerate((1, 3, 5), start=1):
+        fills.extend(
+            _journal_round(
+                datetime(2026, 9, 15, 7, minute, tzinfo=timezone.utc),
+                datetime(2026, 9, 15, 7, minute, 30, tzinfo=timezone.utc),
+                spread=f"d15-loss{index}",
+                exit_price=20950.0,
+            )
+        )
+    fills.extend(
+        _journal_round(
+            datetime(2026, 9, 15, 7, 7, tzinfo=timezone.utc),
+            datetime(2026, 9, 15, 7, 8, tzinfo=timezone.utc),
+            spread="d15-reentry",
+        )
+    )
+    for index in range(8):
+        start = datetime(2026, 9, 15, 9, index, tzinfo=timezone.utc)
+        fills.extend(
+            _journal_round(
+                start,
+                start + timedelta(seconds=20),
+                spread=f"d15-win{index}",
+            )
+        )
+    # 00:30 Vienna on the 15th: UTC date is still the 14th.
+    fills.extend(
+        _journal_round(
+            datetime(2026, 9, 14, 22, 30, tzinfo=timezone.utc),
+            datetime(2026, 9, 14, 22, 31, tzinfo=timezone.utc),
+            spread="d15-eth",
+        )
+    )
+    trades = [
+        replace(trade, account=SYNTH_ACCOUNT) for trade in pair_journal_trades(fills)
+    ]
+    return fills, trades
+
+
+def _outside_count(ownership: DayOwnership) -> int:
+    return sum(
+        1
+        for trade in ownership.trades
+        if ownership.fill_owner.get(trade.entry_fill_id) is None
+    )
+
+
+def _two_clips_on(root: Path, day: date, *, sha_prefix: str) -> None:
+    _session(
+        root,
+        f"{day.isoformat()}_090000",
+        start=datetime(day.year, day.month, day.day, 9, 0, tzinfo=VIENNA),
+        duration_s=1200.0,
+        sha256=(sha_prefix * 64)[:64],
+    )
+    _session(
+        root,
+        f"{day.isoformat()}_110000",
+        start=datetime(day.year, day.month, day.day, 11, 0, tzinfo=VIENNA),
+        duration_s=600.0,
+        sha256=((sha_prefix + "b") * 32)[:64],
+    )
+
+
+def _day_rule_config() -> RulesConfig:
+    return RulesConfig(daily_loss_limit_usd=100, max_trades_per_day=10)
+
+
+def test_journal_trades_for_day_uses_vienna_not_utc() -> None:
+    """22:30 UTC 14 Sep is 00:30 Vienna 15 Sep — same day as the fills filter."""
+    fills, trades = _multi_day_journal()
+    eth = [trade for trade in trades if trade.source_group_id == "d15-eth"]
+    assert len(eth) == 1
+    assert journal_trades_for_day(eth, fills, DAY, []) == []
+    assert journal_trades_for_day(eth, fills, DAY_B, []) == eth
+
+
+def test_multi_day_journal_ownership_and_rules_stay_per_day(
+    tva_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _four_on(monkeypatch)
+    _two_clips_on(tva_root, DAY, sha_prefix="a")
+    _two_clips_on(tva_root, DAY_B, sha_prefix="c")
+    fills, trades = _multi_day_journal()
+    assert len(trades) > 10
+    own_a = assign_day_ownership(
+        tva_root, DAY, fills, include_manual=False, loader="journal", trades=trades
+    )
+    own_b = assign_day_ownership(
+        tva_root, DAY_B, fills, include_manual=False, loader="journal", trades=trades
+    )
+    ids_a = {trade.source_group_id for trade in own_a.trades}
+    ids_b = {trade.source_group_id for trade in own_b.trades}
+    assert ids_a == {"d14-out", "d14-in"}
+    assert "d15-eth" in ids_b
+    assert ids_a.isdisjoint(ids_b)
+    assert len(own_b.trades) == 13
+    assert _outside_count(own_a) == 1
+    assert _outside_count(own_b) == 1
+    cfg = _day_rule_config()
+    clips_a = [
+        store.load_session(tva_root, f"{DAY.isoformat()}_090000"),
+        store.load_session(tva_root, f"{DAY.isoformat()}_110000"),
+    ]
+    clips_b = [
+        store.load_session(tva_root, f"{DAY_B.isoformat()}_090000"),
+        store.load_session(tva_root, f"{DAY_B.isoformat()}_110000"),
+    ]
+    apply_day_rules(tva_root, DAY, own_a, tmp_path / "build-a", clips_a, config=cfg)
+    apply_day_rules(tva_root, DAY_B, own_b, tmp_path / "build-b", clips_b, config=cfg)
+    rules_a = {item["rule"]: item for item in store.read_json(tmp_path / "build-a" / "rules.json")["rules"]}
+    rules_b = {item["rule"]: item for item in store.read_json(tmp_path / "build-b" / "rules.json")["rules"]}
+    assert rules_a != rules_b
+    assert rules_a["R-DLL"]["status"] == "pass"
+    assert rules_b["R-DLL"]["status"] == "violated"
+    assert rules_a["R-MAX10"]["status"] == "pass"
+    assert rules_a["R-MAX10"]["evidence"]["count"] == 2
+    assert rules_b["R-MAX10"]["status"] == "violated"
+    assert rules_b["R-MAX10"]["evidence"]["count"] == 13
+    assert rules_a["R-3L30"]["status"] == "pass"
+    assert rules_b["R-3L30"]["status"] == "violated"
+
+
+def test_multi_day_journal_build_day_does_not_leak(
+    tva_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _four_on(monkeypatch)
+    monkeypatch.setenv(ENV_NET_FEES, "1")
+    desk = tmp_path / "desk_rules.yaml"
+    desk.write_text(DESK_RULES_WITH_DLL, encoding="utf-8")
+    monkeypatch.setenv(ENV_DESK_RULES_FILE, str(desk))
+    _two_clips_on(tva_root, DAY, sha_prefix="a")
+    _two_clips_on(tva_root, DAY_B, sha_prefix="c")
+    fills, trades = _multi_day_journal()
+    journal = tmp_path / "journal"
+    journal.mkdir()
+    (journal / "journal_trades.parquet").write_bytes(b"synth-journal")
+
+    def _load_journal(path, **_kwargs):
+        assert Path(path) == journal
+        return fills, trades
+
+    monkeypatch.setattr("tradevidanalyser.fills.load_tt_journal_dir", _load_journal)
+    assert build_day(tva_root, DAY, executions=journal, venue="amp").written
+    assert build_day(tva_root, DAY_B, executions=journal, venue="amp").written
+    payload_a = load_current_day_json(tva_root, DAY)
+    payload_b = load_current_day_json(tva_root, DAY_B)
+    assert payload_a is not None and payload_b is not None
+    assert payload_a["trades_outside_clips"] == 1
+    assert payload_b["trades_outside_clips"] == 1
+
+    def _entry_keys(payload: dict) -> set[tuple]:
+        keys: set[tuple] = set()
+        for session in payload["ownership"].values():
+            for item in session["trade_ids"]:
+                entry = item["entry"]
+                keys.add(
+                    (
+                        entry["timestamp"],
+                        entry["side"],
+                        entry["price"],
+                        entry["source_group_id"],
+                    )
+                )
+        return keys
+
+    owned_a = _entry_keys(payload_a)
+    owned_b = _entry_keys(payload_b)
+    assert owned_a
+    assert owned_b
+    assert owned_a.isdisjoint(owned_b)
+    rules_a = _day_rules(tva_root, DAY)
+    rules_b = _day_rules(tva_root, DAY_B)
+    assert rules_a["R-DLL"]["status"] == "pass"
+    assert rules_b["R-DLL"]["status"] == "violated"
+    assert rules_a["R-MAX10"]["evidence"]["count"] == 2
+    assert rules_b["R-MAX10"]["evidence"]["count"] == 13
+    assert rules_a["R-3L30"]["status"] == "pass"
+    assert rules_b["R-3L30"]["status"] == "violated"
+    assert rules_a != rules_b

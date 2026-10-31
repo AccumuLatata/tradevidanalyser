@@ -747,7 +747,7 @@ def pair_fills(
     if loader == "journal":
         if trades is None:
             raise JournalIngestError(NO_COST_SOURCE_ERROR)
-        return trades
+        return journal_trades_matching_fills(trades, fills)
     from tradevidanalyser.flags import sidecar_enabled
 
     if loader == "import":
@@ -1133,6 +1133,15 @@ def assert_no_cost_columns(table: pa.Table) -> None:
         raise FillsError("cost columns leaked into parquet: " + ", ".join(leaked))
 
 
+def journal_trades_matching_fills(
+    trades: list[JournalTrade],
+    fills: list[FillRecord],
+) -> list[JournalTrade]:
+    """Keep journal trades whose entry fill is in ``fills`` (same id set)."""
+    keep = {fill.fill_id for fill in fills}
+    return [trade for trade in trades if trade.entry_fill_id in keep]
+
+
 def _window_journal_trades(
     fills: list[FillRecord],
     trades: list[JournalTrade],
@@ -1140,9 +1149,7 @@ def _window_journal_trades(
     end: datetime,
 ) -> tuple[list[FillRecord], list[JournalTrade]]:
     windowed = filter_fills_to_window(fills, start, end)
-    keep = {fill.fill_id for fill in windowed}
-    kept_trades = [trade for trade in trades if trade.entry_fill_id in keep]
-    return windowed, kept_trades
+    return windowed, journal_trades_matching_fills(trades, windowed)
 
 
 def ingest_fills(
@@ -1197,8 +1204,7 @@ def ingest_fills(
     if sidecar_enabled() and not exclusive_fills_enabled():
         windowed = assign_fills_once(record, fills, root=root)
         if journal_trades is not None:
-            keep = {fill.fill_id for fill in windowed}
-            journal_trades = [trade for trade in journal_trades if trade.entry_fill_id in keep]
+            journal_trades = journal_trades_matching_fills(journal_trades, windowed)
     elif journal_trades is not None:
         windowed, journal_trades = _window_journal_trades(fills, journal_trades, start, end)
     else:
