@@ -6,6 +6,7 @@ import pytest
 
 from tradevidanalyser.accounts import (
     ACCOUNT_MISSING,
+    ENV_ACCOUNTS_FILE,
     TOPSTEP_DESK,
     TOPSTEP_ON_OTHER_ERROR,
     AccountsError,
@@ -127,3 +128,17 @@ def test_trade_without_account_does_not_fall_back_to_rules_yaml(
     monkeypatch.setenv(ENV_NET_FEES, "1")
     with pytest.raises(AccountsError, match=ACCOUNT_MISSING):
         desk_rules_for_trades([_trade(account=None)])
+
+
+def test_accounts_file_override_uses_local_yaml(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import yaml
+
+    shipped = yaml.safe_load(default_accounts_path().read_text(encoding="utf-8"))
+    local = tmp_path / "accounts.yaml"
+    local.write_text(yaml.safe_dump(shipped, sort_keys=False), encoding="utf-8")
+    monkeypatch.setenv(ENV_ACCOUNTS_FILE, str(local))
+    assert default_accounts_path() == local
+    cfg = load_accounts_config()
+    assert "synth-amp" in cfg.accounts

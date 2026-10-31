@@ -33,7 +33,7 @@ class RecordingInfo(BaseModel):
     parts: list[RecordingPart] = Field(default_factory=list)
 
 
-AlignmentMethod = Literal["ocr_clock", "filename", "chapter_fill", "manual", "invalid"]
+AlignmentMethod = Literal["ocr_clock", "filename", "chapter_fill", "manual", "invalid", "sidecar"]
 ALIGN_INVALID_ERROR = "Session ist invalid; Guard an und tva align --force"
 ALIGNMENT_INVALID_REASON = "alignment_invalid"
 
@@ -116,6 +116,16 @@ class Evidence(BaseModel):
     prompt_version: str
     session_id: str
     trades: list[EvidenceTrade] = Field(default_factory=list)
+    no_video_coverage: int = 0
+    no_video_trades: list[str] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_no_video(self, handler):  # type: ignore[no-untyped-def]
+        payload = handler(self)
+        if not payload.get("no_video_coverage") and not payload.get("no_video_trades"):
+            payload.pop("no_video_coverage", None)
+            payload.pop("no_video_trades", None)
+        return payload
 
 
 class SessionRecord(BaseModel):

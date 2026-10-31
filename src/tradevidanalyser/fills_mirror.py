@@ -81,7 +81,7 @@ _ISO_TS_RE = re.compile(
 )
 _NAIVE_ISO_TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?$")
 NO_COST_SOURCE_ERROR = "Netto ohne Kostenquelle"
-FILL_RECORD_EXTRAS = ("csv_calendar_date",)
+FILL_RECORD_EXTRAS = ("csv_calendar_date", "commission", "fees")
 JOURNAL_TRADE_EXTRAS = ("account", "position_id")
 
 
@@ -110,6 +110,10 @@ class FillRecord:
     flags: tuple[str, ...]
     # Written CSV calendar day (before UTC convert). Not an identity/parquet field.
     csv_calendar_date: date | None = None
+    # TV commission/fees stay off the parquet contract (TJ1). Sidecar fallback
+    # reads them to compute net = gross − fees without changing FILL_RECORD_COLUMNS.
+    commission: float | None = None
+    fees: float | None = None
 
 
 FILL_RECORD_COLUMNS: tuple[str, ...] = tuple(
@@ -264,8 +268,8 @@ def _row_to_record(index: int, row: Mapping[str, str | None]) -> FillRecord:
         )
     qty, flags = _parse_qty(_cell(row, "quantity"), entry_kind=entry_kind, index=index)
     price = _parse_price(_cell(row, "price"), index=index)
-    _cell(row, "commission")
-    _cell(row, "fees")
+    commission = _parse_optional_float(_cell(row, "commission"), index=index)
+    fees = _parse_optional_float(_cell(row, "fees"), index=index)
     _cell(row, "currency")
     _cell(row, "underlying")
     declared_stop = _parse_optional_float(_cell(row, "stop_loss"), index=index)
@@ -300,6 +304,8 @@ def _row_to_record(index: int, row: Mapping[str, str | None]) -> FillRecord:
         declared_target=declared_target,
         flags=flags,
         csv_calendar_date=csv_calendar_date,
+        commission=commission,
+        fees=fees,
     )
 
 

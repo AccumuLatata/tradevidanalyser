@@ -421,10 +421,10 @@ def build_day(
             raise DayManifestError(f"executions file not found: {csv_path}")
     elif not csv_path.is_file():
         raise DayManifestError(f"executions file not found: {csv_path}")
-    if read_enabled_from(root) is None:
-        write_enabled_from_if_absent(root, day)
     clips = clips_for_day(root, day)
     if not is_day_path(root, clips):
+        if read_enabled_from(root) is None:
+            write_enabled_from_if_absent(root, day)
         return DayBuildResult(
             date=day,
             status="legacy",
@@ -433,6 +433,11 @@ def build_day(
             reason="single clip without suspected",
         )
     lock = day_lock_path(root, day)
+    had_day_dir = day_dir(root, day).is_dir()
+    had_enabled = enabled_from_path(root).is_file()
+    previous_current = _read_current_build_id(root, day)
+    session_snapshot = _snapshot_session_artifacts(root, clips)
+    created_build: Path | None = None
     if not try_acquire_lock(lock):
         raise DayManifestError(LOCK_ERROR)
     try:
@@ -496,9 +501,19 @@ def build_day(
                 loader=loader,
                 trades=journal_trades,
             )
+            from tradevidanalyser.flags import day_rules_enabled
+
+            if day_rules_enabled() and net_fees_enabled():
+                from tradevidanalyser.accounts import desk_rules_for_trades
+                from tradevidanalyser.rules import rule_trades_from_journal
+
+                desk_rules_for_trades(
+                    rule_trades_from_journal(ownership.trades, ownership.tva_trade_ids)
+                )
             build_id = new_ulid()
             dest = day_dir(root, day) / "builds" / build_id / "day.json"
             dest.parent.mkdir(parents=True, exist_ok=True)
+            created_build = dest.parent
             built = apply_exclusive_build(
                 root,
                 day,
@@ -528,6 +543,7 @@ def build_day(
             build_id = new_ulid()
             dest = day_dir(root, day) / "builds" / build_id / "day.json"
             dest.parent.mkdir(parents=True, exist_ok=True)
+            created_build = dest.parent
             tz_assumption = TZ_ASSUMPTION_CSV
             claimed_legacy = []
             proposal_remaps = []
@@ -552,6 +568,8 @@ def build_day(
             payload["proposals_discarded"] = proposals_discarded
         store.write_json(dest, payload)
         _replace_current(root, day, build_id)
+        if read_enabled_from(root) is None:
+            write_enabled_from_if_absent(root, day)
         if exclusive_fills_enabled():
             for record in clips:
                 store.compute_status(root, record.id)
@@ -569,6 +587,17 @@ def build_day(
             written=True,
             clips=len(clips),
         )
+    except BaseException:
+        _discard_failed_day_build(
+            root,
+            day,
+            had_day_dir=had_day_dir,
+            had_enabled=had_enabled,
+            previous_current=previous_current,
+            session_snapshot=session_snapshot,
+            build_dir=created_build,
+        )
+        raise
     finally:
         release_lock(lock)
 
@@ -868,3 +897,76 @@ def _rmtree(path: Path) -> None:
     import shutil
 
     shutil.rmtree(path)
+
+
+def _session_artifact_paths(root: Path, session_id: str) -> dict[str, Path]:
+    return {
+        "fills": store.fills_path(root, session_id),
+        "trades": store.trades_path(root, session_id),
+        "status": store.status_path(root, session_id),
+        "rules": store.rules_path(root, session_id),
+    }
+
+
+def _snapshot_session_artifacts(
+    root: Path, clips: list[SessionRecord]
+) -> dict[str, dict[str, bytes | None]]:
+    snapshot: dict[str, dict[str, bytes | None]] = {}
+    for record in clips:
+        files: dict[str, bytes | None] = {}
+        for name, path in _session_artifact_paths(root, record.id).items():
+            files[name] = path.read_bytes() if path.is_file() else None
+        snapshot[record.id] = files
+    return snapshot
+
+
+def _restore_session_artifacts(
+    root: Path, snapshot: dict[str, dict[str, bytes | None]]
+) -> None:
+    for session_id, files in snapshot.items():
+        for name, path in _session_artifact_paths(root, session_id).items():
+            payload = files.get(name)
+            if payload is None:
+                path.unlink(missing_ok=True)
+                continue
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(payload)
+
+
+def _restore_current_pointer(root: Path, day: date, previous_current: str | None) -> None:
+    path = current_pointer_path(root, day)
+    if previous_current is None:
+        path.unlink(missing_ok=True)
+        return
+    _replace_current(root, day, previous_current)
+
+
+def _discard_failed_day_build(
+    root: Path,
+    day: date,
+    *,
+    had_day_dir: bool,
+    had_enabled: bool,
+    previous_current: str | None,
+    session_snapshot: dict[str, dict[str, bytes | None]],
+    build_dir: Path | None,
+) -> None:
+    """Roll back current, session fills/status, and day artifacts from an abort."""
+    _restore_session_artifacts(root, session_snapshot)
+    _restore_current_pointer(root, day, previous_current)
+    if build_dir is not None and build_dir.is_dir():
+        _rmtree(build_dir)
+        builds = build_dir.parent
+        if builds.is_dir() and not any(builds.iterdir()):
+            builds.rmdir()
+    if not had_enabled:
+        path = enabled_from_path(root)
+        if path.is_file() and read_enabled_from(root) == day:
+            path.unlink(missing_ok=True)
+    if not had_day_dir:
+        folder = day_dir(root, day)
+        if folder.is_dir() and not current_pointer_path(root, day).is_file():
+            lock = day_lock_path(root, day)
+            release_lock(lock)
+            if folder.is_dir():
+                _rmtree(folder)

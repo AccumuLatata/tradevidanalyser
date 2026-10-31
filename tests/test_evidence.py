@@ -17,6 +17,7 @@ from tradevidanalyser.evidence import (
     ALIGNMENT_LOW,
     DEFAULT_POST_S,
     DEFAULT_PRE_S,
+    NO_VIDEO_SPEECH_GAP,
     evidence_session,
     segments_in_window,
     wall_to_video_t,
@@ -51,6 +52,7 @@ from tradevidanalyser.schema import (
     Transcript,
     TranscriptSegment,
 )
+from tradevidanalyser.flags import ENV_SIDECAR
 from tradevidanalyser.serve import ALLOWED_RUN_STAGES, create_app
 
 VIENNA = timezone(timedelta(hours=2))
@@ -335,6 +337,66 @@ def test_naive_utc_trade_timestamps_map_to_video(tva_root: Path) -> None:
     trade = evidence.trades[0]
     assert trade.window.t0 == pytest.approx(200.0 - DEFAULT_PRE_S)
     assert trade.window.t1 == pytest.approx(260.0 + DEFAULT_POST_S)
+
+
+def test_preclip_trade_is_no_video_no_speech(
+    tva_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A trade that ends before the clip must not clamp to 0 s and pick up start speech."""
+    monkeypatch.setenv(ENV_SIDECAR, "1")
+    record = _session(tva_root, duration_s=3600.0)
+    _write_trades(tva_root, record.id, [("T01", -1500.0, -1480.0)])
+    _write_transcript(tva_root, record.id, [_seg(1, 0.0, 8.0, "Bias ist long.")])
+    result = evidence_session(record.id, root=tva_root)
+    assert result.status == "ok"
+    assert result.no_video_coverage == 1
+    assert list(result.no_video_trades) == ["T01"]
+    evidence = Evidence.model_validate(store.read_json(store.evidence_path(tva_root, record.id)))
+    trade = evidence.trades[0]
+    assert trade.window.t0 < 0.0
+    assert trade.window.t1 < 0.0
+    assert trade.window.t0 != 0.0
+    assert trade.window.t1 != 0.0
+    assert trade.commentary == []
+    assert trade.stated.setup is None
+    assert trade.stated.bias is None
+    assert NO_VIDEO_SPEECH_GAP in trade.gaps
+    assert evidence.no_video_coverage == 1
+    assert evidence.no_video_trades == ["T01"]
+
+
+def test_off_camera_trade_ignores_speech_padding(
+    tva_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Raw trade span vs clip span: padding must not pull in clip speech."""
+    monkeypatch.setenv(ENV_SIDECAR, "1")
+    record = _session(tva_root, duration_s=3600.0)
+    _write_trades(tva_root, record.id, [("T01", -90.0, -32.0), ("T02", 3632.0, 3700.0)])
+    _write_transcript(
+        tva_root,
+        record.id,
+        [
+            _seg(1, 0.0, 8.0, "Bias ist long."),
+            _seg(2, 3590.0, 3600.0, "Setup ist fade."),
+        ],
+    )
+    result = evidence_session(record.id, root=tva_root)
+    assert result.status == "ok"
+    assert result.no_video_coverage == 2
+    assert list(result.no_video_trades) == ["T01", "T02"]
+    evidence = Evidence.model_validate(store.read_json(store.evidence_path(tva_root, record.id)))
+    by_id = {trade.tva_trade_id: trade for trade in evidence.trades}
+    before = by_id["T01"]
+    after = by_id["T02"]
+    assert before.window.t1 < 0.0
+    assert after.window.t0 > 3600.0
+    assert after.window.t0 != pytest.approx(3600.0)
+    assert after.window.t1 != pytest.approx(3600.0)
+    for trade in (before, after):
+        assert trade.commentary == []
+        assert trade.stated.setup is None
+        assert trade.stated.bias is None
+        assert NO_VIDEO_SPEECH_GAP in trade.gaps
 
 
 def test_window_clamps_past_duration(tva_root: Path) -> None:

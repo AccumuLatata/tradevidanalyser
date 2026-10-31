@@ -13,6 +13,7 @@ from tradevidanalyser.cli import main
 from tradevidanalyser.coach import coach_session
 from tradevidanalyser.day_manifest import (
     DAY_STALE_ERROR,
+    DayManifestError,
     DayStale,
     MANIFEST_OFF_ERROR,
     PAUSE_KEY_ERROR,
@@ -31,7 +32,16 @@ from tradevidanalyser.day_manifest import (
     require_fresh_store,
 )
 from tradevidanalyser.ledger import ledger_summary, window_session_ids, window_trade_facts
-from tradevidanalyser.flags import ENV_DAY_MANIFEST, ENV_PAUSE_GUARD
+from tradevidanalyser.accounts import ACCOUNT_UNKNOWN
+from tradevidanalyser.flags import (
+    ENV_DAY_MANIFEST,
+    ENV_DAY_PUBLISH,
+    ENV_DAY_RULES,
+    ENV_EXCLUSIVE_FILLS,
+    ENV_PAUSE_GUARD,
+    ENV_TRADING_HOURS,
+)
+from tradevidanalyser.pause_guard import PauseCheck, write_pause_check
 from tradevidanalyser.fills_mirror import FILL_RECORD_COLUMNS
 from tradevidanalyser.ingest import SPLIT_GAP_S, ingest
 from tradevidanalyser.pipeline import fills_session, publish_session as pipeline_publish
@@ -288,6 +298,105 @@ def test_m3_one_session_writes_no_days(
     assert not day_dir(tva_root, date(2026, 9, 11)).exists()
     assert read_enabled_from(tva_root) == date(2026, 9, 11)
     assert day_state(tva_root, date(2026, 9, 11)).kind == "legacy"
+
+
+def _clear_pause(root: Path, record: SessionRecord) -> None:
+    write_pause_check(
+        root,
+        PauseCheck(
+            session_id=record.id,
+            recording_sha256=record.recording.sha256,
+            part_shas=[],
+            duration_s=float(record.recording.duration_s),
+            pause_check="clear",
+            pause_total_s=0.0,
+            clock_resolution_s=1,
+            pause_detectable_from_s=30.0,
+            ocr_provider="injected",
+            ocr_model="test",
+        ),
+    )
+
+
+def test_aborted_day_build_writes_nothing(
+    tva_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pause-key abort must not leave days/enabled_from or an empty day folder."""
+    _on(monkeypatch, ENV_DAY_MANIFEST, ENV_PAUSE_GUARD)
+    _session(
+        tva_root,
+        "2026-09-14_093000",
+        start=datetime(2026, 9, 14, 9, 30, tzinfo=VIENNA),
+    )
+    _session(
+        tva_root,
+        "2026-09-14_140000",
+        start=datetime(2026, 9, 14, 14, 0, tzinfo=VIENNA),
+        sha256="b" * 64,
+    )
+    csv = _write_csv(tmp_path / "exec.csv")
+    with pytest.raises(DayManifestError, match=PAUSE_KEY_ERROR):
+        build_day(tva_root, date(2026, 9, 14), executions=csv, venue="amp")
+    assert read_enabled_from(tva_root) is None
+    assert not enabled_from_path(tva_root).exists()
+    assert not day_dir(tva_root, date(2026, 9, 14)).exists()
+
+
+def test_aborted_day_build_after_replace_current(
+    tva_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Abort after _replace_current must restore current, fills, and status.json."""
+    for name in (
+        ENV_PAUSE_GUARD,
+        ENV_DAY_MANIFEST,
+        ENV_EXCLUSIVE_FILLS,
+        ENV_DAY_RULES,
+        ENV_DAY_PUBLISH,
+        ENV_TRADING_HOURS,
+    ):
+        monkeypatch.setenv(name, "1")
+    morning = _session(
+        tva_root,
+        "2026-09-14_093000",
+        start=datetime(2026, 9, 14, 9, 30, tzinfo=VIENNA),
+        duration_s=600.0,
+    )
+    afternoon = _session(
+        tva_root,
+        "2026-09-14_140000",
+        start=datetime(2026, 9, 14, 14, 0, tzinfo=VIENNA),
+        duration_s=600.0,
+        sha256="b" * 64,
+    )
+    _clear_pause(tva_root, morning)
+    _clear_pause(tva_root, afternoon)
+    before_status = {
+        record.id: store.status_path(tva_root, record.id).read_bytes()
+        for record in (morning, afternoon)
+    }
+    csv = _write_csv(
+        tmp_path / "exec.csv",
+        [
+            _csv_row("2026-09-14T07:35:00+0000", spread="g1"),
+            "2026-09-14T07:36:00+0000,MNQM26,sell,USD,MNQ,future,21001.0,1.0,"
+            "0,0,N/A,N/A,,,g1",
+        ],
+    )
+
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError(ACCOUNT_UNKNOWN)
+
+    monkeypatch.setattr("tradevidanalyser.day_rules.apply_day_rules", boom)
+    with pytest.raises(RuntimeError, match=ACCOUNT_UNKNOWN):
+        build_day(tva_root, date(2026, 9, 14), executions=csv, venue="amp")
+    day = date(2026, 9, 14)
+    assert read_enabled_from(tva_root) is None
+    assert not enabled_from_path(tva_root).exists()
+    assert not current_pointer_path(tva_root, day).exists()
+    assert not day_dir(tva_root, day).exists()
+    for record in (morning, afternoon):
+        assert not store.fills_path(tva_root, record.id).exists()
+        assert store.status_path(tva_root, record.id).read_bytes() == before_status[record.id]
 
 
 def test_m4_two_sessions_write_day_json(

@@ -12,6 +12,7 @@ import duckdb
 
 from tradevidanalyser import __version__, config, store
 from tradevidanalyser.doctor import run_doctor
+from tradevidanalyser.accounts import ENV_ACCOUNTS_FILE
 from tradevidanalyser.flags import pause_guard_enabled, require_allowed_flag_set
 from tradevidanalyser.day_manifest import (
     build_day,
@@ -55,6 +56,12 @@ def main(argv: list[str] | None = None) -> int:
         description="TradeVidAnalyser — ingest OBS tapes, transcribe, serve insights.",
     )
     parser.add_argument("--root", type=Path, default=None, help="TVA_ROOT (NAS mount or local store)")
+    parser.add_argument(
+        "--accounts-file",
+        type=Path,
+        default=None,
+        help="accounts.yaml override (TVA_ACCOUNTS_FILE); not committed",
+    )
     parser.add_argument("--json", action="store_true", help="machine-readable stdout")
     parser.add_argument("--version", action="version", version=f"tva {__version__}")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -254,7 +261,7 @@ def main(argv: list[str] | None = None) -> int:
         "--executions",
         type=Path,
         default=None,
-        help="TradesViz executions CSV; omit for fills_match=not_run",
+        help="TradesViz executions CSV; TT journal directory when TVA_NET_FEES is on; omit for fills_match=not_run",
     )
     p_audit.add_argument(
         "--loader",
@@ -415,6 +422,8 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     root = config.resolve_root(args.root)
+    if args.accounts_file is not None:
+        os.environ[ENV_ACCOUNTS_FILE] = str(Path(args.accounts_file).resolve())
 
     try:
         require_allowed_flag_set()

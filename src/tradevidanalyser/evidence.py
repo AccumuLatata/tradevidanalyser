@@ -13,7 +13,7 @@ import pyarrow.parquet as pq
 
 from tradevidanalyser import store
 from tradevidanalyser.align import FILENAME_CONFIDENCE
-from tradevidanalyser.flags import pause_guard_enabled
+from tradevidanalyser.flags import pause_guard_enabled, sidecar_enabled
 from tradevidanalyser.naming import VIENNA
 from tradevidanalyser.ocr import read_ocr_parquet
 from tradevidanalyser.providers.extract import (
@@ -36,6 +36,7 @@ from tradevidanalyser.schema import (
     EvidenceTrade,
     EvidenceWindow,
     SessionRecord,
+    StatedFields,
     Transcript,
     TranscriptSegment,
     alignment_is_invalid,
@@ -47,6 +48,7 @@ DEFAULT_POST_S = 120.0
 ALIGNMENT_LOW = 0.8
 ENV_PRE_S = "TVA_EVIDENCE_PRE_S"
 ENV_POST_S = "TVA_EVIDENCE_POST_S"
+NO_VIDEO_SPEECH_GAP = "no video/no speech"
 _CLIP_T = re.compile(r"^(\d+\.\d{3})")
 
 
@@ -58,6 +60,8 @@ class EvidenceResult:
     trades: int = 0
     provider: str | None = None
     reason: str | None = None
+    no_video_coverage: int = 0
+    no_video_trades: tuple[str, ...] = ()
 
     def as_dict(self) -> dict:
         payload: dict = {
@@ -71,6 +75,9 @@ class EvidenceResult:
             payload["provider"] = self.provider
         if self.reason is not None:
             payload["reason"] = self.reason
+        if self.no_video_coverage or self.no_video_trades:
+            payload["no_video_coverage"] = self.no_video_coverage
+            payload["no_video_trades"] = list(self.no_video_trades)
         return payload
 
 
@@ -304,6 +311,43 @@ def _window_bounds(
     return t0_r, t1_r, clipped, raw_t0_r, raw_t1_r
 
 
+def _sidecar_window_bounds(
+    entry_t: float,
+    exit_t: float,
+    *,
+    pre_s: float,
+    post_s: float,
+    duration_s: float,
+) -> tuple[float, float, bool, float, float, bool]:
+    """Padded window plus off-camera flag from the raw trade span (no pad)."""
+    if exit_t < entry_t:
+        exit_t = entry_t
+    raw_t0 = entry_t - pre_s
+    raw_t1 = exit_t + post_s
+    duration_ok = duration_s > 0 and math.isfinite(duration_s)
+    off_before = exit_t <= 0.0
+    off_after = duration_ok and entry_t >= duration_s
+    off_camera = off_before or off_after
+    if off_camera:
+        t0, t1 = entry_t, exit_t
+        if t1 < t0:
+            t1 = t0
+        t0_r, t1_r = _r(t0, 3), _r(t1, 3)
+        raw_t0_r, raw_t1_r = _r(raw_t0, 3), _r(raw_t1, 3)
+        return t0_r, t1_r, True, raw_t0_r, raw_t1_r, True
+    t0 = max(0.0, raw_t0)
+    t1 = raw_t1
+    if duration_ok:
+        t0 = min(t0, duration_s)
+        t1 = min(duration_s, t1)
+    if t1 < t0:
+        t1 = t0
+    t0_r, t1_r = _r(t0, 3), _r(t1, 3)
+    raw_t0_r, raw_t1_r = _r(raw_t0, 3), _r(raw_t1, 3)
+    clipped = (t0_r, t1_r) != (raw_t0_r, raw_t1_r)
+    return t0_r, t1_r, clipped, raw_t0_r, raw_t1_r, False
+
+
 def build_evidence(
     record: SessionRecord,
     *,
@@ -336,6 +380,8 @@ def build_evidence(
     if clock_resolution_s == 60:
         align_flag = "low"
     trades: list[EvidenceTrade] = []
+    no_video_trades: list[str] = []
+    sidecar = sidecar_enabled()
     for tva_id, entry_ts, exit_ts in rows:
         entry_t = wall_to_video_t(
             entry_ts, start, offset_s=clock.offset_s, drift_s_per_h=clock.drift_s_per_h
@@ -347,10 +393,16 @@ def build_evidence(
             if exit_ts is not None
             else entry_t
         )
-        t0, t1, clipped, raw_t0, raw_t1 = _window_bounds(
-            entry_t, exit_t, pre_s=pre, post_s=post, duration_s=duration
-        )
-        if _exit_outside_clip(record, root, exit_ts):
+        if sidecar:
+            t0, t1, clipped, raw_t0, raw_t1, off_camera = _sidecar_window_bounds(
+                entry_t, exit_t, pre_s=pre, post_s=post, duration_s=duration
+            )
+        else:
+            t0, t1, clipped, raw_t0, raw_t1 = _window_bounds(
+                entry_t, exit_t, pre_s=pre, post_s=post, duration_s=duration
+            )
+            off_camera = False
+        if not off_camera and _exit_outside_clip(record, root, exit_ts):
             t1 = _r(duration, 3) if duration > 0 else t1
             if t1 < t0:
                 t1 = t0
@@ -363,6 +415,27 @@ def build_evidence(
                 t0_raw=raw_t0,
                 t1_raw=raw_t1,
             )
+        if off_camera:
+            gaps = [NO_VIDEO_SPEECH_GAP]
+            if _exit_outside_clip(record, root, exit_ts):
+                gaps.append("exit_outside_clip")
+            trades.append(
+                EvidenceTrade(
+                    tva_trade_id=tva_id,
+                    window=window,
+                    commentary=[],
+                    stated=StatedFields(),
+                    markers=[],
+                    frames=[],
+                    ocr=[],
+                    clip=None,
+                    alignment_confidence=clock.confidence,
+                    alignment=align_flag,
+                    gaps=sorted(set(gaps)),
+                )
+            )
+            no_video_trades.append(tva_id)
+            continue
         window_segs = segments_in_window(segments, t0, t1)
         window_tx = Transcript(
             provider=transcript.provider if transcript else "none",
@@ -399,6 +472,8 @@ def build_evidence(
         prompt_version=_prompt_version(provider.name),
         session_id=session_id,
         trades=trades,
+        no_video_coverage=len(no_video_trades),
+        no_video_trades=no_video_trades,
     )
 
 
@@ -504,4 +579,6 @@ def evidence_session(
         path="evidence.json",
         trades=len(evidence.trades),
         provider=evidence.provider,
+        no_video_coverage=evidence.no_video_coverage,
+        no_video_trades=tuple(evidence.no_video_trades),
     )
