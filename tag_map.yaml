@@ -336,3 +336,202 @@ qualifiers:
   - _retest
   - _naked
   - _break
+# JX0-A1 schema block (TT 4fc4af05). Effective 2026-11-02 (D11).
+# notion_url is null in this copy (no real IDs in git). Parity compares
+# tag_grammar + registries minus URLs to ThesisTester's bundled map.
+tag_grammar:
+  amendment: JX0-A1-2026-10-26
+  charset: "^[A-Za-z0-9_]+$"
+  effective_from: "2026-11-02"            # D11
+  reserved_prefixes: [PB_, E_, V_, T_, C_, X_]   # X_ retired (D14): no valid values
+  cardinality:
+    PB_: "1"
+    E_: "1"                               # D12 mandatory
+    V_: "0..1"
+    T_: "0..1"                            # D22
+  entry_values: [E_agg, E_kon]
+  confluence_none: C_none                 # the only valid C_ token
+  qualifiers: [_retest, _naked, _break]   # D23 (fade = no suffix)
+  direction_source: topstepx_fill_side    # D16: never from a tag
+  variant_families:                       # enumerated variants; SFP+FA = FA (D3)
+    V_FR: FR
+    V_SFP: FA
+    V_FA: FA
+    V_MOM: MOM                            # PROPOSED P8 spellings
+    V_H2: H2
+    V_BO: BO
+    V_RE: RE
+    V_RR: RR
+    V_TB: TB
+  variant_patterns:
+    ma_pair: "^V_(1m|5m|30m)([0-9]+)(EMA|SMA)x([0-9]+)(EMA|SMA)$"   # D21
+  legacy_nonconforming_context: [ITR-C, CTR-R]
+  control_tags:                           # D20; spelling PROPOSED P12 (alt. R_reentry)
+    reentry: inherit_previous_trade
+  dropped_tags: [countertrend]            # D19: never a valid tag
+
+playbooks:
+  MAC:       # MA Cross
+    notion_url: null
+    status: active
+    direction: both
+    variants: []
+    variants_pattern: ma_pair             # only MAC (D21)
+    effective_from: "2026-11-02"
+    version: 1
+    changelog:
+      - {date: "2026-10-26", version: 1, note: "registered (JX0-A1)"}
+    renamed_from: []
+  "3050":    # 30m50SMA Reversal (must stay quoted)
+    notion_url: null
+    status: active
+    direction: both
+    variants: [V_FR, V_SFP, V_FA]
+    variants_pattern: null
+    effective_from: "2026-11-02"
+    version: 1
+    changelog:
+      - {date: "2026-10-26", version: 1, note: "registered (JX0-A1)"}
+    renamed_from: []
+  30mEx:     # 30m-Exhaustion, counter-trend
+    notion_url: null
+    status: active
+    direction: both
+    variants: [V_SFP, V_FA]
+    variants_pattern: null
+    effective_from: "2026-11-02"
+    version: 1
+    changelog:
+      - {date: "2026-10-26", version: 1, note: "registered (JX0-A1)"}
+    renamed_from: []
+  p30V:      # p30mVWAP_Fade: momentum | second half
+    notion_url: null
+    status: active
+    direction: both
+    variants: [V_MOM, V_H2]
+    variants_pattern: null
+    effective_from: "2026-11-02"
+    version: 1
+    changelog:
+      - {date: "2026-10-26", version: 1, note: "registered (JX0-A1)"}
+    renamed_from: []
+  5mPOCL:    # 5mPOC + Level: range reversal | trend breakout (DeltaNode = confluence)
+    notion_url: null
+    status: active
+    direction: both
+    variants: [V_RR, V_TB]
+    variants_pattern: null
+    effective_from: "2026-11-02"
+    version: 1
+    changelog:
+      - {date: "2026-10-26", version: 1, note: "registered (JX0-A1)"}
+    renamed_from: []
+  LEF:       # Level Flip: breakout | re-entry
+    notion_url: null
+    status: active
+    direction: both
+    variants: [V_BO, V_RE]
+    variants_pattern: null
+    effective_from: "2026-11-02"
+    version: 1
+    changelog:
+      - {date: "2026-10-26", version: 1, note: "registered (JX0-A1)"}
+    renamed_from: []
+  APOCL:     # APOC + Level; Notion Draft
+    notion_url: null
+    status: draft
+    direction: both
+    variants: []
+    variants_pattern: null
+    effective_from: null
+    version: 1
+    changelog:
+      - {date: "2026-10-26", version: 1, note: "registered as draft from Notion (JX0-A1)"}
+    renamed_from: []
+  OSR:       # Options Put Support and Call Resistance Levels; out of scope; Notion Draft (D28)
+    notion_url: null
+    status: draft
+    direction: both
+    variants: []
+    variants_pattern: null
+    effective_from: null
+    version: 1
+    changelog:
+      - {date: "2026-10-26", version: 1, note: "registered as draft from Notion (JX0-A1)"}
+    renamed_from: []
+  OGB:       # Options GEX and BL; rename of ODG (D30); out of scope; Notion Draft
+    notion_url: null
+    status: draft
+    direction: both
+    variants: []
+    variants_pattern: null
+    effective_from: null
+    version: 1
+    changelog:
+      - {date: "2026-10-26", version: 1, note: "registered as draft from Notion (JX0-A1); renamed from ODG (D30)"}
+    renamed_from: [ODG]    # D30: PB_ODG resolves to OGB (A1.5a)
+  TPO_RTH:   # (Notion name empty); id with _ needs P16; Notion Draft
+    notion_url: null
+    status: draft
+    direction: both
+    variants: []
+    variants_pattern: null
+    effective_from: null
+    version: 1
+    changelog:
+      - {date: "2026-10-26", version: 1, note: "registered as draft from Notion (JX0-A1)"}
+    renamed_from: []
+  VA:        # Value Area Reaction; Notion Draft
+    notion_url: null
+    status: draft
+    direction: both
+    variants: []
+    variants_pattern: null
+    effective_from: null
+    version: 1
+    changelog:
+      - {date: "2026-10-26", version: 1, note: "registered as draft from Notion (JX0-A1)"}
+    renamed_from: []
+  MAT:       # Moving Averages Tandem (Notion title 'PLAYBOOK_ PB_MAT'); Notion Draft
+    notion_url: null
+    status: draft
+    direction: both
+    variants: []
+    variants_pattern: null
+    effective_from: null
+    version: 1
+    changelog:
+      - {date: "2026-10-26", version: 1, note: "registered as draft from Notion (JX0-A1)"}
+    renamed_from: []
+  MAD:       # Moving Average Dribble (Notion title 'PLAYBOOK PB_MAD', heading 'Kürzel: MAD'); Notion Draft (D29)
+    notion_url: null
+    status: draft
+    direction: both
+    variants: []
+    variants_pattern: null
+    effective_from: null
+    version: 1
+    changelog:
+      - {date: "2026-10-26", version: 1, note: "registered as draft from Notion (JX0-A1)"}
+    renamed_from: []
+
+triggers:    # D22/D25/D26: Notion Playbooks database, Tags = Trigger; tag T_<id>; no variants
+  5mTP:      # 5m-trendbar-breakout; Notion Active
+    notion_url: null
+    status: active
+  "075":     # 0.75-Retracement (Notion name empty); Notion Active. Quoted (octal)
+    notion_url: null
+    status: active
+  CGD:       # Candle gap down; Notion Active
+    notion_url: null
+    status: active
+  MFR:       # Main First Response; Notion Active
+    notion_url: null
+    status: active
+  BI:        # Book injection; Notion Active
+    notion_url: null
+    status: active
+
+out_of_scope_playbooks:   # PROPOSED P15: registered (Notion Draft) but not testable; tag is reported, not an error
+  OSR: needs options dealer-positioning data ThesisTester does not have
+  OGB: needs options GEX data ThesisTester does not have (D5 named it ODG; renamed, D30)

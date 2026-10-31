@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -14,6 +14,12 @@ import pyarrow.parquet as pq
 import yaml
 
 from tradevidanalyser import store
+from tradevidanalyser.tag_grammar import (
+    grammar_active,
+    grammar_closed_tags,
+    ma_pair_ok,
+    resolve_grammar_token,
+)
 from tradevidanalyser.schema import (
     Evidence,
     IntentProposal,
@@ -40,10 +46,15 @@ class TagMap:
     context: frozenset[str]
     by_fold: dict[str, str]
     qualifiers: tuple[str, ...] = ()
+    payload: dict[str, Any] = field(default_factory=dict)
 
     @property
     def vocabulary(self) -> frozenset[str]:
         return frozenset(self.exact) | self.context
+
+    @property
+    def grammar_tags(self) -> frozenset[str]:
+        return grammar_closed_tags(self.payload) if self.payload else frozenset()
 
 
 @dataclass(frozen=True)
@@ -131,10 +142,21 @@ def load_tag_map(path: Path | None = None) -> TagMap:
         token = spec.get("token")
         if token:
             by_fold.setdefault(str(token).casefold(), str(key))
-    return TagMap(exact=exact, context=context, by_fold=by_fold, qualifiers=qualifiers)
+    return TagMap(
+        exact=exact,
+        context=context,
+        by_fold=by_fold,
+        qualifiers=qualifiers,
+        payload=payload,
+    )
 
 
-def resolve_stated_token(token: str, tag_map: TagMap) -> str | None:
+def resolve_stated_token(
+    token: str,
+    tag_map: TagMap,
+    *,
+    as_of: date | None = None,
+) -> str | None:
     """Map one token to a desk tag key. Qualifier suffixes strip after exact hits."""
     blob = (token or "").strip()
     if not blob:
@@ -148,30 +170,52 @@ def resolve_stated_token(token: str, tag_map: TagMap) -> str | None:
             hit = tag_map.by_fold.get(base.casefold())
             if hit:
                 return hit
+    if grammar_active(tag_map.payload, as_of):
+        return resolve_grammar_token(blob, tag_map.payload)
     return None
 
 
-def map_stated_text(text: str, tag_map: TagMap) -> list[str]:
-    """Return canonical desk tags found in *text*. Unknown words are dropped."""
+def map_stated_text(
+    text: str,
+    tag_map: TagMap,
+    *,
+    as_of: date | None = None,
+) -> list[str]:
+    """Return canonical desk tags found in *text*. Unknown words are dropped.
+
+    Prefixed JX0-A1 tags (``PB_`` / ``E_`` / ``V_`` / ``T_`` / ``C_``) are
+    mapped only when *as_of* is on/after ``tag_grammar.effective_from``.
+    ``as_of=None`` is the pre-cutoff path (existing desk keys only).
+    """
     blob = (text or "").strip()
     if not blob:
         return []
     found: list[str] = []
     seen: set[str] = set()
+    lookup = tag_map.by_fold
+    extra: frozenset[str] = frozenset()
+    if grammar_active(tag_map.payload, as_of):
+        extra = tag_map.grammar_tags
+        lookup = dict(tag_map.by_fold)
+        for tag in extra:
+            lookup.setdefault(tag.casefold(), tag)
 
     def add(tag: str) -> None:
-        if tag and tag not in seen and tag in tag_map.vocabulary:
+        allowed = tag in tag_map.vocabulary or tag in extra
+        if extra and ma_pair_ok(tag, tag_map.payload):
+            allowed = True
+        if tag and tag not in seen and allowed:
             seen.add(tag)
             found.append(tag)
 
-    whole = tag_map.by_fold.get(blob.casefold())
+    whole = lookup.get(blob.casefold())
     if whole:
         add(whole)
         return found
     compact = re.sub(r"[^a-z0-9]", "", blob.casefold())
     if compact:
         compact_hit: str | None = None
-        for needle, desk in tag_map.by_fold.items():
+        for needle, desk in lookup.items():
             if re.sub(r"[^a-z0-9]", "", needle) == compact:
                 if compact_hit is None or len(desk) > len(compact_hit):
                     compact_hit = desk
@@ -181,7 +225,7 @@ def map_stated_text(text: str, tag_map: TagMap) -> list[str]:
     # Longest non-overlapping hits. "ITR-C" must not also emit "ITR".
     # Needles include engine-token spellings; values are always desk keys.
     hits: list[tuple[int, int, str]] = []
-    for needle, desk in tag_map.by_fold.items():
+    for needle, desk in lookup.items():
         pattern = re.compile(
             r"(?<![A-Za-z0-9_])" + re.escape(needle) + r"(?![A-Za-z0-9_])",
             re.IGNORECASE,
@@ -196,7 +240,7 @@ def map_stated_text(text: str, tag_map: TagMap) -> list[str]:
         add(desk)
         occupied.append((start, end))
     for token in _WORD.findall(blob):
-        hit = resolve_stated_token(token, tag_map)
+        hit = resolve_stated_token(token, tag_map, as_of=as_of)
         if hit:
             add(hit)
     return found
@@ -243,6 +287,42 @@ def _trade_ids(root: Path, session_id: str) -> list[str]:
     if "trade_id" in names:
         return [str(value) for value in table.column("trade_id").to_pylist() if value]
     return []
+
+
+def _parse_as_of(value: object, fallback: str) -> date | None:
+    text = _as_date(value, fallback)
+    if len(text) >= 10 and text[4] == "-" and text[7] == "-":
+        try:
+            return date.fromisoformat(text[:10])
+        except ValueError:
+            return None
+    return None
+
+
+def _session_as_of(session_id: str) -> date | None:
+    return _parse_as_of(session_id[:10], session_id[:10])
+
+
+def _trade_as_of(root: Path, session_id: str) -> dict[str, date]:
+    path = store.trades_path(root, session_id)
+    fallback = session_id[:10]
+    if not path.is_file():
+        return {}
+    table = pq.read_table(path)
+    names = set(table.column_names)
+    id_col = "tva_trade_id" if "tva_trade_id" in names else "trade_id" if "trade_id" in names else None
+    if id_col is None:
+        return {}
+    out: dict[str, date] = {}
+    n = table.num_rows
+    for index in range(n):
+        tva_id = str(_cell(table, id_col, index) or "")
+        if not tva_id:
+            continue
+        parsed = _parse_as_of(_cell(table, "session_date", index), fallback)
+        if parsed is not None:
+            out[tva_id] = parsed
+    return out
 
 
 def _cell(table, name: str, index: int) -> object:
@@ -295,10 +375,12 @@ def build_proposals(
                 trade_ids.append(trade.tva_trade_id)
     gaps: list[str] = []
     proposals: list[IntentProposal] = []
+    session_as_of = _session_as_of(session_id)
+    trade_as_of = _trade_as_of(root, session_id)
     session_level_tags: list[tuple[str, str]] = []
     if insights is not None:
         for span in insights.stated_levels:
-            tags = map_stated_text(span.token or span.text, mapping)
+            tags = map_stated_text(span.token or span.text, mapping, as_of=session_as_of)
             if not tags:
                 raw = span.token or span.text
                 if raw:
@@ -306,7 +388,7 @@ def build_proposals(
             for tag in tags:
                 session_level_tags.append((tag, span.seg))
         for span in insights.playbooks_mentioned:
-            tags = map_stated_text(span.name or span.text, mapping)
+            tags = map_stated_text(span.name or span.text, mapping, as_of=session_as_of)
             if not tags:
                 raw = span.name or span.text
                 if raw:
@@ -318,20 +400,23 @@ def build_proposals(
         tags: list[str] = []
         segs: list[str] = []
         spoken: list[str] = []
+        as_of = trade_as_of.get(tva_id, session_as_of)
         trade = evidence_by_id.get(tva_id)
         if trade is not None:
             for cite in (trade.stated.playbook, trade.stated.setup):
                 if cite is None or not cite.value:
                     continue
                 spoken.append(cite.value)
-                mapped = map_stated_text(cite.value, mapping)
+                mapped = map_stated_text(cite.value, mapping, as_of=as_of)
                 if not mapped:
                     gaps.append(f"unmapped stated {cite.value!r} on {tva_id}")
                 tags.extend(mapped)
                 if cite.seg:
                     segs.append(cite.seg)
         spoken_blob = " ".join(spoken)
-        spoken_tags = set(map_stated_text(spoken_blob, mapping)) if spoken_blob else set()
+        spoken_tags = (
+            set(map_stated_text(spoken_blob, mapping, as_of=as_of)) if spoken_blob else set()
+        )
         for tag, seg in session_level_tags:
             # Substring checks attach ONH to a pONH trade. Require a mapped mention.
             if len(trade_ids) == 1 or tag in spoken_tags:

@@ -33,6 +33,7 @@ from tradevidanalyser.proposals import (
     map_stated_text,
     set_proposal_status,
 )
+from tradevidanalyser.tag_grammar import grammar_codes
 from tradevidanalyser.schema import (
     CitedSpan,
     Evidence,
@@ -69,9 +70,11 @@ def _write_trades(
     session_id: str,
     *,
     trade_ids: list[str] | None = None,
+    session_date: date | None = None,
 ) -> None:
     ids = trade_ids or ["T01"]
     n = len(ids)
+    day = session_date or date(2026, 9, 11)
     table = pa.table(
         {
             "tva_trade_id": ids,
@@ -80,7 +83,7 @@ def _write_trades(
             "instrument": ["MNQ"] * n,
             "entry_price": [21000.25] * n,
             "qty": [2] * n,
-            "session_date": [date(2026, 9, 11)] * n,
+            "session_date": [day] * n,
         }
     )
     path = store.trades_path(root, session_id)
@@ -154,9 +157,21 @@ def test_repo_and_package_tag_map_match() -> None:
     assert package.read_text(encoding="utf-8") == repo.read_text(encoding="utf-8")
 
 
+def _registry_without_urls(raw: object) -> object:
+    if not isinstance(raw, dict):
+        return raw
+    out: dict[str, object] = {}
+    for key, row in raw.items():
+        if isinstance(row, dict):
+            out[str(key)] = {k: v for k, v in row.items() if k != "notion_url"}
+        else:
+            out[str(key)] = row
+    return out
+
+
 @pytest.mark.skipif(not thesistester_available(), reason="thesistester extra not installed")
 def test_shipped_tag_map_matches_thesistester() -> None:
-    """Journal job: TVA's shipped tag_map.yaml must equal TT's JX0b map."""
+    """Journal job: TVA's shipped tag_map.yaml must equal TT's JX0b map + A1 grammar."""
     import thesistester.journal.tags as tt_tags
 
     tt_path = Path(tt_tags._MAP_PATH)
@@ -166,6 +181,19 @@ def test_shipped_tag_map_matches_thesistester() -> None:
     assert tva["exact"] == tt["exact"]
     assert set(tva.get("context") or []) == set(tt.get("context") or [])
     assert list(tva.get("qualifiers") or []) == list(tt.get("qualifiers") or [])
+    assert tva.get("tag_grammar") == tt.get("tag_grammar")
+    assert _registry_without_urls(tva.get("playbooks")) == _registry_without_urls(tt.get("playbooks"))
+    assert _registry_without_urls(tva.get("triggers")) == _registry_without_urls(tt.get("triggers"))
+    assert tva.get("out_of_scope_playbooks") == tt.get("out_of_scope_playbooks")
+    sample = [
+        {"PB_MAC", "E_agg", "5m21EMA"},
+        {"PB_LEF", "E_agg", "V_BO", "pdH"},
+        {"PB_MAC", "E_agg", "V_5m21EMAx50SMA", "pdH"},
+        {"PB_LEF", "E_agg", "T_5mTP", "pdH"},
+        {"E_agg", "pdH"},
+    ]
+    for tags in sample:
+        assert grammar_codes(tags, tva) == grammar_codes(tags, tt), tags
 
 
 def test_vocabulary_mapping_keeps_desk_keys() -> None:
@@ -201,6 +229,13 @@ def test_vocabulary_mapping_keeps_desk_keys() -> None:
     assert map_stated_text("played ITR-C today", tag_map) == ["ITR-C"]
     assert "ITR" not in map_stated_text("played ITR-C today", tag_map)
     assert map_stated_text("CTR-R", tag_map) == ["CTR-R"]
+    # Pre-cutoff / no as_of: prefixed grammar tags stay unmapped.
+    assert map_stated_text("PB_LEF", tag_map) == []
+    assert map_stated_text("E_agg", tag_map) == []
+    assert map_stated_text("V_BO", tag_map) == []
+    assert map_stated_text("T_MFR", tag_map) == []
+    assert map_stated_text("C_none", tag_map) == []
+    assert "PB_LEF" not in tag_map.vocabulary
 
 
 def test_engine_tokens_map_to_desk_keys_never_emitted() -> None:
@@ -571,3 +606,170 @@ def test_doctor_tag_map_ok(tva_root: Path) -> None:
     assert ids["tag_map"].status == "ok"
     assert Path(ids["tag_map"].detail).is_file()
     assert default_tag_map_path().is_file()
+
+
+_CUTOFF = date(2026, 11, 2)
+_BEFORE = date(2026, 11, 1)
+
+
+def test_grammar_tags_date_gated() -> None:
+    tag_map = load_tag_map()
+    assert map_stated_text("PB_LEF", tag_map, as_of=_BEFORE) == []
+    assert map_stated_text("E_agg V_BO", tag_map, as_of=_BEFORE) == []
+    assert map_stated_text("PB_LEF", tag_map, as_of=_CUTOFF) == ["PB_LEF"]
+    assert map_stated_text("PB_LEF E_agg V_BO pdH", tag_map, as_of=_CUTOFF) == [
+        "PB_LEF",
+        "E_agg",
+        "V_BO",
+        "pdH",
+    ]
+    assert map_stated_text("PB p30V", tag_map, as_of=_CUTOFF) == ["PB_p30V"]
+    assert map_stated_text("PB_ODG", tag_map, as_of=_CUTOFF) == ["PB_ODG"]
+    assert map_stated_text("T_075", tag_map, as_of=_CUTOFF) == ["T_075"]
+    assert map_stated_text("T_MFR", tag_map, as_of=_CUTOFF) == ["T_MFR"]
+    assert map_stated_text("C_none", tag_map, as_of=_CUTOFF) == ["C_none"]
+    assert map_stated_text("V_5m21EMAx50SMA", tag_map, as_of=_CUTOFF) == ["V_5m21EMAx50SMA"]
+    assert map_stated_text("V_5m50SMAx21EMA", tag_map, as_of=_CUTOFF) == []
+    assert map_stated_text("MFR", tag_map, as_of=_CUTOFF) == []
+    assert map_stated_text("PB_XYZ", tag_map, as_of=_CUTOFF) == []
+    assert map_stated_text("X_fade", tag_map, as_of=_CUTOFF) == []
+    assert map_stated_text("E_aggressive", tag_map, as_of=_CUTOFF) == []
+    # Existing JX0b names stay the same after the cutoff.
+    assert map_stated_text("ONH Touch", tag_map, as_of=_CUTOFF) == ["ONH", "touch"]
+    assert map_stated_text("pRTH_Low", tag_map, as_of=_CUTOFF) == ["pdLow_RTH"]
+    assert map_stated_text("RTH_Open", tag_map, as_of=_CUTOFF) == ["dOpen_RTH"]
+    assert map_stated_text("pRTH_Open", tag_map, as_of=_CUTOFF) == ["pdOpen_RTH"]
+    assert map_stated_text("ONH_retest", tag_map, as_of=_CUTOFF) == ["ONH"]
+    assert map_stated_text("played ITR-C today", tag_map, as_of=_CUTOFF) == ["ITR-C"]
+    assert map_stated_text("pdH_RTH", tag_map, as_of=_CUTOFF) == ["pdH_RTH"]
+
+
+def test_grammar_errors_match_tt_reference() -> None:
+    payload = load_tag_map().payload
+
+    def tags(*values: str) -> set[str]:
+        return set(values)
+
+    cases: list[tuple[set[str] | list[str], list[str]]] = [
+        (tags("PB_MAC", "E_agg", "5m21EMA"), []),
+        (["5m21EMA", "E_agg", "PB_MAC"], []),
+        (tags("PB_MAC", "E_agg"), ["confluence_missing"]),
+        (tags("PB_MAC", "E_agg", "C_none"), []),
+        (tags("PB_MAC", "E_agg", "C_none", "pdH"), ["c_none_with_confluence"]),
+        (tags("E_agg", "pdH"), ["playbook_missing"]),
+        (tags("PB_MAC", "PB_LEF", "E_agg", "pdH"), ["playbook_multiple"]),
+        (tags("PB_MAD", "E_agg", "pdH"), []),
+        (tags("PB_ODG", "E_agg", "pdH"), []),
+        (tags("PB_ODG", "PB_OGB", "E_agg", "pdH"), ["playbook_multiple"]),
+        (tags("ODG", "PB_LEF", "E_agg"), ["unknown_tag"]),
+        (tags("PB_OSR", "E_agg", "pdH"), []),
+        (tags("PB_OGB", "E_agg", "pdH"), []),
+        (tags("PB_ODSR", "E_agg", "pdH"), ["playbook_unknown"]),
+        (tags("PB_TPO_RTH", "E_agg", "pdH"), []),
+        (tags("PB_APOCL", "E_agg", "APOC"), []),
+        (tags("PB_VA", "E_agg", "pdVAL"), []),
+        (tags("PB_MAT", "E_agg", "5m21EMA"), []),
+        (tags("PB_VA", "E_agg", "V_FR", "pdVAL"), ["variant_not_allowed"]),
+        (tags("PB_XYZ", "E_agg", "pdH"), ["playbook_unknown"]),
+        (tags("PB_5mTP", "E_agg", "pdH"), ["playbook_unknown"]),
+        (tags("PB_MAC", "pdH"), ["entry_missing"]),
+        (tags("PB_MAC", "E_agg", "E_kon", "pdH"), ["entry_multiple"]),
+        (tags("PB_3050", "E_kon", "V_FR", "30m50SMA"), []),
+        (tags("PB_3050", "E_kon", "V_SFP", "30m50SMA"), []),
+        (tags("PB_30mEx", "E_kon", "V_SFP", "pdH"), []),
+        (tags("PB_30mEx", "E_kon", "V_FA", "pdH"), []),
+        (tags("PB_30mEx", "E_kon", "V_FR", "pdH"), ["variant_not_allowed"]),
+        (tags("PB_p30V", "E_agg", "V_MOM", "p30VWAP"), []),
+        (tags("PB_p30V", "E_agg", "V_H2", "p30VWAP"), []),
+        (tags("PB_p30V", "E_agg", "V_FR", "p30VWAP"), ["variant_not_allowed"]),
+        (tags("PB_LEF", "E_agg", "V_BO", "pdH"), []),
+        (tags("PB_LEF", "E_agg", "V_RE", "pdH"), []),
+        (tags("PB_5mPOCL", "E_agg", "V_RR", "DeltaNode"), []),
+        (tags("PB_5mPOCL", "E_agg", "V_TB", "pdH"), []),
+        (tags("PB_5mPOCL", "E_agg", "V_BO", "pdH"), ["variant_not_allowed"]),
+        (tags("PB_3050", "E_agg", "V_FR", "V_SFP", "pdH"), ["variant_multiple"]),
+        (tags("PB_MAC", "E_agg", "V_5m21EMAx50SMA", "pdH"), []),
+        (tags("PB_MAC", "E_agg", "V_1m9EMAx21EMA", "pdH"), []),
+        (tags("PB_MAC", "E_agg", "V_30m50SMAx200SMA", "pdH"), []),
+        (tags("PB_MAC", "E_agg", "V_5m50SMAx21EMA", "pdH"), ["variant_not_allowed"]),
+        (tags("PB_MAC", "E_agg", "V_5m21EMAx21SMA", "pdH"), ["variant_not_allowed"]),
+        (tags("PB_MAC", "E_agg", "V_5m21EMAx55SMA", "pdH"), ["variant_not_allowed"]),
+        (tags("PB_MAC", "E_agg", "V_15m21EMAx50SMA", "pdH"), ["variant_not_allowed"]),
+        (tags("PB_MAC", "E_agg", "V_5m21EMAx5m50SMA", "pdH"), ["variant_not_allowed"]),
+        (tags("PB_MAC", "E_agg", "V_5m21emax50sma", "pdH"), ["variant_not_allowed"]),
+        (tags("PB_MAC", "E_agg", "V_FR", "pdH"), ["variant_not_allowed"]),
+        (tags("PB_LEF", "E_agg", "V_5m21EMAx50SMA", "pdH"), ["variant_not_allowed"]),
+        (tags("PB_LEF", "E_agg", "T_5mTP", "pdH"), []),
+        (tags("PB_LEF", "E_agg", "T_075", "pdH"), []),
+        (tags("PB_LEF", "E_agg", "T_5mTP", "T_075", "pdH"), ["trigger_multiple"]),
+        (tags("PB_LEF", "E_agg", "T_XYZ", "pdH"), ["trigger_unknown"]),
+        (tags("PB_LEF", "E_agg", "T_MFR", "pdH"), []),
+        (tags("PB_LEF", "E_agg", "T_CGD", "pdH"), []),
+        (tags("PB_LEF", "E_agg", "T_BI", "pdH"), []),
+        (tags("PB_LEF", "E_agg", "T_0-75", "pdH"), ["trigger_unknown"]),
+        (tags("PB_LEF", "E_agg", "T_MFR", "T_BI", "pdH"), ["trigger_multiple"]),
+        (tags("PB_LEF", "E_agg", "PB_MFR", "pdH"), ["playbook_multiple"]),
+        (tags("PB_LEF", "E_agg", "T_", "pdH"), ["unknown_reserved"]),
+        (tags("PB_LEF", "E_agg", "T_.75", "pdH"), ["trigger_unknown"]),
+        (tags("PB_LEF", "E_agg", "X_fade", "pdH"), ["unknown_reserved"]),
+        (tags("PB_LEF", "E_agg", "X_break", "pdH"), ["unknown_reserved"]),
+        (tags("PB_LEF", "E_agg", "1m9EMA_break"), []),
+        (tags("PB_LEF", "E_agg", "pdVAL_retest"), []),
+        (tags("PB_LEF", "E_agg", "pdVAL_naked"), []),
+        (tags("PB_LEF", "E_agg", "1m200SMA_fade"), ["unknown_tag"]),
+        (tags("PB_LEF", "E_agg", "pdVAL_retest_break"), ["unknown_tag"]),
+        (tags("PB_LEF", "E_agg", "pdH_RTH"), []),
+        (tags("PB_LEF", "E_agg", "pdLow_RTH"), []),
+        (tags("PB_LEF", "E_agg", "3c_SFP"), ["unknown_tag"]),
+        (tags("PB_LEF", "E_agg", "pdh"), ["unknown_tag"]),
+        (tags("pb_MAC", "E_agg", "pdH"), ["playbook_missing", "unknown_tag"]),
+        (tags("PB_LEF", "E_agg", "long", "pdH"), ["unknown_tag"]),
+        (tags("PB_LEF", "E_agg", "ITR-C"), ["charset_violation"]),
+        (tags("PB_LEF", "E_agg", "5m9AME_break"), ["unknown_tag"]),
+        (tags("PB_LEF", "E_agg", "30low"), ["unknown_tag"]),
+        (tags("PB_LEF", "E_agg", ".75"), ["charset_violation"]),
+        (tags("PB_LEF", "E_agg", "5MPOC&CO"), ["charset_violation"]),
+        (tags("PB_LEF", "E_agg", "C_none", "30low"), ["c_none_with_confluence", "unknown_tag"]),
+        (
+            tags("PB_LEF", "E_agg", "C_none", ".75"),
+            ["c_none_with_confluence", "charset_violation"],
+        ),
+        (tags("PB_MAC", "E_xyz", "pdH"), ["entry_missing", "unknown_reserved"]),
+        (tags("PB_MAC", "E_agg", "C_foo", "pdH"), ["unknown_reserved"]),
+        (tags("PB_MAC", "E_agg", "C_foo"), ["confluence_missing", "unknown_reserved"]),
+        (tags("PB_", "E_agg", "pdH"), ["playbook_missing", "unknown_reserved"]),
+        (tags("PB_LEF", "E_agg", "countertrend", "pdH"), ["unknown_tag"]),
+        (tags("PB_LEF", "E_agg", "reentry", "pdH"), ["reentry_unresolved"]),
+        (
+            tags("reentry"),
+            [
+                "confluence_missing",
+                "entry_missing",
+                "playbook_missing",
+                "reentry_unresolved",
+            ],
+        ),
+    ]
+    for tags_in, expected in cases:
+        assert grammar_codes(tags_in, payload) == expected, tags_in
+
+
+def test_proposals_map_grammar_tags_after_cutoff(tva_root: Path) -> None:
+    record = _session(tva_root, "2026-11-03_143000")
+    _write_trades(tva_root, record.id, session_date=date(2026, 11, 3))
+    _write_evidence(tva_root, record.id, playbook="PB_LEF E_agg", setup="V_BO pdH")
+    result = proposals_session(record.id, root=tva_root)
+    assert result.status == "ok"
+    item = _load_report(tva_root, record.id).proposals[0]
+    assert item.proposed_tags == ["PB_LEF", "E_agg", "V_BO", "pdH"]
+
+
+def test_proposals_ignore_grammar_tags_before_cutoff(tva_root: Path) -> None:
+    record = _session(tva_root)
+    _write_trades(tva_root, record.id)
+    _write_evidence(tva_root, record.id, playbook="PB_LEF E_agg", setup="3c")
+    proposals_session(record.id, root=tva_root)
+    item = _load_report(tva_root, record.id).proposals[0]
+    assert item.proposed_tags == ["3c"]
+    assert "PB_LEF" not in item.proposed_tags
+    assert "E_agg" not in item.proposed_tags
