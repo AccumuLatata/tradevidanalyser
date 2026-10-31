@@ -94,10 +94,12 @@ never records onto the NAS. With `TVA_SIDECAR=1` (default off), watch and
 ingest also copy `<stem>.jsonl` next to the recording (not `.events.jsonl`)
 into `$TVA_ROOT/recordings/`. Ingest then writes
 `sessions/<id>/time_anchor.json` (`schema_version "1"`): measured
-first-frame offset per clip as wall−video (Q-15 = B; TT:439–440),
-1.043 s only as a loud fallback (`offset_source: fallback` plus a
-warning on every clip). Flag off does not write the
-file. The dest is `--root` / `TVA_ROOT`, never a
+first-frame offset per clip as wall−video (Q-15 = B; TT:439–440).
+Validity is two bands (GitHub #45): low 0.20–0.45 s and high
+0.80–1.30 s, stamped as `offset_mode: low|high`. The old single band
+0.8–1.3 s is superseded. 1.043 s is only a loud fallback
+(`offset_source: fallback` plus a warning on every clip). Flag off
+does not write the file. The dest is `--root` / `TVA_ROOT`, never a
 hardcoded NAS path. Watch is not an autostart: nothing in this
 package registers `tva-watch` or starts it at boot or login. OBS auto-split
 siblings (same filename prefix, next start within 5 s of the previous
@@ -115,9 +117,10 @@ measured. Raw frames stay under `TVA_ROOT` (PII).
 
 `tva ocr <id>` reads those frames through `layout.yaml` ROIs and writes
 `ocr.parquet` (`t, roi, text, confidence, parsed`). Clock parses to ISO
-time, P&L to a signed float, position to an int. Fake OCR is the default
-(`TVA_OCR_PROVIDER=fake`); `pip install 'tradevidanalyser[ocr]'` +
-`TVA_OCR_PROVIDER=paddleocr` is opt-in and never required in CI.
+time, P&L to a signed float, position to an int. Unset `TVA_OCR_PROVIDER`
+is an error (`TVA_OCR_PROVIDER fehlt`); set `fake` explicitly for CI.
+`pip install 'tradevidanalyser[ocr]'` + `TVA_OCR_PROVIDER=paddleocr` is
+opt-in and never required in CI.
 
 `tva clips <id>` writes chapter windows (marker −30 s … +60 s) as
 `clips/<t>.mp4` with the mic track only (`-c copy`). `--redact` applies
@@ -135,18 +138,26 @@ added to `status.json` `cost_usd`.
 
 `tva fills <id> --executions <csv> --venue topstepx|amp` writes
 `fills.parquet` / `trades.parquet` for fills whose UTC instant falls in
-the session window (start − 30 min … end + 30 min). ThesisTester is used
+the session window (start − 30 min … end + 30 min). With `TVA_SIDECAR`
+and exclusive fills off, `assign_fills_once` gives each fill to at most
+one session (unpadded core first, then nearest pad). ThesisTester is used
 when `pip install 'tradevidanalyser[journal]'`; otherwise the committed
-`fills_mirror` path runs (CI). Zero fills omit the stage (not an error).
-`--include-manual` pairs non-future rows. `commission` / `fees` are
-discarded (TJ1). `--reconcile-dir` reads ThesisTester `reconcile.json`
-and adds `recon_status` on `trades.parquet` (no AMP PDF parsing).
+`fills_mirror` path runs (CI). Under `TVA_NET_FEES`, `--executions` must
+be a TT journal directory (a CSV is `Netto ohne Kostenquelle`). Zero
+fills omit the stage (not an error). `--include-manual` pairs non-future
+rows. Flag-off, `commission` / `fees` are discarded (TJ1). With
+`TVA_SIDECAR` and `TVA_NET_FEES` off, the sidecar fallback overlays
+those costs from the CSV and sets `net = gross − (commission + fees)`.
+`--reconcile-dir` reads ThesisTester `reconcile.json` and adds
+`recon_status` on `trades.parquet` (no AMP PDF parsing).
 
 `tva align <id>` writes `session.alignment` (`offset_s`, `drift_s_per_h`,
-`confidence`, `method`, `samples`). The prior is the OBS filename /
-`start_wallclock_vienna`; the measurement is `ocr.parquet` clock rows.
-Theil–Sen fits offset and drift; no usable clocks fall back to
-`method=filename` at `confidence=0.6`. `--manual-offset s` records
+`confidence`, `method`, `samples`). With `TVA_SIDECAR` and a verified
+`time_anchor.json` that has a first-frame offset, the fit is
+`method=sidecar` at `confidence=1.0`. Otherwise the prior is the OBS
+filename / `start_wallclock_vienna` and the measurement is `ocr.parquet`
+clock rows. Theil–Sen fits offset and drift; no usable clocks fall back
+to `method=filename` at `confidence=0.6`. `--manual-offset s` records
 `method=manual`. Not a bot `POST /run` stage.
 
 `tva evidence <id>` maps each `trades.parquet` row to video time via
@@ -155,8 +166,11 @@ alignment and writes `evidence.json`: window (entry −180 s … exit +120 s,
 `stated` fields (`setup`, `bias`, `stop_raw`, `target_raw`, `playbook`),
 nearest frames/ocr/clip, and `alignment_confidence`. Confidence below 0.8
 sets `alignment: low`. A trade with no speech keeps `stated` all null and
-records a gap. Fake extract is the default; citations are required or
-dropped. Not a bot `POST /run` stage.
+records a gap. With `TVA_SIDECAR`, off-camera trades use the raw span
+(no pad, no duration clamp) and record `no_video_coverage` /
+`no_video_trades` plus gap `no video/no speech`. Unset
+`TVA_EXTRACT_PROVIDER` is an error; set `fake` explicitly for CI.
+Citations are required or dropped. Not a bot `POST /run` stage.
 
 `tva rules <id>` writes `rules.json` from `trades.parquet` (R-DLL,
 R-MAX10, R-3L30, R-5M, R-REENTRY, R-CLOSE) and, when present,
@@ -273,6 +287,154 @@ tva serve --host 127.0.0.1 --port 8764
 # curl -H "Authorization: Bearer $TVA_API_TOKEN" http://mac:8764/sessions/latest
 ```
 
+## Environment variables
+
+Every `TVA_*` name the package reads. Unset/empty flag vars are off;
+truth is `1` / `true` / `yes` / `on` (`flags.py`).
+
+### Opt-in flags (default off)
+
+| Variable | Default | Effect | Landed |
+|---|---|---|---|
+| `TVA_SIDECAR` | off | Orthogonal. Copy `<stem>.jsonl`; write `time_anchor.json`; sidecar-fallback fills/evidence. Does not license `TVA_NET_FEES`. | plan PR-39/40; GitHub #45/#46 |
+| `TVA_PAUSE_GUARD` | off | Pause detector → `pause_checks`. Allowed alone, with manifest, and/or sidecar. Required for the Vierer-Set. | plan PR-30 |
+| `TVA_DAY_MANIFEST` | off | `tva day build` writes `days/<date>/`. Allowed alone or with pause. Required for the Vierer-Set. | plan PR-31 |
+| `TVA_EXCLUSIVE_FILLS` | off | Exclusive fill ownership. Only with pause + manifest + the other three day-path flags. | plan PR-32 |
+| `TVA_DAY_RULES` | off | Day-level rules + ledger. Same Vierer-Set. | plan PR-33 |
+| `TVA_DAY_PUBLISH` | off | One Notion page per Vienna day. Same Vierer-Set. | plan PR-34 |
+| `TVA_TRADING_HOURS` | off | Trades/hour on trading time. Same Vierer-Set. | plan PR-35 |
+| `TVA_NET_FEES` | off | Net with costs from a TT journal dir. Only with the Vierer-Set. | plan PR-42 |
+| `TVA_ALLOW_SESSION_ID_OVERWRITE` | off | Orthogonal. Loud session-id collision otherwise. | plan PR-36 |
+
+The **Vierer-Set** is `TVA_EXCLUSIVE_FILLS` + `TVA_DAY_RULES` +
+`TVA_DAY_PUBLISH` + `TVA_TRADING_HOURS`. Those four may only be on
+together, and only with `TVA_PAUSE_GUARD` + `TVA_DAY_MANIFEST`.
+Any other combination of the day-path / net-fees flags raises
+`ungültige Flag-Kombination`.
+
+### Other `TVA_*` vars
+
+| Variable | Default | Effect |
+|---|---|---|
+| `TVA_ROOT` | `./.tva_store` | Store root. Overridden by `--root`. |
+| `TVA_ACCOUNTS_FILE` | shipped synthetic `accounts.yaml` | Override path; missing fails loudly. Same as `--accounts-file`. |
+| `TVA_DESK_RULES_FILE` | shipped `desk_rules.yaml` | Override path; missing fails loudly. Same as `--desk-rules-file`. |
+| `TVA_API_TOKEN` | unset | Required for off-loopback `tva serve` (including `0.0.0.0`). |
+| `TVA_SERVE_MEDIA` | off | `GET /sessions/{id}/clips/{name}` only when `1`/`true`/`yes`/`on`. |
+| `TVA_ASR_PROVIDER` | unset (error) | `whisperx` / `deepgram` / explicit `fake` or `test`. Unset → `TVA_ASR_PROVIDER fehlt`. |
+| `TVA_ASR_MODEL` | WhisperX `large-v3`, Deepgram `nova-3` | Model name. |
+| `TVA_ASR_BATCH_SIZE` | 16 on CUDA, 8 on CPU | WhisperX batch size (≥ 1) when unset. |
+| `TVA_ASR_DEVICE` | auto | `cpu` / `cuda` / `cuda:N`. |
+| `TVA_ASR_COMPUTE_TYPE` | auto | WhisperX compute type. |
+| `TVA_ASR_VAD` | `silero` | WhisperX VAD method. |
+| `TVA_ASR_USD_PER_HOUR` | unset | Hosted ASR cost hint. |
+| `TVA_OCR_PROVIDER` | unset (error) | `paddleocr` / explicit `fake` or `test`. Unset → `TVA_OCR_PROVIDER fehlt`. |
+| `TVA_EXTRACT_PROVIDER` | unset (error) | `grok` / explicit `fake`, `test`, or `keyword`. Unset → `TVA_EXTRACT_PROVIDER fehlt`. |
+| `TVA_EXTRACT_MODEL` | `grok-4.6` | Grok extract model. |
+| `TVA_VLM_PROVIDER` | unset (off) | `fake` / `grok` / `gemini`. Unset leaves VLM off. |
+| `TVA_VLM_MODEL` | provider default | VLM model override. |
+| `TVA_REPORT_PROVIDER` | `fake` | `fake` / `grok`. |
+| `TVA_REPORT_MODEL` | provider default | Grok debrief model. |
+| `TVA_COACH_PROVIDER` | `fake` | `fake` / `grok`. |
+| `TVA_COACH_MODEL` | provider default | Grok coach model. |
+| `TVA_COACH_MIN_N` | `10` | Minimum ledger row ids per coach claim. |
+| `TVA_NOTION_PROVIDER` | `fake` | `fake` / `notion`. |
+| `TVA_NOTION_JOURNAL_DB` | unset | Trading Journal database id (live publish). |
+| `TVA_NOTION_RUNS_PAGE` | unset | *TVA runs* page id. |
+| `TVA_LAB_DIR` | unset | ThesisTester lab parquet dir (same as `--lab-dir`). |
+| `TVA_EVIDENCE_PRE_S` | `180` | Evidence window seconds before entry. |
+| `TVA_EVIDENCE_POST_S` | `120` | Evidence window seconds after exit. |
+| `TVA_WATCH_STABLE_S` | `15` | `tva watch` mtime age (same as `--stable-seconds`). |
+| `TVA_WATCH_POLL_S` | `2` | `tva watch` poll interval (same as `--interval`). |
+| `TVA_LAYOUT` | shipped `layout.yaml` | Layout override. |
+| `TVA_RULES` | shipped `rules.yaml` | Rules override. |
+| `TVA_TAG_MAP` | shipped `tag_map.yaml` | Tag-map override. |
+
+Related keys the code also reads (not `TVA_*`): `XAI_API_KEY`,
+`DEEPGRAM_API_KEY`, `NOTION_API_KEY`, `GEMINI_API_KEY` /
+`GOOGLE_API_KEY`. `ELEVENLABS_API_KEY` is checked only by `tva doctor`
+(Scribe is reserved, not used). Bot prompts use `TVA_API_BASE` (URL
+only); the package does not read it.
+
+## CLI flags
+
+Global (every command):
+
+| Flag | Effect |
+|---|---|
+| `--root PATH` | Store root (`TVA_ROOT`). |
+| `--accounts-file PATH` | Sets `TVA_ACCOUNTS_FILE` for this process. |
+| `--desk-rules-file PATH` | Sets `TVA_DESK_RULES_FILE` for this process. |
+| `--json` | Machine-readable stdout. |
+| `--version` | Print `tva` version. |
+
+| Command | Flags |
+|---|---|
+| `ingest` | `video`, `--desktop-track` |
+| `transcribe` | `session`, `--provider` |
+| `extract` | `session`, `--provider` |
+| `run` | `video` (omit → newest session), `--desktop-track`, `--latest` |
+| `watch` | `--source` (required), `--once`, `--run`, `--stable-seconds`, `--interval` |
+| `wer` | `session`, `--ref` (required) |
+| `frames` | `session`, `--at T…`, `--contact-sheet` |
+| `ocr` | `session`, `--provider` |
+| `clips` | `session`, `--redact` |
+| `vlm` | `session`, `--provider` |
+| `fills` | `session`, `--executions` (required), `--venue`, `--include-manual`, `--reconcile-dir`, `--positions-dir`, `--account` |
+| `align` | `session`, `--manual-offset S`, `--force` (only while `TVA_PAUSE_GUARD` is on) |
+| `evidence` | `session`, `--provider` |
+| `rules` | `session` |
+| `context` | `session`, `--lab-dir` |
+| `report` | `session`, `--provider` |
+| `day audit` | `--from` (default 2026-09-14), `--to`, `--executions`, `--loader`, `--clock-note`, `--sample-clocks` |
+| `day build` | `YYYY-MM-DD`, `--executions` (required), `--venue`, `--include-manual`, `--reconcile-dir`, `--provider`, `--positions-dir`, `--account` |
+| `day enable` | optional `YYYY-MM-DD` |
+| `day state` | `YYYY-MM-DD` |
+| `day delete` | `YYYY-MM-DD` or `--all` |
+| `pause-checks delete` | `session` or `--all` |
+| `ledger add` | `session` |
+| `ledger drop-day` | `YYYY-MM-DD` |
+| `rollup` | `--week [YYYY-Www]`, `--month [YYYY-MM]` |
+| `publish` | `session`, `--notion` (required to write), `--provider` |
+| `proposals` | `session` or `confirm` + proposal id |
+| `coach` | `--weeks N`, `--provider` |
+| `serve` | `--host` (default `127.0.0.1`), `--port` (default `8764`) |
+
+`status` and `doctor` take no extra flags.
+
+## Bekannte Grenzen
+
+- **Publish needs a TT week lock.** Under `TVA_NET_FEES`, `tva publish`
+  calls `require_locked_week_manifest`: ThesisTester `week_manifest.json`
+  must be written by `lock_files` after tick `prepare` /
+  `prepare_manifest`, then verified (`validate_week_manifest`,
+  `assert_manifest_inputs_match`, `assert_claimed_lock_supported`). A
+  hand-edited `locked` file cannot unlock.
+- **Vienna date vs Topstep `TradeDay`.** TVA day keys are the
+  Europe/Vienna calendar date of the clip start. Fill
+  `session_date` / Topstep `TradeDay` follow ThesisTester
+  `trading_session_date` (ETH 18:00 America/New_York). Those dates
+  differ after that NY cutoff — about 23:00 Vienna in the late-October
+  DST gap (KW44), otherwise about midnight Vienna.
+- **`PB_ODG` is not canonicalised to `PB_OGB`.** `tag_map.yaml`
+  registers `OGB` with `renamed_from: [ODG]`. The grammar validator
+  treats `PB_ODG` as an alias of playbook `OGB`; `map_stated_text`
+  still emits `PB_ODG`.
+- **Grammar validator is a copy.** `tag_grammar.py` matches
+  ThesisTester `tests/test_tag_map_schema.py::_grammar_errors` /
+  `_ma_pair_ok` at pin `4fc4af05`.
+  `tests/test_proposals.py::test_grammar_errors_match_tt_reference` is
+  the inlined case table against local `grammar_codes`. Live TT map
+  parity (when the `thesistester` extra is installed) is
+  `test_shipped_tag_map_matches_thesistester`.
+- **Day net / evidence cover on-video trades.** Exclusive
+  `trades.parquet`, evidence, and the day-rollup `trade_count` use
+  assigned (on-video) trades. Lots whose timestamps fall in no clip
+  core stay `outside` / unassigned (`trades_outside_clips`).
+- **Old first-frame band superseded.** The single band 0.8–1.3 s
+  (plan §3.3 / PR-40) is replaced by GitHub #45: 0.20–0.45 s and
+  0.80–1.30 s.
+
 ## Tests
 
 ```bash
@@ -294,3 +456,8 @@ pytest -q
 | [`examples/bot/`](examples/bot/) | Copy-ready `SYSTEM.md` + evening + Sunday routines |
 | [`docs/GOLDEN_EXCERPT.md`](docs/GOLDEN_EXCERPT.md) | Cut, redact, hand-correct the WER reference |
 | [`docs/GLOSSARY.md`](docs/GLOSSARY.md) | German speech + English level tokens |
+| [`CHANGELOG.md`](CHANGELOG.md) | Plan PR ↔ GitHub # ↔ merge commit |
+| [`docs/GITHUB_PRS_45_49.md`](docs/GITHUB_PRS_45_49.md) | Landed GitHub #45–#49 |
+| [`docs/INBETRIEBNAHME.md`](docs/INBETRIEBNAHME.md) | Commissioning plan (incl. #46–#49) |
+| [`docs/KW44_DRYRUN.md`](docs/KW44_DRYRUN.md) | KW44 dry-run summary |
+| [`docs/COACH_THESISTESTER_RULES.md`](docs/COACH_THESISTESTER_RULES.md) | Coach ↔ ThesisTester rules (2026-10-31) |

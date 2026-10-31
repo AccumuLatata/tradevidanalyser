@@ -7,6 +7,7 @@
 **Entscheidungen:** CD1–CD14 in Abschnitt 6. Das sind nicht die gesperrten D1–D9 aus `docs/05_ROADMAP.md`. Roadmap-D4 (Tagesverlust 100 gegen 200) bleibt geparkt; `rules.yaml:4-5` und der Grundtext `daily_loss_limit_usd is unset (D4)` in `rules.py` meinen dieses Roadmap-D4. Zeile 6 von `rules.yaml` ist der Kommentar zu `flat_by`, nicht D4.
 **Seriennummern:** PR-28…PR-36 setzen `docs/IMPLEMENTATION_PLAN.md` fort (zuletzt gelandet PR-27). Das sind keine GitHub-Pull-Request-Nummern. Die Nummern folgen der Merge-Reihenfolge. Die frühere Nummer PR-34 (Audit) ist jetzt PR-28.
 **Abweichung, 2026-10-06, Entscheidung Accumu:** PR-32 wird mit `TVA_EXCLUSIVE_FILLS` aus gemerged. CD11 ist nicht aufgehoben (`tz_assumption: waived` steht nirgends). CD11 sperrt das Einschalten, nicht den Merge. Das Vierer-Set geht erst nach dem 25.10.2026, CD11 und dem NAS-Paritätslauf aus CD10 an.
+**GitHub #48 (`353c8a8`, 2026-10-31):** `assign_day_ownership` filtert Journal-Trades auf denselben Vienna/Kern-Kandidaten wie die Day-Fills, bevor Besitz und Tagesregeln laufen. Vorher sahen R-DLL, R-MAX10, R-3L30 und `trades_outside_clips` jedes Journal. Flag-aus und CSV-Paarung unverändert. Das ist nicht Plan-PR-48. Mapping: [`../../CHANGELOG.md`](../../CHANGELOG.md).
 
 ---
 

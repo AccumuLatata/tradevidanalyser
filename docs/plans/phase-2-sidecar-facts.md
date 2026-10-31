@@ -1,6 +1,6 @@
 # Phase 2 — Sidecar facts (PR-37)
 
-**Status:** Plan (PR-37, docs-only) plus owner facts recorded in PR-38 (D7 / D8 / Q-15 = B). PR-39 ships the opt-in `<stem>.jsonl` copy. **PR-40** ships `sidecar.py` facts and `time_anchor.json` (Q-15 = B, measured per clip; 1.043 s loud fallback). **PR-42** ships `TVA_NET_FEES` (Vierer-Set only, TT:892 / 903): facts mirror (lots, positions, costs, `account`), net only under the flag, publish only with a `locked` weekly manifest, desk rules from `accounts.yaml`, R-MAX10 positions-or-lots.
+**Status:** Plan (PR-37, docs-only) plus owner facts recorded in PR-38 (D7 / D8 / Q-15 = B). PR-39 ships the opt-in `<stem>.jsonl` copy. **PR-40** ships `sidecar.py` facts and `time_anchor.json` (Q-15 = B, measured per clip; 1.043 s loud fallback). **PR-42** ships `TVA_NET_FEES` (Vierer-Set only, TT:892 / 903): facts mirror (lots, positions, costs, `account`), net only under the flag, publish only with a `locked` weekly manifest, desk rules from `accounts.yaml`, R-MAX10 positions-or-lots. GitHub #45 (`13e6892`) supersedes the PR-40 single first-frame band with two bands. GitHub #46–#49 are follow-ups, not plan PR-46.
 **Stand geprüft:** TVA `main` @ `674a9bf` (PR-37 landed; PR-36 @ `c6029b8`). ThesisTester source: extract of `docs/research/TVA_TT_Research_Plan.md` with original line numbers (Revision 4, stand 12.10.2026; TT lesestand `251b5099`, TVA `c6029b8`) (TT:6).
 **Danach:** Review. Sidecar implementation remains the later series below. PR-38 does not start that code.
 **Authoritative source:** AccumuLatata/ThesisTester `docs/research/TVA_TT_Research_Plan.md` (German), via the attached line-numbered extract. `docs/JOURNAL_EXTENSION_PLAN.md` is **not** in that extract and stays [NV].
@@ -15,7 +15,7 @@
 PR-37 is the Phase 2 plan, docs only (TT:898). It records:
 
 - sidecar contract with pause rule and `file` check (§7.1)
-- tolerances, first-frame offset ≈ 1.043 s as expected value, band 0.8–1.3 s. Plan amendment 2026-10-30, approved by Accumu: two bands, low 0.20–0.45 / high 0.80–1.30, from KW42–44 evidence (44/55 low).
+- tolerances, first-frame offset ≈ 1.043 s as expected value. **Superseded 2026-10-30 (GitHub #45, `13e6892`):** the old single band 0.8–1.3 s is replaced by two measured bands, low 0.20–0.45 / high 0.80–1.30, from KW42–44 evidence (44/55 low).
 - flag table
 - contract v2 with **coach independence** (R8; already recorded here, implemented later in PR-46) (TT:885, 907)
 - coach profile without judgments, account field, CD list, B.5 rules
@@ -40,9 +40,9 @@ Source: TT §10.3 (TT:883–907), order R6 / R10 (TT:885).
 | 5 | **PR-40** | Sidecar reader and time anchor. After Q-15 (TT:441, 902, 1100). |
 | 6 | **PR-42** | Facts mirror. After JX1, JX2, JX8 (TT:885, 903). |
 
-**Deferred:** PR-41, PR-44 (only if Deepgram is used), PR-45, PR-46 (TT:885, 904–907). Coach independence (R8) is already in PR-37; PR-46 later puts it on the v2 contract (TT:885).
+**Deferred:** plan PR-41, PR-44 (only if Deepgram is used), PR-45, PR-46 (TT:885, 904–907). Coach independence (R8) is already in PR-37; plan PR-46 later puts it on the v2 contract (TT:885). Those deferred plan numbers are **not** GitHub #45 / #46 (see [`../../CHANGELOG.md`](../../CHANGELOG.md)).
 
-These are series numbers, not GitHub pull-request numbers. They continue Phase 1 (last landed series PR-36 @ `c6029b8`) [C].
+These are series numbers, not GitHub pull-request numbers. They continue Phase 1 (last landed series PR-36 @ `c6029b8`) [C]. GitHub #45–#49 (offset bands, sidecar fallback, `fee_mismatch`, day filter, TT grammar) are documented in [`../GITHUB_PRS_45_49.md`](../GITHUB_PRS_45_49.md).
 
 ---
 
@@ -74,7 +74,7 @@ Source: TT:439–441, 463–468, 902. First-frame measurement [Rv] in the extrac
 
 | Check | Rule |
 |---|---|
-| First-frame offset | Expected value ≈ **1.043 s** after `record_start`. Band **0.8–1.3 s** per OBS version. Outside → sidecar `invalid`, reason `first_frame_offset_out_of_band` (TT:440, 465, 902). Plan amendment 2026-10-30, approved by Accumu: two bands, low 0.20–0.45 / high 0.80–1.30, from KW42–44 evidence (44/55 low). `time_anchor.json` stamps `offset_mode: low\|high` when the measured offset is in a band. |
+| First-frame offset | Expected value ≈ **1.043 s** after `record_start`. **Old single band 0.8–1.3 s (TT:440, 465, 902) — superseded 2026-10-30 by GitHub #45.** Current rule (plan amendment, Accumu / Florian option A; KW42–44, 44/55 low): two bands, low 0.20–0.45 s / high 0.80–1.30 s. Gap or outside → sidecar `invalid`, reason `first_frame_offset_out_of_band`. `time_anchor.json` stamps `offset_mode: low\|high` when the measured offset is in a band. |
 | Span residual | `\|wall_span − video_span − first_frame_offset\| ≤ 0.10 s` (TT:464). |
 | Resume band | 0.4–0.8 s; outside → `resume_offset_out_of_band` on that section (TT:449–452, 466, 902). |
 | Sidecar duration | ±0.1 s vs video / `ffprobe` (TT:467, 902). |
@@ -295,7 +295,7 @@ Source: TT:902, Q-15 = B (TT:441, 1100; owner 2026-10-29). `TVA_SIDECAR` remains
 
 | Surface | Flag on | Flag off |
 |---|---|---|
-| `sidecar.py` | parse `<stem>.jsonl` including `file_changed`; pause rule R13; N5 per-section; file + duration ±0.1 s; first-frame band 0.8–1.3 s | not called |
+| `sidecar.py` | parse `<stem>.jsonl` including `file_changed`; pause rule R13; N5 per-section; file + duration ±0.1 s; first-frame band then 0.8–1.3 s (**superseded 2026-10-30 by GitHub #45** two bands) | not called |
 | Q-15 | measure `wall_span − video_span` per clip (TT:439–440): record_stop−record_start wall minus pause spans, minus ffprobe duration. `start_time` &lt; 0.1 s unused. Failed measure → **1.043 s** + warning on every clip + `first_frame_offset_source: fixed` + `offset_source: fallback` | n/a |
 | `time_anchor.json` | `schema_version "1"` under `sessions/<id>/`; M2 method `sidecar` / `null` | not written |
 | `TVA_PAUSE_GUARD` | verified/partial sidecar replaces the detector (`pause_checks.method = sidecar`) | detector unchanged |
@@ -326,4 +326,18 @@ Source: TT §10.3 (TT:883–907). Flag row TT:892 / 894. Series order after JX1,
 | Desk rules | TT `accounts.yaml` (per-instrument `fee_schedule`, date `trading_days`) plus TVA `desk_rules.yaml` account → desk. Missing account → `Konto fehlt`. Topstep desk never applied to other accounts | `rules.yaml` as on main |
 | R-MAX10 | counts JX2 `position_id`s from `--positions-dir`; if none, counts lots and stamps `count_basis: lots` plus `count_basis_reason` | existing evidence (`count` / `max` / `trade_ids` only) |
 
-Independent recomputation stays with the coach (R8 / PR-46). `docs/JOURNAL_EXTENSION_PLAN.md` is still not in the extract [NV].
+Independent recomputation stays with the coach (R8 / plan PR-46). `docs/JOURNAL_EXTENSION_PLAN.md` is still not in the extract [NV].
+
+## 14. GitHub #45–#49 (not plan PR-45 / PR-46)
+
+Landed on `main` after PR-42. Full write-up: [`../GITHUB_PRS_45_49.md`](../GITHUB_PRS_45_49.md). Mapping: [`../../CHANGELOG.md`](../../CHANGELOG.md).
+
+| GitHub | Merge | One line |
+|---|---|---|
+| #45 | `13e6892` | Two first-frame bands 0.20–0.45 / 0.80–1.30; `offset_mode`. Old 0.8–1.3 band superseded. |
+| #46 | `1128a6f` | Sidecar-fallback: fill-once, fees with TT installed, full rollback, TT recon statuses, no-video without padding; `TVA_ACCOUNTS_FILE` / `--accounts-file`. |
+| #47 | `0b58d82` | `fee_mismatch` in `RECON_STATUSES`; `TVA_DESK_RULES_FILE` / `--desk-rules-file`. |
+| #48 | `353c8a8` | Day rules and ownership see only that day's journal trades. |
+| #49 | `dbde7ae` | JX0-A1 `PB_`/`E_`/`V_`/`T_`/`C_none` grammar from TT `4fc4af05` after 2026-11-02. |
+
+Plan PR-46 (coach v2 / R8 HTTP contract) is still deferred.
